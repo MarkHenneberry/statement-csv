@@ -44,6 +44,20 @@ export type LayoutParseStats = {
   balanceColumnRows: number;
   ignoredSummaryRows: number;
   ignoredSpendReportRows: number;
+  candidateComparison: CandidateComparison[];
+};
+
+/** Per-candidate aggregate comparison (dev diagnostics only; no row content). */
+export type CandidateComparison = {
+  name: CandidateName;
+  score: number;
+  rowCount: number;
+  totalCredits: number;
+  totalDebits: number;
+  openingDetected: boolean;
+  closingDetected: boolean;
+  balanceStatus: "passed" | "needs-review" | "limited";
+  balanceDiff: number | null;
 };
 
 /**
@@ -434,6 +448,47 @@ export function detectStatementPeriodYear(text: string): number | undefined {
   return detectFallbackYear(text);
 }
 
+export type StatementPeriod = { startOrd: number; endOrd: number; crossesYear: boolean };
+
+/** A coarse, year-agnostic day ordinal so dates can be range-compared cheaply. */
+function dateOrdinal(month: number, day: number): number {
+  return (month - 1) * 31 + day;
+}
+
+/**
+ * Detect a statement period like "January 10 to February 9, 2026" or
+ * "FROM APR 24 TO MAY 25". Used to reject dates that fall well outside the
+ * period (e.g. a payment-due date on a remittance slip).
+ */
+export function detectStatementPeriod(text: string): StatementPeriod | null {
+  const m = text.match(
+    /([A-Za-z]{3,9})\.?\s+(\d{1,2})\s*(?:to|through|-|–|—)\s*([A-Za-z]{3,9})\.?\s+(\d{1,2})/i,
+  );
+  if (!m) return null;
+  const m1 = MONTHS[m[1].slice(0, 3).toLowerCase()];
+  const m2 = MONTHS[m[3].slice(0, 3).toLowerCase()];
+  const d1 = Number(m[2]);
+  const d2 = Number(m[4]);
+  if (!m1 || !m2 || d1 < 1 || d1 > 31 || d2 < 1 || d2 > 31) return null;
+  const startOrd = dateOrdinal(m1, d1);
+  const endOrd = dateOrdinal(m2, d2);
+  return { startOrd, endOrd, crossesYear: startOrd > endOrd };
+}
+
+/** Is a month/day within the statement period (with a posting-lag buffer)? */
+function dateInPeriod(
+  period: StatementPeriod,
+  month: number,
+  day: number,
+  buffer = 10,
+): boolean {
+  const ord = dateOrdinal(month, day);
+  if (period.crossesYear) {
+    return ord >= period.startOrd - buffer || ord <= period.endOrd + buffer;
+  }
+  return ord >= period.startOrd - buffer && ord <= period.endOrd + buffer;
+}
+
 // Phrases that flip a POSITIVE amount to a credit. Deliberately specific: a
 // lone "credit" in a merchant name (e.g. "OPENAI* CHATGPT CREDIT") must NOT
 // count, so we only match strong payment/refund phrases.
@@ -756,9 +811,10 @@ function buildCreditCardRow(
 export function parseCreditCardTransactions(
   lines: string[],
   year?: number,
-  opts: { useSections?: boolean } = {},
+  opts: { useSections?: boolean; period?: StatementPeriod | null } = {},
 ): { rows: TransactionRow[]; stats: CreditCardParseStats } {
   const useSections = opts.useSections ?? false;
+  const period = opts.period ?? null;
   const rows: TransactionRow[] = [];
   const stats: CreditCardParseStats = {
     transactionSectionDetected: false,
@@ -882,7 +938,6 @@ export function parseCreditCardTransactions(
       // Transaction start.
       inSection = true;
       stats.transactionSectionDetected = true;
-      stats.blocksAttempted += 1;
 
       let transDate: MonthDay;
       let splitUsed = false;
@@ -893,6 +948,16 @@ export function parseCreditCardTransactions(
       } else {
         transDate = dates.trans;
       }
+
+      // Period gating: a date well outside the statement period (e.g. a payment
+      // due date on a remittance slip) is not a transaction.
+      if (period && !dateInPeriod(period, transDate.month, transDate.day)) {
+        stats.ignoredSummaryRows += 1;
+        i += 1;
+        continue;
+      }
+
+      stats.blocksAttempted += 1;
       if (splitUsed) stats.splitLineDateRows += 1;
       else stats.sameLineDateRows += 1;
 
@@ -1065,27 +1130,106 @@ const BANK_START_RE =
 // End of the transaction table (legal/footer/closing sections).
 const BANK_STOP_RE =
   /important information about your account|how to (?:reach|contact) us|trade ?-?marks?|^member\b|closing notice/i;
-// Lines that are never transactions: headers, addresses, phone, control numbers.
+// Lines that are never transactions: headers, addresses, phone, control numbers,
+// and "From <date> to <date>, <year>" statement-period lines.
 const BANK_IGNORE_LINE_RE =
-  /statement period|account number|card number|page \d+ of \d+|p\.?o\.? box|customer service|www\.|royal bank of canada|how to reach|\b1[-\s]?8\d{2}[-\s]?\d{3}[-\s]?\d{4}\b/i;
+  /statement period|account number|card number|page \d+ of \d+|p\.?o\.? box|customer service|www\.|royal bank of canada|how to reach|\b1[-\s]?8\d{2}[-\s]?\d{3}[-\s]?\d{4}\b|\bfrom\b[^\n]{0,40}\bto\b[^\n]{0,30}20\d{2}/i;
 
+type BankEntry = {
+  date: string;
+  description: string;
+  amount: number; // positive magnitude; sign decided by the solver
+  balance: number | null; // running balance when displayed on this line
+  prior: "credit" | "debit" | null;
+};
+
+/** Bank-specific direction prior from the description wording. */
+function bankKeywordPrior(desc: string): "credit" | "debit" | null {
+  const l = desc.toLowerCase();
+  if (/received|deposit|payroll|\bei\b|\bcredit\b|refund|interest paid|rebate|gov|gst|transfer in/.test(l)) {
+    return "credit";
+  }
+  if (/sent|payment|purchase|loan|\bfee\b|withdrawal|\batm\b|\bdebit\b|bill|cheque|service charge|transfer out|pre-?auth/.test(l)) {
+    return "debit";
+  }
+  return null;
+}
+
+/**
+ * Assign credit/debit signs to a segment's amounts so that
+ *   startBalance + credits - debits = endBalance.
+ * Returns per-amount directions, or null if no assignment reconciles.
+ * Among reconciling assignments, the one best matching keyword priors wins.
+ */
+function solveSegment(
+  amountsCents: number[],
+  deltaCents: number,
+  priors: ("credit" | "debit" | null)[],
+): ("credit" | "debit")[] | null {
+  const n = amountsCents.length;
+  if (n === 0) return deltaCents === 0 ? [] : null;
+
+  const total = amountsCents.reduce((a, b) => a + b, 0);
+  // credits sum S satisfies 2S - total = delta.
+  if ((deltaCents + total) % 2 !== 0) return null;
+  const target = (deltaCents + total) / 2;
+  if (target < 0 || target > total) return null;
+
+  const priorScore = (creditMask: number): number => {
+    let s = 0;
+    for (let i = 0; i < n; i += 1) {
+      const chosen = creditMask & (1 << i) ? "credit" : "debit";
+      if (priors[i] === chosen) s += 1;
+      else if (priors[i] && priors[i] !== chosen) s -= 1;
+    }
+    return s;
+  };
+
+  if (n <= 16) {
+    let best: number | null = null;
+    let bestScore = -Infinity;
+    for (let mask = 0; mask < 1 << n; mask += 1) {
+      let sum = 0;
+      for (let i = 0; i < n; i += 1) if (mask & (1 << i)) sum += amountsCents[i];
+      if (sum !== target) continue;
+      const score = priorScore(mask);
+      if (score > bestScore) {
+        bestScore = score;
+        best = mask;
+      }
+    }
+    if (best === null) return null;
+    return amountsCents.map((_, i) => ((best as number) & (1 << i) ? "credit" : "debit"));
+  }
+
+  // Too many amounts to brute force: trust priors and verify they reconcile.
+  const signs = priors.map((p) => (p === "credit" ? "credit" : "debit") as "credit" | "debit");
+  const creditSum = signs.reduce((a, s, i) => a + (s === "credit" ? amountsCents[i] : 0), 0);
+  return creditSum === target ? signs : null;
+}
+
+/**
+ * Bank-account table parser with a balance-segment solver. It collects entries
+ * (including amount-only rows), then uses displayed running balances (and the
+ * opening/closing balances) as anchors. Between two anchors it assigns
+ * debit/credit signs so the segment reconciles, guided by keyword priors. This
+ * works even when several transactions appear before the next running balance.
+ */
 export function parseBankAccountTable(
   lines: string[],
   year: number | undefined,
   openingBalance: number | null,
-): { rows: TransactionRow[]; attempted: number; ignoredSummaryRows: number } {
-  const rows: TransactionRow[] = [];
-  let attempted = 0;
+  closingBalance: number | null,
+): { rows: TransactionRow[]; attempted: number; ignoredSummaryRows: number; reconciled: boolean } {
+  const entries: BankEntry[] = [];
   let ignoredSummaryRows = 0;
   let carriedDate: string | null = null;
   let pendingDesc = "";
-  let prevBalance: number | null = openingBalance;
 
-  // Only parse inside the "Details of your account activity" table when such a
-  // marker exists; otherwise parse everything (best effort).
   const hasStart = lines.some((l) => BANK_START_RE.test(l));
   let inActivity = !hasStart;
 
+  // ----- Phase 1: collect entries inside the activity table -----
   for (const line of lines) {
     if (BANK_STOP_RE.test(line)) {
       if (inActivity) break;
@@ -1101,6 +1245,7 @@ export function parseBankAccountTable(
       continue;
     }
     if (detectBalanceLine(line)) {
+      // Opening/closing summary lines are anchors, handled separately.
       ignoredSummaryRows += 1;
       continue;
     }
@@ -1109,12 +1254,10 @@ export function parseBankAccountTable(
     const moneys = extractMoneyValues(line);
     if (date) carriedDate = normalizeDate(date.match, year) ?? date.match;
 
-    if (moneys.length >= 2) {
-      // A transaction row: rightmost value is the running balance, the value
-      // before it is the transaction amount.
-      attempted += 1;
-      const balanceMoney = moneys[moneys.length - 1];
-      const amountMoney = moneys[moneys.length - 2];
+    if (moneys.length >= 1) {
+      const hasBalance = moneys.length >= 2;
+      const amountMoney = hasBalance ? moneys[moneys.length - 2] : moneys[0];
+      const balance = hasBalance ? moneys[moneys.length - 1].value : null;
       const descStart = date ? date.end : 0;
       const descEnd = moneys[0].index;
       const inlineDesc = line
@@ -1123,55 +1266,87 @@ export function parseBankAccountTable(
         .trim();
       const description = `${pendingDesc} ${inlineDesc}`.replace(/\s+/g, " ").trim();
       pendingDesc = "";
-
-      const row = newRow();
-      row.date = carriedDate ?? "";
-      row.description = description;
-      row.balance = balanceMoney.value;
-
-      const magnitude = Math.abs(amountMoney.value);
-      let isCredit: boolean;
-      if (prevBalance !== null) {
-        // Balance went up => deposit (credit); down => withdrawal (debit).
-        isCredit = balanceMoney.value >= prevBalance;
-      } else {
-        isCredit = directionFromKeywords(description) === "credit";
+      if (!carriedDate && !description) {
+        // Not enough context to be a transaction.
+        ignoredSummaryRows += 1;
+        continue;
       }
-      if (isCredit) row.credit = magnitude;
-      else row.debit = magnitude;
-      prevBalance = balanceMoney.value;
+      entries.push({
+        date: carriedDate ?? "",
+        description,
+        amount: Math.abs(amountMoney.value),
+        balance,
+        prior: bankKeywordPrior(description),
+      });
+    } else if (date) {
+      // Date line with no money: the start of a wrapped row.
+      const buf = line.slice(date.end).replace(/\s+/g, " ").trim();
+      pendingDesc = `${pendingDesc} ${buf}`.replace(/\s+/g, " ").trim();
+    } else if (pendingDesc) {
+      // Wrapped description continuation.
+      pendingDesc = `${pendingDesc} ${line}`.replace(/\s+/g, " ").trim();
+    } else {
+      ignoredSummaryRows += 1;
+    }
+  }
 
+  // ----- Phase 2: solve segments between balance anchors -----
+  const rows: TransactionRow[] = [];
+  let reconciled = true;
+  let anchor: number | null = openingBalance;
+  let segment: BankEntry[] = [];
+
+  const flushSegment = (endBalance: number | null) => {
+    if (segment.length === 0) return;
+    let signs: ("credit" | "debit")[] | null = null;
+    if (anchor !== null && endBalance !== null) {
+      const deltaCents = toCents(endBalance) - toCents(anchor);
+      signs = solveSegment(
+        segment.map((e) => toCents(e.amount)),
+        deltaCents,
+        segment.map((e) => e.prior),
+      );
+    }
+    if (!signs) {
+      // No reconciling assignment: fall back to keyword priors (best effort).
+      reconciled = false;
+      signs = segment.map((e) => (e.prior === "credit" ? "credit" : "debit"));
+    }
+    segment.forEach((e, idx) => {
+      const row = newRow();
+      row.date = e.date;
+      row.description = e.description;
+      row.balance = e.balance;
+      if (signs![idx] === "credit") row.credit = e.amount;
+      else row.debit = e.amount;
       let confidence = 0.9;
       const notes: string[] = [];
-      if (!row.date) {
+      if (!e.date) {
         confidence -= 0.1;
         notes.push("Date could not be determined.");
       }
-      if (!description) {
+      if (!e.description) {
         confidence -= 0.2;
         notes.push("Description could not be read.");
       }
       row.confidence = clamp(Number(confidence.toFixed(2)), 0.3, 0.95);
       if (notes.length > 0) row.warning = notes.join(" ");
       rows.push(row);
-    } else if (date) {
-      // Date line without a full amount/balance pair: the start of a wrapped
-      // row. Buffer its description text (excluding any stray single number).
-      const cut = moneys.length === 1 ? moneys[0].index : line.length;
-      const buf = line.slice(date.end, Math.max(date.end, cut)).replace(/\s+/g, " ").trim();
-      pendingDesc = `${pendingDesc} ${buf}`.replace(/\s+/g, " ").trim();
-    } else if (moneys.length === 0) {
-      // No date, no money: a wrapped description continuation, but only while a
-      // wrap is already in progress (otherwise it is a header/heading line).
-      if (pendingDesc) pendingDesc = `${pendingDesc} ${line}`.replace(/\s+/g, " ").trim();
-      else ignoredSummaryRows += 1;
-    } else {
-      // No date with a single stray number: ambiguous, skip.
-      ignoredSummaryRows += 1;
+    });
+    segment = [];
+  };
+
+  for (const entry of entries) {
+    segment.push(entry);
+    if (entry.balance !== null) {
+      flushSegment(entry.balance);
+      anchor = entry.balance;
     }
   }
+  // Trailing entries with no displayed balance reconcile against the closing.
+  flushSegment(closingBalance);
 
-  return { rows, attempted, ignoredSummaryRows };
+  return { rows, attempted: entries.length, ignoredSummaryRows, reconciled };
 }
 
 // ----- Candidate-based parsing & scoring -----
@@ -1261,12 +1436,19 @@ function scoreCandidate(c: Candidate): number {
   return s;
 }
 
+// Strong signals that a credit-card statement uses the sectioned (CIBC-style)
+// layout. When present, the sectioned candidate is preferred over simple.
+const SECTIONED_SIGNAL_RE =
+  /your payments|your interest|your new charges|spend categor|trans(?:\.|action)? date|post(?:ing)? date|amount\s*\(\s*\$\s*\)|total balance/i;
+
 function buildCandidates(lines: string[], text: string, year: number | undefined): Candidate[] {
   const lower = text.toLowerCase();
   const looksCreditCard = CC_FAMILY_SIGNALS.some((re) => re.test(lower));
   const looksBank =
     BANK_FAMILY_SIGNALS.some((re) => re.test(lower)) ||
     (/withdrawals?/.test(lower) && /deposits?/.test(lower));
+  const sectionedSignals = (text.match(SECTIONED_SIGNAL_RE) ? 1 : 0) > 0;
+  const period = detectStatementPeriod(text);
 
   const candidates: Candidate[] = [];
 
@@ -1274,7 +1456,7 @@ function buildCandidates(lines: string[], text: string, year: number | undefined
     const ccBalances = detectCreditCardBalances(lines);
     const ccSummary = detectCreditCardSummary(lines);
     for (const useSections of [false, true]) {
-      const cc = parseCreditCardTransactions(lines, year, { useSections });
+      const cc = parseCreditCardTransactions(lines, year, { useSections, period });
       candidates.push({
         name: useSections ? "credit-card-sectioned" : "credit-card-simple",
         statementKind: "credit-card",
@@ -1296,7 +1478,12 @@ function buildCandidates(lines: string[], text: string, year: number | undefined
 
   if (looksBank) {
     const bankBalances = parseBankAccountStatement(lines, year);
-    const table = parseBankAccountTable(lines, year, bankBalances.openingBalance);
+    const table = parseBankAccountTable(
+      lines,
+      year,
+      bankBalances.openingBalance,
+      bankBalances.closingBalance,
+    );
     candidates.push({
       name: "bank-account",
       statementKind: "bank-account",
@@ -1337,7 +1524,15 @@ function buildCandidates(lines: string[], text: string, year: number | undefined
     score: 0,
   });
 
-  for (const c of candidates) c.score = scoreCandidate(c);
+  for (const c of candidates) {
+    c.score = scoreCandidate(c);
+    // When the layout clearly uses sectioned credit-card signals, prefer the
+    // sectioned candidate and penalize a non-reconciling simple candidate.
+    if (sectionedSignals) {
+      if (c.name === "credit-card-sectioned") c.score += 30;
+      if (c.name === "credit-card-simple" && !c.balance.passed) c.score -= 40;
+    }
+  }
   return candidates;
 }
 
@@ -1369,6 +1564,18 @@ export function parseStatementText(text: string): ParsedStatement {
   const openingBalance = chosen.openingBalance;
   const closingBalance = chosen.closingBalance;
 
+  const candidateComparison: CandidateComparison[] = candidates.map((c) => ({
+    name: c.name,
+    score: Math.round(c.score),
+    rowCount: c.rows.length,
+    totalCredits: c.rows.reduce((a, r) => a + (r.credit ?? 0), 0),
+    totalDebits: c.rows.reduce((a, r) => a + (r.debit ?? 0), 0),
+    openingDetected: c.openingBalance !== null,
+    closingDetected: c.closingBalance !== null,
+    balanceStatus: !c.balance.available ? "limited" : c.balance.passed ? "passed" : "needs-review",
+    balanceDiff: c.balance.diffCents !== null ? c.balance.diffCents / 100 : null,
+  }));
+
   const parseStats: LayoutParseStats = {
     layoutFamily,
     candidate: chosen.name,
@@ -1385,6 +1592,7 @@ export function parseStatementText(text: string): ParsedStatement {
     balanceColumnRows: rows.filter((r) => r.balance !== null).length,
     ignoredSummaryRows: chosen.bankIgnored,
     ignoredSpendReportRows: chosen.ignoredSpendReportRows,
+    candidateComparison,
   };
 
   const warnings: string[] = [];

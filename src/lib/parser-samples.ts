@@ -13,6 +13,7 @@ export type ParserSample = {
   expect: {
     kind?: "credit-card" | "bank-account" | "unknown";
     family?: "credit-card-table" | "bank-account-table" | "unknown";
+    candidate?: "credit-card-simple" | "credit-card-sectioned" | "bank-account" | "fallback";
     minRows: number;
     maxRows?: number;
     opening?: boolean;
@@ -452,13 +453,13 @@ export const parserSamples: ParserSample[] = [
   {
     name: "layout-cc-table-sections",
     description:
-      "Sectioned credit-card table: far-right amount without $, payment slip + spend report ignored, Total balance as closing; the sectioned candidate should win",
+      "Sectioned credit-card table: far-right amount without $, payment slip + out-of-period date + spend report ignored, Total balance as closing; sectioned candidate wins over simple",
     text: [
       "SOME CREDIT UNION MASTERCARD",
+      "Statement period January 1 to February 9, 2026",
       "Previous Balance $100.00",
       "Minimum payment due by MAR 05, 2026 $41.58",
-      "Payment Due Date FEB 21, 2026",
-      "Trans date Post date Description Category Amount",
+      "Trans date Post date Description Spend Categories Amount($)",
       "Your payments",
       "JAN 05 JAN 06 PAYMENT THANK YOU Payment 100.00",
       "Your new charges and credits",
@@ -467,12 +468,14 @@ export const parserSamples: ParserSample[] = [
       "Your interest",
       "JAN 31 JAN 31 INTEREST ON PURCHASES Interest 5.00",
       "Total balance $85.00",
+      "MAR 05 MAR 05 , 2026 41.58",
       "Spend Report",
       "Time to Pay",
     ].join("\n"),
     expect: {
       kind: "credit-card",
       family: "credit-card-table",
+      candidate: "credit-card-sectioned",
       minRows: 4,
       maxRows: 4,
       opening: true,
@@ -481,7 +484,7 @@ export const parserSamples: ParserSample[] = [
       debitRows: 3, // groceries, restaurant, interest
       balanceNull: true,
       balancePasses: true,
-      note: "payment slip + spend report ignored; Total balance detected as closing; sections drive direction",
+      note: "out-of-period MAR 05 slip row ignored; Total balance closing; sectioned wins via reconciliation + signal bonus",
     },
   },
 
@@ -520,6 +523,44 @@ export const parserSamples: ParserSample[] = [
       balanceNull: false, // bank rows carry a running balance
       balancePasses: true,
       note: "headers/period/phone ignored via gating; withdrawals=debit, deposits=credit via balance delta",
+    },
+  },
+
+  // ----- Bank-account balance-segment solver (amount-only rows between balances) -----
+  {
+    name: "bank-segment-solver",
+    description:
+      "Bank-account rows where several amounts appear before the next running balance. The segment solver assigns debit/credit so each segment reconciles, with carry-forward and a wrapped description.",
+    text: [
+      "SOME BANK CHEQUING ACCOUNT",
+      "From June 1 to June 30, 2026",
+      "Details of your account activity",
+      "Date Description Withdrawals Deposits Balance",
+      "Opening Balance 1,000.00",
+      "Jun 2 Payroll Deposit 2,000.00",
+      "Interac Received 500.00 3,500.00",
+      "Jun 5 Pre-Authorized",
+      "Hydro Payment 200.00",
+      "Grocery Purchase 100.00 3,200.00",
+      "Jun 8 e-Transfer Received 400.00",
+      "Jun 9 ATM Withdrawal 150.00 3,450.00",
+      "Closing Balance 3,450.00",
+      "Important information about your account",
+      "Some footer legal text 999.00",
+    ].join("\n"),
+    expect: {
+      kind: "bank-account",
+      family: "bank-account-table",
+      candidate: "bank-account",
+      minRows: 6,
+      maxRows: 6,
+      opening: true,
+      closing: true,
+      creditRows: 3, // payroll, interac, e-transfer
+      debitRows: 3, // hydro, grocery, atm
+      balanceNull: false,
+      balancePasses: true,
+      note: "all-credit, all-debit, and mixed segments reconcile; carry-forward + wrap join; footer ignored",
     },
   },
 ];

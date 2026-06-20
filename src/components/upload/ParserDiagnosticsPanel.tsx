@@ -105,6 +105,44 @@ export function ParserDiagnosticsPanel({
             <Metric label="Ignored summary rows" value={String(d.parseStats.ignoredSummaryRows)} />
             <Metric label="Ignored spend-report rows" value={String(d.parseStats.ignoredSpendReportRows)} />
           </dl>
+
+          {d.parseStats.candidateComparison.length > 0 ? (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full min-w-[640px] border-collapse text-[11px]">
+                <thead>
+                  <tr className="border-b border-slate-300 text-left text-slate-500">
+                    <th className="px-2 py-1 font-medium">Candidate</th>
+                    <th className="px-2 py-1 text-right font-medium">Score</th>
+                    <th className="px-2 py-1 text-right font-medium">Rows</th>
+                    <th className="px-2 py-1 text-right font-medium">Credits</th>
+                    <th className="px-2 py-1 text-right font-medium">Debits</th>
+                    <th className="px-2 py-1 font-medium">Open/Close</th>
+                    <th className="px-2 py-1 font-medium">Balance</th>
+                    <th className="px-2 py-1 text-right font-medium">Diff</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {d.parseStats.candidateComparison.map((c) => (
+                    <tr
+                      key={c.name}
+                      className={c.name === d.parseStats!.candidate ? "bg-emerald-50" : ""}
+                    >
+                      <td className="px-2 py-1">{c.name}</td>
+                      <td className="px-2 py-1 text-right tabular-nums">{c.score}</td>
+                      <td className="px-2 py-1 text-right tabular-nums">{c.rowCount}</td>
+                      <td className="px-2 py-1 text-right tabular-nums">{c.totalCredits.toFixed(2)}</td>
+                      <td className="px-2 py-1 text-right tabular-nums">{c.totalDebits.toFixed(2)}</td>
+                      <td className="px-2 py-1">{yesNo(c.openingDetected)}/{yesNo(c.closingDetected)}</td>
+                      <td className="px-2 py-1">{c.balanceStatus}</td>
+                      <td className="px-2 py-1 text-right tabular-nums">
+                        {c.balanceDiff === null ? "—" : c.balanceDiff.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

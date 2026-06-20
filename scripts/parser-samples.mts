@@ -36,6 +36,7 @@ for (const sample of parserSamples) {
     ["maxRows", e.maxRows === undefined || rows <= e.maxRows],
     ["kind", e.kind === undefined || parsed.statementKind === e.kind],
     ["family", e.family === undefined || parsed.layoutFamily === e.family],
+    ["candidate", e.candidate === undefined || parsed.parseStats?.candidate === e.candidate],
     ["opening", e.opening === undefined || e.opening === opening],
     ["closing", e.closing === undefined || e.closing === closing],
     ["creditRows", e.creditRows === undefined || creditRows >= e.creditRows],
