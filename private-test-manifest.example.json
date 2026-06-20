@@ -1,0 +1,27 @@
+{
+  "_comment": "Copy this to private-test-manifest.json (gitignored) and point paths at PDFs OUTSIDE the repo. Only aggregate expectations live here; never commit real statements or real values.",
+  "statements": [
+    {
+      "path": "C:/private-statements/example-credit-card.pdf",
+      "expectedStatementKind": "credit-card",
+      "expectedLayoutFamily": "credit-card-table",
+      "expectedRowCount": 0,
+      "expectedOpeningBalance": 0,
+      "expectedClosingBalance": 0,
+      "expectedTotalCredits": 0,
+      "expectedTotalDebits": 0,
+      "expectedBalanceStatus": "passed"
+    },
+    {
+      "path": "C:/private-statements/example-bank-account.pdf",
+      "expectedStatementKind": "bank-account",
+      "expectedLayoutFamily": "bank-account-table",
+      "expectedRowCount": 0,
+      "expectedOpeningBalance": 0,
+      "expectedClosingBalance": 0,
+      "expectedTotalCredits": 0,
+      "expectedTotalDebits": 0,
+      "expectedBalanceStatus": "passed"
+    }
+  ]
+}

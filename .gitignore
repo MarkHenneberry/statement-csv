@@ -21,8 +21,21 @@ yarn-error.log*
 
 # env files
 .env
+.env.local
 .env*.local
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# private/local statement testing files
+/private-test-files/
+/test-statements/
+/statements/
+/private-statements/
+/uploads/
+/tmp/
+*.pdf
+
+# private parser regression (never commit real statements or expected values)
+/private-test-manifest.json

@@ -15,7 +15,9 @@ import {
 import type {
   ParseStatementResponse,
   StatementKind,
+  LayoutFamily,
   CreditCardParseStats,
+  LayoutParseStats,
 } from "@/lib/parser";
 import { UploadDropzone } from "@/components/upload/UploadDropzone";
 import { ProcessingSteps } from "@/components/upload/ProcessingSteps";
@@ -37,12 +39,14 @@ type RowPatch = Partial<Omit<TransactionRow, "id">>;
 type PreviewMeta = {
   source: "real-parser" | "mock-fallback";
   statementKind: StatementKind;
+  layoutFamily: LayoutFamily;
   fileName: string;
   pageCount: number | null;
   openingBalance: number | null;
   closingBalance: number | null;
   parserWarnings: string[];
   creditCardStats?: CreditCardParseStats;
+  parseStats?: LayoutParseStats;
 };
 
 const isDev = process.env.NODE_ENV !== "production";
@@ -97,12 +101,14 @@ export function UploadFlow() {
     setMeta({
       source: data.source,
       statementKind: data.statementKind,
+      layoutFamily: data.layoutFamily,
       fileName: data.fileName || file?.name || "statement.pdf",
       pageCount: data.pageCount,
       openingBalance: data.openingBalance !== null ? Number(data.openingBalance) : null,
       closingBalance: data.closingBalance !== null ? Number(data.closingBalance) : null,
       parserWarnings: data.warnings,
       creditCardStats: data.creditCardStats,
+      parseStats: data.parseStats,
     });
     setStatus("preview");
   }
@@ -142,6 +148,7 @@ export function UploadFlow() {
     setMeta({
       source: "mock-fallback",
       statementKind: "bank-account",
+      layoutFamily: "bank-account-table",
       fileName: stmt.fileName,
       pageCount: stmt.pagesUsed,
       openingBalance: stmt.openingBalance,
@@ -330,6 +337,7 @@ export function UploadFlow() {
             diagnostics={buildParserDiagnostics({
               source: meta.source,
               statementKind: meta.statementKind,
+              layoutFamily: meta.layoutFamily,
               pageCount: meta.pageCount,
               openingBalance: meta.openingBalance,
               closingBalance: meta.closingBalance,
@@ -337,6 +345,7 @@ export function UploadFlow() {
               rows,
               balanceCheck: check,
               creditCardStats: meta.creditCardStats,
+              parseStats: meta.parseStats,
             })}
           />
         ) : null}

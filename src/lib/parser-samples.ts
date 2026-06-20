@@ -12,6 +12,7 @@ export type ParserSample = {
   text: string;
   expect: {
     kind?: "credit-card" | "bank-account" | "unknown";
+    family?: "credit-card-table" | "bank-account-table" | "unknown";
     minRows: number;
     maxRows?: number;
     opening?: boolean;
@@ -413,6 +414,112 @@ export const parserSamples: ParserSample[] = [
       debitRows: 1,
       creditRows: 1,
       balancePasses: true,
+    },
+  },
+
+  // ----- Candidate scoring: simple vs sectioned (RBC Visa regression guard) -----
+  {
+    name: "cc-simple-vs-sectioned-sidebar",
+    description:
+      "A 'Payments & credits' sidebar heading must NOT flip the whole table to credit. The simple candidate (positive=debit) should win via reconciliation.",
+    text: [
+      "RBC ROYAL BANK VISA",
+      "STATEMENT FROM APR 24 TO MAY 25, 2026",
+      "Previous Account Balance $100.00",
+      "Payments & credits",
+      "APR 25 APR 26 STORE ONE $50.00",
+      "APR 26 APR 27 STORE TWO $30.00",
+      "APR 27 APR 28 PAYMENT - THANK YOU / PAIEMENT - MERCI -$80.00",
+      "New Balance $100.00",
+      "TIME TO PAY",
+    ].join("\n"),
+    expect: {
+      kind: "credit-card",
+      family: "credit-card-table",
+      minRows: 3,
+      maxRows: 3,
+      opening: true,
+      closing: true,
+      debitRows: 2, // both positive purchases stay debit
+      creditRows: 1, // only the negative payment is credit
+      balanceNull: true,
+      balancePasses: true,
+      note: "candidate scoring picks the simple strategy; sidebar heading does not flip purchases",
+    },
+  },
+
+  // ----- Layout family A: sectioned credit-card table (CIBC-style) -----
+  {
+    name: "layout-cc-table-sections",
+    description:
+      "Sectioned credit-card table: far-right amount without $, payment slip + spend report ignored, Total balance as closing; the sectioned candidate should win",
+    text: [
+      "SOME CREDIT UNION MASTERCARD",
+      "Previous Balance $100.00",
+      "Minimum payment due by MAR 05, 2026 $41.58",
+      "Payment Due Date FEB 21, 2026",
+      "Trans date Post date Description Category Amount",
+      "Your payments",
+      "JAN 05 JAN 06 PAYMENT THANK YOU Payment 100.00",
+      "Your new charges and credits",
+      "JAN 07 JAN 08 FAKE GROCERY STORE Groceries 50.00",
+      "JAN 09 JAN 10 FAKE RESTAURANT Restaurants 30.00",
+      "Your interest",
+      "JAN 31 JAN 31 INTEREST ON PURCHASES Interest 5.00",
+      "Total balance $85.00",
+      "Spend Report",
+      "Time to Pay",
+    ].join("\n"),
+    expect: {
+      kind: "credit-card",
+      family: "credit-card-table",
+      minRows: 4,
+      maxRows: 4,
+      opening: true,
+      closing: true,
+      creditRows: 1, // the payment
+      debitRows: 3, // groceries, restaurant, interest
+      balanceNull: true,
+      balancePasses: true,
+      note: "payment slip + spend report ignored; Total balance detected as closing; sections drive direction",
+    },
+  },
+
+  // ----- Layout family B: generic bank-account table (withdrawals/deposits/balance) -----
+  {
+    name: "layout-bank-table-withdrawals-deposits",
+    description:
+      "Bank-account table with header/period/phone junk ignored, activity-section gating, date carry-forward, and a wrapped description",
+    text: [
+      "SOME BANK CHEQUING ACCOUNT",
+      "Statement period January 1 to January 31, 2026",
+      "Account number 12345 678 9",
+      "1-800-769-2511",
+      "Details of your account activity",
+      "Date Description Withdrawals Deposits Balance",
+      "Opening Balance 2,000.00",
+      "Jan 3 Payroll Deposit 1,500.00 3,500.00",
+      "Jan 5 Hydro One 120.00 3,380.00",
+      "Grocery Store 80.00 3,300.00",
+      "Jan 9 Pre-Authorized",
+      "Insurance Payment 100.00 3,200.00",
+      "Jan 12 e-Transfer Received 300.00 3,500.00",
+      "Closing Balance 3,500.00",
+      "Important information about your account",
+      "Some legal footer text with a 555.00 number.",
+    ].join("\n"),
+    expect: {
+      kind: "bank-account",
+      family: "bank-account-table",
+      minRows: 5,
+      maxRows: 5,
+      opening: true,
+      closing: true,
+      creditRows: 2, // payroll, e-transfer (balance went up)
+      debitRows: 3, // hydro, grocery, insurance (balance went down)
+      balanceNull: false, // bank rows carry a running balance
+      balancePasses: true,
+      note: "headers/period/phone ignored via gating; withdrawals=debit, deposits=credit via balance delta",
     },
   },
 ];

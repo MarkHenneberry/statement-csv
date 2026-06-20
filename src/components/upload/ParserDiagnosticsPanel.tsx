@@ -35,6 +35,12 @@ const kindLabel = {
   unknown: "Unknown",
 } as const;
 
+const familyLabel = {
+  "credit-card-table": "Credit-card table",
+  "bank-account-table": "Bank-account table",
+  unknown: "Unknown",
+} as const;
+
 export function ParserDiagnosticsPanel({
   diagnostics,
 }: {
@@ -65,6 +71,7 @@ export function ParserDiagnosticsPanel({
       <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
         <Metric label="Source" value={d.source === "real-parser" ? "Real parser" : "Sample data"} />
         <Metric label="Statement kind" value={kindLabel[d.statementKind]} />
+        <Metric label="Layout family" value={familyLabel[d.layoutFamily]} />
         <Metric label="Balance mode" value={d.balanceMode === "credit-card" ? "Credit card" : "Bank account"} />
         <Metric label="Page count" value={d.pageCount !== null ? String(d.pageCount) : "—"} />
         <Metric label="Total rows" value={String(d.totalRows)} />
@@ -78,6 +85,28 @@ export function ParserDiagnosticsPanel({
         <Metric label="Closing detected" value={yesNo(d.closingDetected)} />
         <Metric label="Extractable text" value={yesNo(d.extractableTextDetected)} />
       </dl>
+
+      {d.parseStats ? (
+        <div className="mt-4">
+          <p className="text-xs font-medium text-slate-700">Layout parse</p>
+          <dl className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+            <Metric label="Chosen candidate" value={d.parseStats.candidate} />
+            <Metric label="Candidate score" value={String(d.parseStats.candidateScore)} />
+            <Metric label="Candidates tried" value={String(d.parseStats.candidatesTried)} />
+            <Metric label="Credit-card table" value={yesNo(d.parseStats.creditCardTableDetected)} />
+            <Metric label="Bank-account table" value={yesNo(d.parseStats.bankAccountTableDetected)} />
+            <Metric label="Sections detected" value={String(d.parseStats.transactionSectionsDetected)} />
+            <Metric label="Rows attempted" value={String(d.parseStats.rowsAttempted)} />
+            <Metric label="Rows completed" value={String(d.parseStats.rowsCompleted)} />
+            <Metric label="Amount column rows" value={String(d.parseStats.amountColumnRows)} />
+            <Metric label="Debit column rows" value={String(d.parseStats.debitColumnRows)} />
+            <Metric label="Credit column rows" value={String(d.parseStats.creditColumnRows)} />
+            <Metric label="Balance column rows" value={String(d.parseStats.balanceColumnRows)} />
+            <Metric label="Ignored summary rows" value={String(d.parseStats.ignoredSummaryRows)} />
+            <Metric label="Ignored spend-report rows" value={String(d.parseStats.ignoredSpendReportRows)} />
+          </dl>
+        </div>
+      ) : null}
 
       {d.creditCardStats ? (
         <div className="mt-4">

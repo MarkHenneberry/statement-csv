@@ -35,6 +35,7 @@ for (const sample of parserSamples) {
     ["minRows", rows >= e.minRows],
     ["maxRows", e.maxRows === undefined || rows <= e.maxRows],
     ["kind", e.kind === undefined || parsed.statementKind === e.kind],
+    ["family", e.family === undefined || parsed.layoutFamily === e.family],
     ["opening", e.opening === undefined || e.opening === opening],
     ["closing", e.closing === undefined || e.closing === closing],
     ["creditRows", e.creditRows === undefined || creditRows >= e.creditRows],
@@ -51,7 +52,7 @@ for (const sample of parserSamples) {
 
   console.log(`${ok ? "ok  " : "MISS"}  ${sample.name}`);
   console.log(
-    `      kind=${parsed.statementKind} rows=${rows} debit=${debitRows} credit=${creditRows} opening=${opening} closing=${closing} balancePassed=${check.passed} warnings=${parsed.warnings.length}`,
+    `      kind=${parsed.statementKind} family=${parsed.layoutFamily} candidate=${parsed.parseStats?.candidate}/${parsed.parseStats?.candidateScore} rows=${rows} debit=${debitRows} credit=${creditRows} opening=${opening} closing=${closing} balancePassed=${check.passed} warnings=${parsed.warnings.length}`,
   );
   if (!ok) console.log(`      FAILED: ${failed.join(", ")}`);
   if (sample.expect.note) console.log(`      note: ${sample.expect.note}`);

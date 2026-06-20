@@ -25,6 +25,7 @@ function errorResponse(fileName: string, warning: string, status = 400) {
     fileName,
     pageCount: null,
     statementKind: "unknown",
+    layoutFamily: "unknown",
     rows: [],
     openingBalance: null,
     closingBalance: null,
@@ -80,6 +81,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       fileName,
       pageCount: extracted.pageCount,
       statementKind: "unknown",
+      layoutFamily: "unknown",
       rows: [],
       openingBalance: null,
       closingBalance: null,
@@ -98,11 +100,13 @@ export async function POST(request: Request): Promise<NextResponse> {
     fileName,
     pageCount: extracted.pageCount,
     statementKind: parsed.statementKind,
+    layoutFamily: parsed.layoutFamily,
     rows: parsed.rows,
     openingBalance: moneyString(parsed.openingBalance),
     closingBalance: moneyString(parsed.closingBalance),
     warnings: parsed.warnings,
     creditCardStats: parsed.creditCardStats,
+    parseStats: parsed.parseStats,
   };
 
   return NextResponse.json(body);

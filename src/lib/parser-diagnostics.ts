@@ -15,7 +15,9 @@ import { LOW_CONFIDENCE_THRESHOLD } from "@/lib/upload";
 import {
   SCANNED_PDF_WARNING,
   type StatementKind,
+  type LayoutFamily,
   type CreditCardParseStats,
+  type LayoutParseStats,
 } from "@/lib/parser";
 
 export type ParserQuality = "good" | "needs-review" | "poor";
@@ -24,6 +26,7 @@ export type DiagnosticsBalanceStatus = "passed" | "needs-review" | "limited";
 export type ParserDiagnostics = {
   source: "real-parser" | "mock-fallback";
   statementKind: StatementKind;
+  layoutFamily: LayoutFamily;
   balanceMode: BalanceMode;
   pageCount: number | null;
   totalRows: number;
@@ -38,6 +41,7 @@ export type ParserDiagnostics = {
   extractableTextDetected: boolean;
   warnings: string[];
   creditCardStats?: CreditCardParseStats;
+  parseStats?: LayoutParseStats;
   quality: ParserQuality;
   qualityLabel: string;
   qualityReason: string;
@@ -49,6 +53,7 @@ const HIGH_WARNING_COUNT = 4;
 export function buildParserDiagnostics(input: {
   source: "real-parser" | "mock-fallback";
   statementKind: StatementKind;
+  layoutFamily: LayoutFamily;
   pageCount: number | null;
   openingBalance: number | null;
   closingBalance: number | null;
@@ -56,10 +61,12 @@ export function buildParserDiagnostics(input: {
   rows: TransactionRow[];
   balanceCheck: BalanceCheck;
   creditCardStats?: CreditCardParseStats;
+  parseStats?: LayoutParseStats;
 }): ParserDiagnostics {
   const {
     source,
     statementKind,
+    layoutFamily,
     pageCount,
     openingBalance,
     closingBalance,
@@ -67,6 +74,7 @@ export function buildParserDiagnostics(input: {
     rows,
     balanceCheck,
     creditCardStats,
+    parseStats,
   } = input;
 
   const totalRows = rows.length;
@@ -102,6 +110,10 @@ export function buildParserDiagnostics(input: {
       : totalRows === 0
         ? "No transaction rows were detected."
         : "A high number of parser warnings was produced.";
+  } else if (layoutFamily === "unknown") {
+    // Unknown layout family — surface as Needs Review rather than pretending.
+    quality = "needs-review";
+    qualityReason = "Layout family could not be confidently identified.";
   } else if (
     openingDetected &&
     closingDetected &&
@@ -128,6 +140,7 @@ export function buildParserDiagnostics(input: {
   return {
     source,
     statementKind,
+    layoutFamily,
     balanceMode: balanceCheck.mode,
     pageCount,
     totalRows,
@@ -142,6 +155,7 @@ export function buildParserDiagnostics(input: {
     extractableTextDetected,
     warnings,
     creditCardStats,
+    parseStats,
     quality,
     qualityLabel,
     qualityReason,

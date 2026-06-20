@@ -15,6 +15,38 @@ import type { TransactionRow } from "@/lib/upload";
 export type StatementKind = "credit-card" | "bank-account" | "unknown";
 
 /**
+ * Reusable layout families. A "family" is a table shape shared across many
+ * issuers, so adding a bank rarely needs new code — only the family strategy.
+ */
+export type LayoutFamily = "credit-card-table" | "bank-account-table" | "unknown";
+
+/** Candidate parsing strategies that compete; the highest-scoring one wins. */
+export type CandidateName =
+  | "credit-card-simple"
+  | "credit-card-sectioned"
+  | "bank-account"
+  | "fallback";
+
+/** Layout-level aggregate diagnostics (dev only). Counts/statuses only. */
+export type LayoutParseStats = {
+  layoutFamily: LayoutFamily;
+  candidate: CandidateName;
+  candidateScore: number;
+  candidatesTried: number;
+  creditCardTableDetected: boolean;
+  bankAccountTableDetected: boolean;
+  transactionSectionsDetected: number;
+  rowsAttempted: number;
+  rowsCompleted: number;
+  amountColumnRows: number;
+  debitColumnRows: number;
+  creditColumnRows: number;
+  balanceColumnRows: number;
+  ignoredSummaryRows: number;
+  ignoredSpendReportRows: number;
+};
+
+/**
  * Safe aggregate counters about credit-card parsing. Counts and statuses only —
  * never raw statement text, descriptions, amounts, or account numbers.
  */
@@ -38,6 +70,12 @@ export type CreditCardParseStats = {
   lastTransactionDate: string | null;
   /** Index of the last completed transaction. */
   lastTransactionIndex: number | null;
+  /** Count of section headings (Payments / Purchases / Interest …) detected. */
+  sectionsDetected: number;
+  /** Summary/label lines skipped (previous balance, minimum payment, etc.). */
+  ignoredSummaryRows: number;
+  /** Spend report / rewards / budget / message-centre lines skipped. */
+  ignoredSpendReportRows: number;
 };
 
 export type ParseStatementResponse = {
@@ -46,12 +84,14 @@ export type ParseStatementResponse = {
   fileName: string;
   pageCount: number | null;
   statementKind: StatementKind;
+  layoutFamily: LayoutFamily;
   rows: TransactionRow[];
   openingBalance: string | null;
   closingBalance: string | null;
   warnings: string[];
   /** Safe aggregate parsing counters (dev diagnostics). No raw content. */
   creditCardStats?: CreditCardParseStats;
+  parseStats?: LayoutParseStats;
   // NOTE: a raw text preview is intentionally NOT part of the response. Raw
   // statement text is too easy to leak via screenshots, so it is never returned
   // or shown, even in development.
@@ -59,11 +99,13 @@ export type ParseStatementResponse = {
 
 export type ParsedStatement = {
   statementKind: StatementKind;
+  layoutFamily: LayoutFamily;
   rows: TransactionRow[];
   openingBalance: number | null;
   closingBalance: number | null;
   warnings: string[];
   creditCardStats?: CreditCardParseStats;
+  parseStats?: LayoutParseStats;
 };
 
 export const SCANNED_PDF_WARNING =
@@ -165,13 +207,15 @@ export function extractMoneyValues(
     const hasDecimals = Boolean(decimals);
     const hasThousands = digits.includes(",");
     const hasDollar = Boolean(dollar);
-    const negative =
-      Boolean(openParen && closeParen) || Boolean(leadingMinus) || Boolean(trailingMinus);
 
     // A "money signal" is a currency sign, a 2-decimal part, or a thousands
-    // separator. Plain integers (years, points, IDs) never qualify.
-    const isMoney = hasDollar || hasDecimals || hasThousands || negative;
+    // separator. A leading/trailing minus alone does NOT qualify, otherwise a
+    // date separator (e.g. the "-05-" in "2024-05-02") would be read as -5.
+    const isMoney = hasDollar || hasDecimals || hasThousands;
     if (!isMoney) continue;
+
+    const negative =
+      Boolean(openParen && closeParen) || Boolean(leadingMinus) || Boolean(trailingMinus);
     if (requireDollar && !hasDollar) continue;
 
     const numeric = Number(digits.replace(/,/g, "") + (decimals ?? ""));
@@ -440,6 +484,50 @@ export function detectStatementKind(text: string): StatementKind {
   return "unknown";
 }
 
+const CC_FAMILY_SIGNALS: RegExp[] = [
+  /previous (account )?balance/,
+  /minimum payment/,
+  /payment due date/,
+  /new balance/,
+  /total account balance/,
+  /trans(?:\.|action)? date/,
+  /post(?:ing)? date/,
+  /\bvisa\b/,
+  /mastercard/,
+  /credit card/,
+  /cash advances?/,
+  /interest charged|interest charge/,
+];
+
+const BANK_FAMILY_SIGNALS: RegExp[] = [
+  /opening balance/,
+  /closing balance/,
+  /account activity/,
+  /balance forward/,
+  /beginning balance/,
+  /ending balance/,
+];
+
+/**
+ * Classify the statement into a reusable LAYOUT FAMILY. This is intentionally
+ * shape-based (not issuer-based) so one strategy serves many banks. When signals
+ * are weak it returns "unknown" so the UI can show Needs Review rather than
+ * pretending.
+ */
+export function detectLayoutFamily(text: string): LayoutFamily {
+  const lower = text.toLowerCase();
+  const ccScore = CC_FAMILY_SIGNALS.filter((re) => re.test(lower)).length;
+  const bankScore = BANK_FAMILY_SIGNALS.filter((re) => re.test(lower)).length;
+  // A withdrawals + deposits pairing is the defining bank-account-table shape.
+  const hasWithdrawDeposit = /withdrawals?/.test(lower) && /deposits?/.test(lower);
+
+  if (hasWithdrawDeposit) return "bank-account-table";
+  if (bankScore >= 2 && bankScore >= ccScore) return "bank-account-table";
+  if (ccScore >= 2) return "credit-card-table";
+  if (bankScore >= 1) return "bank-account-table";
+  return "unknown";
+}
+
 type MonthDay = { month: number; day: number };
 
 /** Match a leading "APR 22" date at the start of a string; returns the rest. */
@@ -521,8 +609,60 @@ function isTransactionHeader(line: string): boolean {
   return (
     /activity description/.test(l) ||
     /amount\s*\(\s*\$\s*\)/.test(l) ||
-    (/\btransaction\b/.test(l) && /\bposting\b/.test(l))
+    (/\btransaction\b/.test(l) && /\bposting\b/.test(l)) ||
+    (/trans(?:\.|action)? date/.test(l) && /post(?:ing)? date/.test(l))
   );
+}
+
+// Spend report / rewards / budget / message centre lines are never transactions.
+const CC_SPEND_REPORT_RE =
+  /spend(?:ing)? report|rewards? (?:summary|earned)|budget|message cent(?:re|er)|points? (?:summary|balance)/i;
+
+// Summary/label lines (skipped, not transactions). Used only for diagnostics.
+const CC_SUMMARY_LABEL_RE =
+  /previous (?:account )?balance|minimum payment|payment due date|credit limit|available credit|new balance|total (?:account )?balance/i;
+
+/**
+ * Section heading inside a credit-card statement. Returns the default direction
+ * for rows under that heading: "credit" for payments/credits, "debit" otherwise.
+ * Only matches short heading-style lines, never transaction lines.
+ */
+function creditCardSection(line: string): "credit" | "debit" | null {
+  const l = line.trim().toLowerCase();
+  // Charges/purchases/interest/fees are debit sections; check these first so a
+  // heading like "your new charges and credits" is not read as a credit section.
+  if (/(new charges|charges and credits|purchases|cash advances?)/.test(l)) return "debit";
+  if (/^(your )?interest\b/.test(l)) return "debit";
+  if (/^(fees|service charges?)\b/.test(l)) return "debit";
+  if (/^(your )?payments?\b/.test(l) && !/due|minimum/.test(l)) return "credit";
+  if (/^(your )?credits?\b/.test(l)) return "credit";
+  if (/payments?\s*(?:&|and)\s*credits/.test(l)) return "credit";
+  return null;
+}
+
+// Payment-slip / remittance / summary label lines that are never transactions,
+// even when they carry a date and an amount (e.g. a CIBC payment slip).
+const CC_IGNORE_LINE_RE =
+  /minimum payment|amount due|payment due|payment slip|payment options|total payment enclosed|please pay|remittance/i;
+
+/**
+ * Capture the transaction amount from a credit-card row remainder. Prefers a
+ * "$"-prefixed value (RBC), then falls back to the rightmost decimal money value
+ * (CIBC-style far-right Amount column with no "$"). Detects a trailing "CR".
+ */
+function captureCreditCardAmount(
+  remainder: string,
+): { value: number; index: number; explicitCredit: boolean } | null {
+  const dollar = findInlineDollarAmount(remainder);
+  if (dollar) {
+    return { value: dollar.value, index: dollar.index, explicitCredit: dollar.value < 0 };
+  }
+  const moneys = extractMoneyValues(remainder);
+  if (moneys.length === 0) return null;
+  const last = moneys[moneys.length - 1];
+  const trailing = remainder.slice(last.end);
+  const explicitCredit = last.value < 0 || /\bcr\b/i.test(trailing);
+  return { value: last.value, index: last.index, explicitCredit };
 }
 
 function hardStopReason(line: string): string | null {
@@ -560,6 +700,7 @@ function buildCreditCardRow(
   amount: number,
   year: number | undefined,
   fxNote: string | null,
+  ctx: { sectionCredit?: boolean; explicitCredit?: boolean } = {},
 ): TransactionRow {
   const row = newRow();
   row.date = isoFromMonthDay(transDate, year);
@@ -568,11 +709,14 @@ function buildCreditCardRow(
 
   const magnitude = Math.abs(amount);
   const lower = row.description.toLowerCase();
-  // Negative amounts are always credits. A POSITIVE amount is only a credit when
-  // a strong payment/refund phrase is present — never on a lone "credit" word in
-  // a merchant name (e.g. "OPENAI* CHATGPT CREDIT" stays a debit).
+  // Credit when: amount is negative or flagged (e.g. "CR"); the row is under a
+  // payments/credits section; or the description has a strong payment/refund
+  // phrase. A lone "credit" word in a merchant name does NOT flip a positive
+  // charge (e.g. "OPENAI* CHATGPT CREDIT" stays a debit).
   const isCredit =
     amount < 0 ||
+    Boolean(ctx.explicitCredit) ||
+    Boolean(ctx.sectionCredit) ||
     CC_PAYMENT_PHRASES.some((p) => lower.includes(p)) ||
     CC_REFUND_PHRASES.some((p) => lower.includes(p));
   if (isCredit) {
@@ -612,7 +756,9 @@ function buildCreditCardRow(
 export function parseCreditCardTransactions(
   lines: string[],
   year?: number,
+  opts: { useSections?: boolean } = {},
 ): { rows: TransactionRow[]; stats: CreditCardParseStats } {
+  const useSections = opts.useSections ?? false;
   const rows: TransactionRow[] = [];
   const stats: CreditCardParseStats = {
     transactionSectionDetected: false,
@@ -628,11 +774,17 @@ export function parseCreditCardTransactions(
     rowsAfterIgnoredStop: 0,
     lastTransactionDate: null,
     lastTransactionIndex: null,
+    sectionsDetected: 0,
+    ignoredSummaryRows: 0,
+    ignoredSpendReportRows: 0,
   };
 
   let inSection = false;
   let pending: MonthDay | null = null; // a lone leading transaction date
   let ignoredStopOccurred = false;
+  // Default section is a charge section (debit); a "Payments"/"Credits" heading
+  // flips it to credit for the rows that follow.
+  let currentSectionCredit = false;
   let i = 0;
 
   while (i < lines.length) {
@@ -663,6 +815,45 @@ export function parseCreditCardTransactions(
     if (isTransactionHeader(line)) {
       inSection = true;
       stats.transactionSectionDetected = true;
+      i += 1;
+      continue;
+    }
+
+    const isDateLine = parseLeadingTransactionDates(line) !== null;
+    const hasMoney = extractMoneyValues(line).length > 0;
+
+    // Section headings (Payments / Purchases / Interest …) set the default
+    // direction for the rows beneath them. They are short, dateless, moneyless.
+    if (!isDateLine && !hasMoney) {
+      const section = creditCardSection(line);
+      if (section) {
+        currentSectionCredit = section === "credit";
+        stats.sectionsDetected += 1;
+        inSection = true;
+        stats.transactionSectionDetected = true;
+        i += 1;
+        continue;
+      }
+      if (CC_SPEND_REPORT_RE.test(line)) {
+        stats.ignoredSpendReportRows += 1;
+        i += 1;
+        continue;
+      }
+      if (CC_SUMMARY_LABEL_RE.test(line)) {
+        stats.ignoredSummaryRows += 1;
+        i += 1;
+        continue;
+      }
+    } else if (!isDateLine && CC_SUMMARY_LABEL_RE.test(line)) {
+      // A summary label line with a money value (e.g. "Minimum payment $10.00").
+      stats.ignoredSummaryRows += 1;
+      i += 1;
+      continue;
+    }
+
+    // Payment slip / remittance lines are never transactions, even with a date.
+    if (CC_IGNORE_LINE_RE.test(line)) {
+      stats.ignoredSummaryRows += 1;
       i += 1;
       continue;
     }
@@ -708,13 +899,16 @@ export function parseCreditCardTransactions(
       let remainder = dates.rest;
       const descParts: string[] = [];
       let amount: number | null = null;
+      let explicitCredit = false;
       let fxNote: string | null = null;
       let reachedReference = false;
 
-      // Amount inline on the start line?
-      const inline = findInlineDollarAmount(remainder);
+      // Amount inline on the start line? Prefers "$" (RBC), then the rightmost
+      // decimal value (CIBC far-right Amount column with no "$").
+      const inline = captureCreditCardAmount(remainder);
       if (inline) {
         amount = inline.value;
+        explicitCredit = inline.explicitCredit;
         stats.amountLinesDetected += 1;
         remainder = remainder.slice(0, inline.index);
       }
@@ -757,7 +951,11 @@ export function parseCreditCardTransactions(
       }
 
       if (amount !== null) {
-        const row = buildCreditCardRow(transDate, descParts.join(" "), amount, year, fxNote);
+        const row = buildCreditCardRow(transDate, descParts.join(" "), amount, year, fxNote, {
+          // Section direction only applies in the sectioned strategy.
+          sectionCredit: useSections && currentSectionCredit,
+          explicitCredit,
+        });
         rows.push(row);
         stats.blocksCompleted += 1;
         stats.lastTransactionDate = row.date;
@@ -803,8 +1001,28 @@ export function detectCreditCardBalances(lines: string[]): {
   const opening = findLabeledAmount(lines, /previous (account )?balance/i);
   const closing =
     findLabeledAmount(lines, /\bnew balance\b/i) ??
-    findLabeledAmount(lines, /total account balance/i);
+    findLabeledAmount(lines, /total account balance/i) ??
+    findLabeledAmount(lines, /total balance/i);
   return { opening, closing };
+}
+
+/**
+ * Light credit-card summary detection (optional, for validation/scoring only).
+ * Returns labelled section totals where present; nulls otherwise.
+ */
+export function detectCreditCardSummary(lines: string[]): {
+  credits: number | null;
+  debits: number | null;
+} {
+  const payments = findLabeledAmount(lines, /your payments|payments? (?:&|and) credits/i);
+  const purchases = findLabeledAmount(lines, /your new charges|new charges (?:&|and) credits|purchases (?:&|and) debits/i);
+  const interest = findLabeledAmount(lines, /your interest|interest charged/i);
+  const credits = payments;
+  const debits =
+    purchases !== null || interest !== null
+      ? (purchases ?? 0) + (interest ?? 0)
+      : null;
+  return { credits, debits };
 }
 
 function parseBankAccountStatement(
@@ -833,9 +1051,302 @@ function parseBankAccountStatement(
 }
 
 /**
+ * Generic bank-account table strategy for the shape:
+ *   Date | Description | Withdrawals | Deposits | Balance
+ *
+ * Withdrawals map to Debit and Deposits to Credit. Because a reconstructed line
+ * usually shows only [amount, balance] (the blank column collapses), direction
+ * is decided by the running-balance delta, which is layout-independent. Dates
+ * carry forward and wrapped descriptions are joined.
+ */
+// Start of the real transaction table on a bank-account statement.
+const BANK_START_RE =
+  /details of your account activity|account activity|transaction details|details of account/i;
+// End of the transaction table (legal/footer/closing sections).
+const BANK_STOP_RE =
+  /important information about your account|how to (?:reach|contact) us|trade ?-?marks?|^member\b|closing notice/i;
+// Lines that are never transactions: headers, addresses, phone, control numbers.
+const BANK_IGNORE_LINE_RE =
+  /statement period|account number|card number|page \d+ of \d+|p\.?o\.? box|customer service|www\.|royal bank of canada|how to reach|\b1[-\s]?8\d{2}[-\s]?\d{3}[-\s]?\d{4}\b/i;
+
+export function parseBankAccountTable(
+  lines: string[],
+  year: number | undefined,
+  openingBalance: number | null,
+): { rows: TransactionRow[]; attempted: number; ignoredSummaryRows: number } {
+  const rows: TransactionRow[] = [];
+  let attempted = 0;
+  let ignoredSummaryRows = 0;
+  let carriedDate: string | null = null;
+  let pendingDesc = "";
+  let prevBalance: number | null = openingBalance;
+
+  // Only parse inside the "Details of your account activity" table when such a
+  // marker exists; otherwise parse everything (best effort).
+  const hasStart = lines.some((l) => BANK_START_RE.test(l));
+  let inActivity = !hasStart;
+
+  for (const line of lines) {
+    if (BANK_STOP_RE.test(line)) {
+      if (inActivity) break;
+      continue;
+    }
+    if (!inActivity) {
+      if (BANK_START_RE.test(line)) inActivity = true;
+      continue;
+    }
+    if (BANK_IGNORE_LINE_RE.test(line)) {
+      ignoredSummaryRows += 1;
+      pendingDesc = "";
+      continue;
+    }
+    if (detectBalanceLine(line)) {
+      ignoredSummaryRows += 1;
+      continue;
+    }
+
+    const date = findDate(line);
+    const moneys = extractMoneyValues(line);
+    if (date) carriedDate = normalizeDate(date.match, year) ?? date.match;
+
+    if (moneys.length >= 2) {
+      // A transaction row: rightmost value is the running balance, the value
+      // before it is the transaction amount.
+      attempted += 1;
+      const balanceMoney = moneys[moneys.length - 1];
+      const amountMoney = moneys[moneys.length - 2];
+      const descStart = date ? date.end : 0;
+      const descEnd = moneys[0].index;
+      const inlineDesc = line
+        .slice(descStart, Math.max(descStart, descEnd))
+        .replace(/\s+/g, " ")
+        .trim();
+      const description = `${pendingDesc} ${inlineDesc}`.replace(/\s+/g, " ").trim();
+      pendingDesc = "";
+
+      const row = newRow();
+      row.date = carriedDate ?? "";
+      row.description = description;
+      row.balance = balanceMoney.value;
+
+      const magnitude = Math.abs(amountMoney.value);
+      let isCredit: boolean;
+      if (prevBalance !== null) {
+        // Balance went up => deposit (credit); down => withdrawal (debit).
+        isCredit = balanceMoney.value >= prevBalance;
+      } else {
+        isCredit = directionFromKeywords(description) === "credit";
+      }
+      if (isCredit) row.credit = magnitude;
+      else row.debit = magnitude;
+      prevBalance = balanceMoney.value;
+
+      let confidence = 0.9;
+      const notes: string[] = [];
+      if (!row.date) {
+        confidence -= 0.1;
+        notes.push("Date could not be determined.");
+      }
+      if (!description) {
+        confidence -= 0.2;
+        notes.push("Description could not be read.");
+      }
+      row.confidence = clamp(Number(confidence.toFixed(2)), 0.3, 0.95);
+      if (notes.length > 0) row.warning = notes.join(" ");
+      rows.push(row);
+    } else if (date) {
+      // Date line without a full amount/balance pair: the start of a wrapped
+      // row. Buffer its description text (excluding any stray single number).
+      const cut = moneys.length === 1 ? moneys[0].index : line.length;
+      const buf = line.slice(date.end, Math.max(date.end, cut)).replace(/\s+/g, " ").trim();
+      pendingDesc = `${pendingDesc} ${buf}`.replace(/\s+/g, " ").trim();
+    } else if (moneys.length === 0) {
+      // No date, no money: a wrapped description continuation, but only while a
+      // wrap is already in progress (otherwise it is a header/heading line).
+      if (pendingDesc) pendingDesc = `${pendingDesc} ${line}`.replace(/\s+/g, " ").trim();
+      else ignoredSummaryRows += 1;
+    } else {
+      // No date with a single stray number: ambiguous, skip.
+      ignoredSummaryRows += 1;
+    }
+  }
+
+  return { rows, attempted, ignoredSummaryRows };
+}
+
+// ----- Candidate-based parsing & scoring -----
+
+const LOW_CONFIDENCE = 0.7; // mirror of upload LOW_CONFIDENCE_THRESHOLD (kept local)
+
+type CandidateBalance = { available: boolean; passed: boolean; diffCents: number | null };
+
+type Candidate = {
+  name: CandidateName;
+  statementKind: StatementKind;
+  layoutFamily: LayoutFamily;
+  rows: TransactionRow[];
+  openingBalance: number | null;
+  closingBalance: number | null;
+  summary: { credits: number | null; debits: number | null };
+  creditCardStats?: CreditCardParseStats;
+  bankAttempted: number;
+  bankIgnored: number;
+  sectionsDetected: number;
+  ignoredSpendReportRows: number;
+  balance: CandidateBalance;
+  score: number;
+};
+
+function toCents(n: number): number {
+  return Math.round(n * 100);
+}
+
+/**
+ * Local, dependency-free reconciliation (kept here so the parser has no runtime
+ * imports). Credit card: opening + debits - credits = closing. Bank account:
+ * opening + credits - debits = closing.
+ */
+function reconcileCents(
+  opening: number | null,
+  closing: number | null,
+  rows: TransactionRow[],
+  mode: "credit-card" | "bank-account",
+): CandidateBalance {
+  const creditC = rows.reduce((s, r) => s + (r.credit !== null ? toCents(r.credit) : 0), 0);
+  const debitC = rows.reduce((s, r) => s + (r.debit !== null ? toCents(r.debit) : 0), 0);
+  if (opening === null || closing === null) {
+    return { available: false, passed: false, diffCents: null };
+  }
+  const expected =
+    mode === "credit-card"
+      ? toCents(opening) + debitC - creditC
+      : toCents(opening) + creditC - debitC;
+  const diffCents = expected - toCents(closing);
+  return { available: true, passed: diffCents === 0, diffCents };
+}
+
+/**
+ * Score a candidate. Reconciliation dominates: the strategy whose debit/credit
+ * mapping makes the statement balance wins. Other signals break ties.
+ */
+function scoreCandidate(c: Candidate): number {
+  const rowCount = c.rows.length;
+  if (rowCount === 0) return -1000;
+
+  let s = 0;
+  if (c.balance.available && c.balance.passed) s += 100;
+  else if (c.balance.available && c.balance.diffCents !== null) {
+    const d = Math.abs(c.balance.diffCents);
+    if (d <= 100) s += 45; // within $1
+    else if (d <= 1000) s += 15; // within $10
+  }
+  if (c.closingBalance !== null) s += 15;
+  if (c.openingBalance !== null) s += 10;
+
+  const creditC = c.rows.reduce((a, r) => a + (r.credit !== null ? toCents(r.credit) : 0), 0);
+  const debitC = c.rows.reduce((a, r) => a + (r.debit !== null ? toCents(r.debit) : 0), 0);
+  if (c.summary.credits !== null && Math.abs(creditC - toCents(c.summary.credits)) <= 1) s += 20;
+  if (c.summary.debits !== null && Math.abs(debitC - toCents(c.summary.debits)) <= 1) s += 20;
+
+  s += Math.min(rowCount, 50) * 0.4; // mild reward for completeness
+
+  // Penalties: obvious junk and noise.
+  const junk = c.rows.filter(
+    (r) => !r.date.trim() || !r.description.trim() || (r.debit === null && r.credit === null),
+  ).length;
+  s -= junk * 4;
+  const lowConf = c.rows.filter((r) => r.confidence < LOW_CONFIDENCE).length;
+  s -= lowConf * 1;
+
+  return s;
+}
+
+function buildCandidates(lines: string[], text: string, year: number | undefined): Candidate[] {
+  const lower = text.toLowerCase();
+  const looksCreditCard = CC_FAMILY_SIGNALS.some((re) => re.test(lower));
+  const looksBank =
+    BANK_FAMILY_SIGNALS.some((re) => re.test(lower)) ||
+    (/withdrawals?/.test(lower) && /deposits?/.test(lower));
+
+  const candidates: Candidate[] = [];
+
+  if (looksCreditCard) {
+    const ccBalances = detectCreditCardBalances(lines);
+    const ccSummary = detectCreditCardSummary(lines);
+    for (const useSections of [false, true]) {
+      const cc = parseCreditCardTransactions(lines, year, { useSections });
+      candidates.push({
+        name: useSections ? "credit-card-sectioned" : "credit-card-simple",
+        statementKind: "credit-card",
+        layoutFamily: "credit-card-table",
+        rows: cc.rows,
+        openingBalance: ccBalances.opening,
+        closingBalance: ccBalances.closing,
+        summary: ccSummary,
+        creditCardStats: cc.stats,
+        bankAttempted: cc.stats.blocksAttempted,
+        bankIgnored: cc.stats.ignoredSummaryRows,
+        sectionsDetected: cc.stats.sectionsDetected,
+        ignoredSpendReportRows: cc.stats.ignoredSpendReportRows,
+        balance: reconcileCents(ccBalances.opening, ccBalances.closing, cc.rows, "credit-card"),
+        score: 0,
+      });
+    }
+  }
+
+  if (looksBank) {
+    const bankBalances = parseBankAccountStatement(lines, year);
+    const table = parseBankAccountTable(lines, year, bankBalances.openingBalance);
+    candidates.push({
+      name: "bank-account",
+      statementKind: "bank-account",
+      layoutFamily: "bank-account-table",
+      rows: table.rows,
+      openingBalance: bankBalances.openingBalance,
+      closingBalance: bankBalances.closingBalance,
+      summary: { credits: null, debits: null },
+      bankAttempted: table.attempted,
+      bankIgnored: table.ignoredSummaryRows,
+      sectionsDetected: 0,
+      ignoredSpendReportRows: 0,
+      balance: reconcileCents(
+        bankBalances.openingBalance,
+        bankBalances.closingBalance,
+        table.rows,
+        "bank-account",
+      ),
+      score: 0,
+    });
+  }
+
+  // Fallback line parser is always available.
+  const fb = parseBankAccountStatement(lines, year);
+  candidates.push({
+    name: "fallback",
+    statementKind: "unknown",
+    layoutFamily: "unknown",
+    rows: fb.rows,
+    openingBalance: fb.openingBalance,
+    closingBalance: fb.closingBalance,
+    summary: { credits: null, debits: null },
+    bankAttempted: fb.rows.length,
+    bankIgnored: 0,
+    sectionsDetected: 0,
+    ignoredSpendReportRows: 0,
+    balance: reconcileCents(fb.openingBalance, fb.closingBalance, fb.rows, "bank-account"),
+    score: 0,
+  });
+
+  for (const c of candidates) c.score = scoreCandidate(c);
+  return candidates;
+}
+
+/**
  * Parse a full statement's extracted text into rows + balances + warnings.
- * `text` is the page text joined with newlines. Routes to a credit-card or
- * bank-account parser based on the detected statement kind.
+ * `text` is the page text joined with newlines. Several candidate strategies are
+ * tried and scored (reconciliation dominates); the highest-scoring one wins. If
+ * none reconciles, the best-effort result is returned and the UI shows Needs
+ * Review rather than pretending.
  */
 export function parseStatementText(text: string): ParsedStatement {
   const lines = text
@@ -843,27 +1354,38 @@ export function parseStatementText(text: string): ParsedStatement {
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
 
-  const statementKind = detectStatementKind(text);
   const year = detectStatementPeriodYear(text);
+  const candidates = buildCandidates(lines, text, year);
 
-  let rows: TransactionRow[];
-  let openingBalance: number | null;
-  let closingBalance: number | null;
-  let creditCardStats: CreditCardParseStats | undefined;
+  // Choose the highest-scoring candidate. Reconciliation dominates scoring, so a
+  // candidate that balances is preferred over one that merely has more rows.
+  const withRows = candidates.filter((c) => c.rows.length > 0);
+  const pool = withRows.length > 0 ? withRows : candidates;
+  const chosen = pool.reduce((best, c) => (c.score > best.score ? c : best), pool[0]);
 
-  if (statementKind === "credit-card") {
-    const cc = parseCreditCardTransactions(lines, year);
-    rows = cc.rows;
-    creditCardStats = cc.stats;
-    const balances = detectCreditCardBalances(lines);
-    openingBalance = balances.opening;
-    closingBalance = balances.closing;
-  } else {
-    const parsed = parseBankAccountStatement(lines, year);
-    rows = parsed.rows;
-    openingBalance = parsed.openingBalance;
-    closingBalance = parsed.closingBalance;
-  }
+  const rows = chosen.rows;
+  const layoutFamily = chosen.layoutFamily;
+  const statementKind = chosen.statementKind;
+  const openingBalance = chosen.openingBalance;
+  const closingBalance = chosen.closingBalance;
+
+  const parseStats: LayoutParseStats = {
+    layoutFamily,
+    candidate: chosen.name,
+    candidateScore: Math.round(chosen.score),
+    candidatesTried: candidates.length,
+    creditCardTableDetected: layoutFamily === "credit-card-table",
+    bankAccountTableDetected: layoutFamily === "bank-account-table",
+    transactionSectionsDetected: chosen.sectionsDetected,
+    rowsAttempted: chosen.bankAttempted,
+    rowsCompleted: rows.length,
+    amountColumnRows: rows.filter((r) => r.debit !== null || r.credit !== null).length,
+    debitColumnRows: rows.filter((r) => r.debit !== null).length,
+    creditColumnRows: rows.filter((r) => r.credit !== null).length,
+    balanceColumnRows: rows.filter((r) => r.balance !== null).length,
+    ignoredSummaryRows: chosen.bankIgnored,
+    ignoredSpendReportRows: chosen.ignoredSpendReportRows,
+  };
 
   const warnings: string[] = [];
   if (rows.length === 0) warnings.push(NO_ROWS_WARNING);
@@ -871,5 +1393,14 @@ export function parseStatementText(text: string): ParsedStatement {
     warnings.push(MISSING_BALANCE_WARNING);
   }
 
-  return { statementKind, rows, openingBalance, closingBalance, warnings, creditCardStats };
+  return {
+    statementKind,
+    layoutFamily,
+    rows,
+    openingBalance,
+    closingBalance,
+    warnings,
+    creditCardStats: chosen.creditCardStats,
+    parseStats,
+  };
 }
