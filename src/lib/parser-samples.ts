@@ -1,0 +1,418 @@
+// Synthetic, FAKE statement text samples for validating the parser helpers.
+//
+// None of this is real bank statement data. It exists only to exercise the
+// parsing heuristics deterministically (locally or via scripts/parser-samples.mts).
+//
+// This module is intentionally dependency-free (no runtime imports) so it can be
+// run by a plain Node script with type stripping.
+
+export type ParserSample = {
+  name: string;
+  description: string;
+  text: string;
+  expect: {
+    kind?: "credit-card" | "bank-account" | "unknown";
+    minRows: number;
+    maxRows?: number;
+    opening?: boolean;
+    closing?: boolean;
+    /** Minimum number of rows that should have a credit value. */
+    creditRows?: number;
+    /** Minimum number of rows that should have a debit value. */
+    debitRows?: number;
+    /** Assert that NO row has a credit value. */
+    noCredit?: boolean;
+    /** Assert that NO row has a debit value. */
+    noDebit?: boolean;
+    balancePasses?: boolean;
+    /** Every row's Balance column should be null (credit cards have no running balance). */
+    balanceNull?: boolean;
+    note?: string;
+  };
+};
+
+// Fake RBC-style credit card header. Carries the signals statement-kind
+// detection relies on (Visa, payment due date, minimum payment) and the year.
+const CC_HEADER = [
+  "RBC ROYAL BANK VISA",
+  "STATEMENT FROM APR 24 TO MAY 25, 2026",
+  "PAYMENT DUE DATE MAY 21, 2026",
+  "MINIMUM PAYMENT $10.00",
+].join("\n");
+
+export const parserSamples: ParserSample[] = [
+  // ----- Bank-account style (existing line-based parser) -----
+  {
+    name: "simple-debit-with-balance",
+    description: "Simple date / description / debit / running balance",
+    text: "2024-05-03 Grocery Mart Purchase 84.20 4,115.80",
+    expect: { minRows: 1, note: "debit row with a running balance" },
+  },
+  {
+    name: "credit-deposit-row",
+    description: "Credit / deposit row (keyword-driven direction)",
+    text: "2024-05-02 Payroll Deposit 2,200.00 4,200.00",
+    expect: { minRows: 1, creditRows: 1, note: "should be a credit, not a debit" },
+  },
+  {
+    name: "running-balance-row",
+    description: "Row where a running balance follows the amount",
+    text: "2024-05-07 Hydro One Pre-Auth Payment 142.50 3,967.55",
+    expect: { minRows: 1, note: "last value should be treated as balance" },
+  },
+  {
+    name: "month-name-date-row",
+    description: "Month-name date (MMM DD)",
+    text: "Statement period 2024\nMay 5 Coffee Roasters Purchase 5.75 4,110.05",
+    expect: { minRows: 1, note: "fallback year 2024 from the header line" },
+  },
+  {
+    name: "bank-tiny-statement",
+    description: "Small end-to-end bank statement (balance should balance)",
+    text: [
+      "Synthetic Account Statement 2024",
+      "Opening Balance 2,000.00",
+      "2024-05-02 Payroll Deposit 2,200.00 4,200.00",
+      "2024-05-03 Grocery Mart Purchase 84.20 4,115.80",
+      "2024-05-05 Coffee Roasters Purchase 5.75 4,110.05",
+      "Closing Balance 4,110.05",
+    ].join("\n"),
+    expect: {
+      kind: "bank-account",
+      minRows: 3,
+      opening: true,
+      closing: true,
+      balancePasses: true,
+    },
+  },
+
+  // ----- RBC-style credit card (new parser path) -----
+  {
+    name: "cc-basic-purchase",
+    description: "Credit card basic purchase block",
+    text: [
+      CC_HEADER,
+      "APR 22",
+      "APR 24 SUNNYSIDE MARKET TORONTO ON",
+      "74514206113043605105569",
+      "$25.25",
+    ].join("\n"),
+    expect: { kind: "credit-card", minRows: 1, maxRows: 1, debitRows: 1 },
+  },
+  {
+    name: "cc-payment-credit",
+    description: "Credit card payment / credit with negative amount",
+    text: [
+      CC_HEADER,
+      "APR 29",
+      "APR 29 PAYMENT - THANK YOU / PAIEMENT - MERCI",
+      "74510106119619981303108",
+      "-$150.00",
+    ].join("\n"),
+    expect: { kind: "credit-card", minRows: 1, maxRows: 1, creditRows: 1 },
+  },
+  {
+    name: "cc-multiline-merchant",
+    description: "Credit card multi-line merchant description",
+    text: [
+      CC_HEADER,
+      "MAY 11",
+      "MAY 11 DOORDASHTHEMILLSTON DOWNTOWN",
+      "TOROON",
+      "74083426131100006867404",
+      "$125.49",
+    ].join("\n"),
+    expect: { kind: "credit-card", minRows: 1, maxRows: 1, debitRows: 1 },
+  },
+  {
+    name: "cc-foreign-currency-note",
+    description: "Credit card row with a foreign currency detail line",
+    text: [
+      CC_HEADER,
+      "MAY 02",
+      "MAY 03 NETFLIX.COM SUBSCRIPTION",
+      "USD 9.99",
+      "EXCHANGE RATE 1.36",
+      "74000000000000000000001",
+      "$13.59",
+    ].join("\n"),
+    expect: {
+      kind: "credit-card",
+      minRows: 1,
+      maxRows: 1,
+      debitRows: 1,
+      note: "FX lines must not become separate transactions",
+    },
+  },
+  {
+    name: "cc-interest-charge",
+    description: "Credit card interest charge (debit)",
+    text: [
+      CC_HEADER,
+      "MAY 25",
+      "MAY 25 INTEREST CHARGE ON PURCHASES",
+      "74000000000000000000002",
+      "$4.12",
+    ].join("\n"),
+    expect: { kind: "credit-card", minRows: 1, maxRows: 1, debitRows: 1 },
+  },
+  {
+    name: "cc-previous-account-balance",
+    description: "Detect Previous Account Balance as opening",
+    text: [
+      "RBC ROYAL BANK VISA",
+      "STATEMENT FROM APR 24 TO MAY 25, 2026",
+      "Previous Account Balance $1,000.00",
+    ].join("\n"),
+    expect: { kind: "credit-card", minRows: 0, opening: true },
+  },
+  {
+    name: "cc-new-balance",
+    description: "Detect New Balance as closing",
+    text: [
+      "RBC ROYAL BANK VISA",
+      "STATEMENT FROM APR 24 TO MAY 25, 2026",
+      "New Balance $1,234.56",
+    ].join("\n"),
+    expect: { kind: "credit-card", minRows: 0, closing: true },
+  },
+  {
+    name: "cc-total-account-balance",
+    description: "Detect Total Account Balance as closing fallback",
+    text: [
+      "RBC ROYAL BANK VISA",
+      "STATEMENT FROM APR 24 TO MAY 25, 2026",
+      "Total Account Balance $2,345.67",
+    ].join("\n"),
+    expect: { kind: "credit-card", minRows: 0, closing: true },
+  },
+  {
+    name: "cc-end-stop",
+    description: "End-of-transactions stop: TOTAL then hard stops, no rows after",
+    text: [
+      CC_HEADER,
+      "APR 22",
+      "APR 24 SUNNYSIDE MARKET TORONTO ON",
+      "74514206113043605105569",
+      "$25.25",
+      "TOTAL ACCOUNT BALANCE $1,234.56",
+      "Time to Pay",
+      "INTEREST RATE CHART",
+    ].join("\n"),
+    expect: {
+      kind: "credit-card",
+      minRows: 1,
+      maxRows: 1,
+      closing: true,
+      note: "TOTAL with no transactions after it is the real end",
+    },
+  },
+  {
+    name: "rbc-regress-sidebar-continue",
+    description: "Sidebar TOTAL ACCOUNT BALANCE mid-table must not stop parsing",
+    text: [
+      "RBC ROYAL BANK VISA",
+      "STATEMENT FROM APR 24 TO MAY 25, 2026",
+      "MINIMUM PAYMENT $10.00",
+      "Previous Account Balance $0.00",
+      "TRANSACTION DATE POSTING DATE ACTIVITY DESCRIPTION AMOUNT ($)",
+      "APR 22 APR 24 FAKE STORE ONE",
+      "12345678901234567890",
+      "$25.00",
+      "TOTAL ACCOUNT BALANCE $100.00",
+      "APR 25 APR 26 FAKE STORE TWO",
+      "12345678901234567890",
+      "$50.00",
+      "APR 27 APR 28 FAKE STORE THREE",
+      "12345678901234567890",
+      "$25.00",
+      "New Balance $100.00",
+      "TOTAL ACCOUNT BALANCE $100.00",
+      "Time to Pay",
+    ].join("\n"),
+    expect: {
+      kind: "credit-card",
+      minRows: 3,
+      maxRows: 3,
+      opening: true,
+      closing: true,
+      debitRows: 3,
+      balanceNull: true,
+      balancePasses: true,
+      note: "first TOTAL is sidebar (ignored); second TOTAL is the real end",
+    },
+  },
+  {
+    name: "rbc-regress-positive-credit-word",
+    description: "Positive amount whose merchant name contains 'CREDIT' stays a Debit",
+    text: [
+      CC_HEADER,
+      "APR 29 APR 30 FAKE CHATGPT CREDIT EXAMPLE.COM CA",
+      "12345678901234567890",
+      "$64.01",
+    ].join("\n"),
+    expect: {
+      kind: "credit-card",
+      minRows: 1,
+      maxRows: 1,
+      debitRows: 1,
+      noCredit: true,
+      balanceNull: true,
+      note: "the word 'credit' in a merchant name must not flip a positive charge",
+    },
+  },
+  // ----- RBC regression: real extracted layout (same-line dates) -----
+  {
+    name: "rbc-regress-same-line-purchase",
+    description: "Same-line dates + reference + amount on separate lines",
+    text: [
+      CC_HEADER,
+      "APR 22 APR 24 FAKE STORE HALIFAX NS",
+      "12345678901234567890",
+      "$25.25",
+    ].join("\n"),
+    expect: {
+      kind: "credit-card",
+      minRows: 1,
+      maxRows: 1,
+      debitRows: 1,
+      balanceNull: true,
+    },
+  },
+  {
+    name: "rbc-regress-same-line-payment",
+    description: "Same-line dates payment with negative amount (credit)",
+    text: [
+      CC_HEADER,
+      "APR 29 APR 29 PAYMENT - THANK YOU / PAIEMENT - MERCI",
+      "12345678901234567890",
+      "-$150.00",
+    ].join("\n"),
+    expect: {
+      kind: "credit-card",
+      minRows: 1,
+      maxRows: 1,
+      creditRows: 1,
+      balanceNull: true,
+    },
+  },
+  {
+    name: "rbc-regress-same-line-multiline-desc",
+    description: "Same-line dates with a wrapped continuation description line",
+    text: [
+      CC_HEADER,
+      "MAY 11 MAY 11 FAKE RESTAURANT DOWNTOWN",
+      "TORONTO",
+      "12345678901234567890",
+      "$125.49",
+    ].join("\n"),
+    expect: {
+      kind: "credit-card",
+      minRows: 1,
+      maxRows: 1,
+      debitRows: 1,
+      balanceNull: true,
+    },
+  },
+  {
+    name: "rbc-regress-same-line-foreign-currency",
+    description: "Same-line dates with a foreign currency detail line",
+    text: [
+      CC_HEADER,
+      "APR 28 APR 29 FAKE ONLINE SUBSCRIPTION EXAMPLE.COM CA",
+      "12345678901234567890",
+      "Foreign Currency - USD 22.80 Exchange rate - 1.403070",
+      "$31.99",
+    ].join("\n"),
+    expect: {
+      kind: "credit-card",
+      minRows: 1,
+      maxRows: 1,
+      debitRows: 1,
+      balanceNull: true,
+      note: "FX detail line must not become a separate transaction",
+    },
+  },
+  {
+    name: "rbc-regress-inline-amount",
+    description: "Same-line dates with reference and amount all on one line",
+    text: [
+      CC_HEADER,
+      "APR 22 APR 24 FAKE STORE HALIFAX NS 12345678901234567890 $25.25",
+      "APR 25 APR 26 ANOTHER FAKE MERCHANT 98765432109876543210 $51.49",
+    ].join("\n"),
+    expect: {
+      kind: "credit-card",
+      minRows: 2,
+      maxRows: 2,
+      debitRows: 2,
+      balanceNull: true,
+      note: "everything on one line: dates, description, reference, amount",
+    },
+  },
+  {
+    name: "rbc-regress-summary-before-header",
+    description: "Summary box (with TOTAL ACCOUNT BALANCE) before the transaction header",
+    text: [
+      "RBC ROYAL BANK VISA",
+      "STATEMENT FROM APR 24 TO MAY 25, 2026",
+      "PAYMENT DUE DATE MAY 21, 2026",
+      "MINIMUM PAYMENT $10.00",
+      "Previous Account Balance $100.00",
+      "New Balance $176.74",
+      "TOTAL ACCOUNT BALANCE $176.74",
+      "TRANSACTION DATE POSTING DATE ACTIVITY DESCRIPTION AMOUNT ($)",
+      "APR 22 APR 24 FAKE STORE HALIFAX NS",
+      "12345678901234567890",
+      "$25.25",
+      "APR 25 APR 26 ANOTHER FAKE MERCHANT",
+      "12345678901234567890",
+      "$51.49",
+      "TOTAL ACCOUNT BALANCE $176.74",
+      "Time to Pay",
+    ].join("\n"),
+    expect: {
+      kind: "credit-card",
+      minRows: 2,
+      maxRows: 2,
+      opening: true,
+      closing: true,
+      debitRows: 2,
+      balanceNull: true,
+      balancePasses: true,
+      note: "summary TOTAL ACCOUNT BALANCE must not stop parsing before the header",
+    },
+  },
+  {
+    name: "cc-full-statement",
+    description: "End-to-end credit card statement; balance check should pass",
+    text: [
+      "RBC ROYAL BANK VISA",
+      "STATEMENT FROM APR 24 TO MAY 25, 2026",
+      "PAYMENT DUE DATE MAY 21, 2026",
+      "MINIMUM PAYMENT $10.00",
+      "Previous Account Balance $100.00",
+      "APR 25",
+      "APR 26 SUNNYSIDE MARKET TORONTO ON",
+      "74000000000000000000010",
+      "$50.00",
+      "APR 29",
+      "APR 29 PAYMENT - THANK YOU / PAIEMENT - MERCI",
+      "74000000000000000000011",
+      "-$30.00",
+      "New Balance $120.00",
+      "Total Account Balance $120.00",
+      "TIME TO PAY",
+    ].join("\n"),
+    expect: {
+      kind: "credit-card",
+      minRows: 2,
+      maxRows: 2,
+      opening: true,
+      closing: true,
+      debitRows: 1,
+      creditRows: 1,
+      balancePasses: true,
+    },
+  },
+];
