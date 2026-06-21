@@ -11,6 +11,9 @@
 // launch. Prefer warnings and lower confidence over guessing.
 
 import type { TransactionRow } from "@/lib/upload";
+import { parseCoordinateTables, type PdfTextItem } from "./coordinate-table.ts";
+import { detectStatementProfile } from "./statement-profiles.ts";
+import type { StatementValidation } from "./statement-model.ts";
 
 export type StatementKind = "credit-card" | "bank-account" | "unknown";
 
@@ -22,10 +25,14 @@ export type LayoutFamily = "credit-card-table" | "bank-account-table" | "unknown
 
 /** Candidate parsing strategies that compete; the highest-scoring one wins. */
 export type CandidateName =
+  | "coordinate-table"
   | "credit-card-simple"
   | "credit-card-sectioned"
   | "bank-account"
   | "fallback";
+
+/** Where the chosen rows came from. */
+export type CandidateSource = "coordinate-table" | "text-parser" | "fallback";
 
 /** Layout-level aggregate diagnostics (dev only). Counts/statuses only. */
 export type LayoutParseStats = {
@@ -45,6 +52,42 @@ export type LayoutParseStats = {
   ignoredSummaryRows: number;
   ignoredSpendReportRows: number;
   candidateComparison: CandidateComparison[];
+  // Account/section scoping + summary-isolation diagnostics (dev only).
+  accountSectionsDetected: number;
+  chosenAccountSection: string | null;
+  ignoredAccountSections: number;
+  transactionTableStartFound: boolean;
+  summaryRowsUsedForValidation: number;
+  summaryRowsIgnoredAsTransactions: number;
+  balanceForwardRowsHandled: number;
+  finalRunningBalanceUsedAsClosing: boolean;
+  outOfPeriodRowsRejected: number;
+  accountFeeSummaryRowsIgnored: number;
+  subtotalRowsIgnored: number;
+  // Boundary/summary-isolation diagnostics (dev only; counts/labels, no content).
+  summaryStatisticalRowsRejected: number;
+  legalInfoRowsIgnored: number;
+  paymentRemittanceRowsIgnored: number;
+  fxRowsAttached: number;
+  feeCountRateRowsNormalized: number;
+  accountSectionOpeningSource: string | null;
+  selectedSectionHadOpeningClosing: boolean;
+  // Coordinate-aware table extraction diagnostics (dev only; counts/labels).
+  coordinateExtractionAvailable: boolean;
+  tableCandidatesFound: number;
+  chosenTableType: string | null;
+  coordHeaderColumnsDetected: number;
+  coordColumnOrder: string | null;
+  coordRowsBuilt: number;
+  coordDatelessRowsPromoted: number;
+  coordWrappedDescriptionsJoined: number;
+  coordFxDetailLinesAttached: number;
+  coordSummaryRowsIgnored: number;
+  coordFooterLegalRowsIgnored: number;
+  finalBalanceDifference: number | null;
+  chosenCandidateSource: CandidateSource;
+  /** Advisory statement profile name (generic fallback when unsure). */
+  detectedProfile: string;
 };
 
 /** Per-candidate aggregate comparison (dev diagnostics only; no row content). */
@@ -90,6 +133,12 @@ export type CreditCardParseStats = {
   ignoredSummaryRows: number;
   /** Spend report / rewards / budget / message-centre lines skipped. */
   ignoredSpendReportRows: number;
+  /** Rows rejected because the date fell outside the statement period. */
+  periodRejected: number;
+  /** Rows whose final CAD amount was captured past foreign-currency detail lines. */
+  fxRowsAttached: number;
+  /** Payment-slip / remittance label rows suppressed (never transactions). */
+  paymentRemittanceRejected: number;
 };
 
 export type ParseStatementResponse = {
@@ -106,17 +155,28 @@ export type ParseStatementResponse = {
   /** Safe aggregate parsing counters (dev diagnostics). No raw content. */
   creditCardStats?: CreditCardParseStats;
   parseStats?: LayoutParseStats;
+  /** Canonical model validation (status / confidence / issues). No raw content. */
+  validation?: StatementValidation;
   // NOTE: a raw text preview is intentionally NOT part of the response. Raw
   // statement text is too easy to leak via screenshots, so it is never returned
   // or shown, even in development.
 };
 
-export type ParsedStatement = {
+/**
+ * Low-level parser output (one pipeline stage). This is NOT the canonical
+ * statement model the rest of the app consumes — see `ParsedStatement` in
+ * `statement-model.ts`, which is built from this via `buildParsedStatement`.
+ * Kept as a distinct type so the extraction/heuristics layer and the normalized
+ * domain model can evolve independently.
+ */
+export type ParseResult = {
   statementKind: StatementKind;
   layoutFamily: LayoutFamily;
   rows: TransactionRow[];
   openingBalance: number | null;
   closingBalance: number | null;
+  /** Printed statement totals detected for validation (never transactions). */
+  summary: { credits: number | null; debits: number | null };
   warnings: string[];
   creditCardStats?: CreditCardParseStats;
   parseStats?: LayoutParseStats;
@@ -166,6 +226,18 @@ function pad2(n: number): string {
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
+}
+
+// Decorative / extraction-artifact symbols that sometimes lead a description
+// (rewards markers, replacement chars, bullets, daggers, etc.). Only stripped
+// when they appear as LEADING junk — meaningful merchant text is untouched.
+const LEADING_JUNK_RE =
+  /^[\sÝ�•·°†‡◦▪●○■□★☆∙*•·]+/;
+
+/** Collapse whitespace and strip leading decorative/extraction symbols. */
+export function cleanDescription(s: string): string {
+  const collapsed = s.replace(/\s+/g, " ").trim();
+  return collapsed.replace(LEADING_JUNK_RE, "").trim();
 }
 
 export type MoneyMatch = { raw: string; value: number; index: number; end: number };
@@ -318,16 +390,34 @@ const DATE_PATTERNS: RegExp[] = [
 export function findDate(
   line: string,
 ): { match: string; index: number; end: number } | null {
-  for (const re of DATE_PATTERNS) {
-    const m = line.match(re);
-    if (m && m.index !== undefined) {
-      // Confirm it normalizes, to avoid matching e.g. "May the" style noise.
-      if (normalizeDate(m[0]) !== null) {
-        return { match: m[0], index: m.index, end: m.index + m[0].length };
+  // Collect every normalizing match across all patterns, then return the
+  // earliest by position. Scanning ALL matches (not just each pattern's first)
+  // matters when a non-date token precedes a real date on the line, e.g.
+  // "Deposit 16,336.25 JAN 2 27,094.52" — the leading "Deposit 16" / decimal
+  // "25 JAN" must be skipped in favour of the genuine "JAN 2".
+  const found: { match: string; index: number; end: number }[] = [];
+  for (const base of DATE_PATTERNS) {
+    const re = new RegExp(base.source, "g");
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(line)) !== null) {
+      const raw = m[0];
+      const idx = m.index;
+      if (raw === "") {
+        re.lastIndex += 1;
+        continue;
+      }
+      // Reject a match whose leading digit is really part of a larger number
+      // (e.g. the "25" of "16,336.25" forming a false "25 JAN" day-month token).
+      const before = idx > 0 ? line[idx - 1] : "";
+      if (/^\d/.test(raw) && /[.,\d]/.test(before)) continue;
+      if (normalizeDate(raw) !== null) {
+        found.push({ match: raw, index: idx, end: idx + raw.length });
       }
     }
   }
-  return null;
+  if (found.length === 0) return null;
+  found.sort((a, b) => a.index - b.index);
+  return found[0];
 }
 
 /**
@@ -338,7 +428,7 @@ export function detectBalanceLine(
   line: string,
 ): { kind: "opening" | "closing"; value: number } | null {
   const lower = line.toLowerCase();
-  const opening = /\b(opening balance|beginning balance|previous balance)\b/.test(lower);
+  const opening = /\b(opening balance|beginning balance|previous balance|balance forward)\b/.test(lower);
   const closing = /\b(closing balance|ending balance|new balance)\b/.test(lower);
   if (!opening && !closing) return null;
   const moneys = extractMoneyValues(line);
@@ -383,7 +473,7 @@ export function parseTransactionLine(
 
   const row = newRow();
   row.date = normalizeDate(date.match, fallbackYear) ?? date.match;
-  row.description = description;
+  row.description = cleanDescription(description);
   row.confidence = 0.9;
   const notes: string[] = [];
 
@@ -653,8 +743,10 @@ function isReferenceLine(line: string): boolean {
 /** Foreign-currency / exchange-rate detail line (kept as a note, not a row). */
 function isForeignCurrencyLine(line: string): boolean {
   return (
-    /foreign currenc|exchange rate/i.test(line) ||
-    /^(usd|us\$|eur|gbp|aud|jpy|mxn)\b/i.test(line)
+    /foreign currenc|exchange rate|currency conversion|conversion rate/i.test(line) ||
+    /^(usd|us\$|eur|gbp|aud|jpy|mxn|cad)\b/i.test(line) ||
+    // Mid-line currency code or an "@ rate" detail (e.g. "175.00 USD @ 1.357").
+    /\b(usd|eur|gbp|aud|jpy|mxn)\b/i.test(line) && /@|exchange|rate/i.test(line)
   );
 }
 
@@ -698,7 +790,13 @@ function creditCardSection(line: string): "credit" | "debit" | null {
 // Payment-slip / remittance / summary label lines that are never transactions,
 // even when they carry a date and an amount (e.g. a CIBC payment slip).
 const CC_IGNORE_LINE_RE =
-  /minimum payment|amount due|payment due|payment slip|payment options|total payment enclosed|please pay|remittance/i;
+  /minimum payment|amount due|amount past due|payment due|payment slip|payment options|total payment enclosed|please pay|remittance|subtotal of monthly activity|total (?:debits|credits)|other (?:debits|credits)|cash advances|fees charged|interest charged|total fees for this period|total interest for this period|credit limit|available credit|\bloc limit\b/i;
+
+// Payment-slip / remittance label lines (a subset of the ignore list). Tracked
+// separately for diagnostics so we can show how many remittance rows were
+// suppressed without ever exposing their content.
+const CC_PAYMENT_REMITTANCE_RE =
+  /minimum payment|amount due|amount past due|payment due|payment slip|payment options|total payment enclosed|please pay|remittance/i;
 
 /**
  * Capture the transaction amount from a credit-card row remainder. Prefers a
@@ -759,7 +857,7 @@ function buildCreditCardRow(
 ): TransactionRow {
   const row = newRow();
   row.date = isoFromMonthDay(transDate, year);
-  row.description = description.replace(/\s+/g, " ").trim();
+  row.description = cleanDescription(description);
   row.balance = null; // credit cards have no per-transaction running balance.
 
   const magnitude = Math.abs(amount);
@@ -833,6 +931,9 @@ export function parseCreditCardTransactions(
     sectionsDetected: 0,
     ignoredSummaryRows: 0,
     ignoredSpendReportRows: 0,
+    periodRejected: 0,
+    fxRowsAttached: 0,
+    paymentRemittanceRejected: 0,
   };
 
   let inSection = false;
@@ -907,9 +1008,13 @@ export function parseCreditCardTransactions(
       continue;
     }
 
-    // Payment slip / remittance lines are never transactions, even with a date.
+    // Payment slip / remittance / period-total lines are never transactions,
+    // even with a date (e.g. a remittance "New Balance"/"Amount Past Due" slip,
+    // or "TOTAL INTEREST FOR THIS PERIOD"). A real interest transaction row keeps
+    // a transaction date and merchant text, so it is unaffected.
     if (CC_IGNORE_LINE_RE.test(line)) {
       stats.ignoredSummaryRows += 1;
+      if (CC_PAYMENT_REMITTANCE_RE.test(line)) stats.paymentRemittanceRejected += 1;
       i += 1;
       continue;
     }
@@ -953,6 +1058,7 @@ export function parseCreditCardTransactions(
       // due date on a remittance slip) is not a transaction.
       if (period && !dateInPeriod(period, transDate.month, transDate.day)) {
         stats.ignoredSummaryRows += 1;
+        stats.periodRejected += 1;
         i += 1;
         continue;
       }
@@ -982,6 +1088,8 @@ export function parseCreditCardTransactions(
       if (cleanedStart) descParts.push(cleanedStart);
 
       let j = i + 1;
+      let fxSeen = false;
+      let lastFxAmount: number | null = null;
       if (amount === null) {
         for (; j < lines.length; j += 1) {
           const l = lines[j];
@@ -991,8 +1099,24 @@ export function parseCreditCardTransactions(
           }
           // A soft stop mid-block is interleaved sidebar text — skip it.
           if (CC_SOFT_STOP_RE.test(l)) continue;
+          // A subtotal/summary line ends this transaction block (it bounds how
+          // far we will look for the amount, so FX collection cannot run on).
+          if (CC_IGNORE_LINE_RE.test(l)) break;
+          if (parseLeadingTransactionDates(l)) break; // next transaction starts
+          if (isForeignCurrencyLine(l)) {
+            fxSeen = true;
+            fxNote = "A foreign currency detail line was present.";
+            continue;
+          }
           const amt = parseAmountLine(l);
           if (amt !== null) {
+            if (fxSeen) {
+              // After foreign-currency detail, the foreign amount may appear on
+              // its own line BEFORE the final CAD amount. Keep the LAST standalone
+              // amount in the block so the settled CAD value wins.
+              lastFxAmount = amt;
+              continue;
+            }
             amount = amt;
             stats.amountLinesDetected += 1;
             j += 1;
@@ -1003,15 +1127,15 @@ export function parseCreditCardTransactions(
             stats.referenceLinesIgnored += 1;
             continue;
           }
-          if (isForeignCurrencyLine(l)) {
-            fxNote = "A foreign currency detail line was present.";
-            continue;
-          }
-          if (parseLeadingTransactionDates(l)) break; // next transaction starts
           if (!reachedReference) {
             const c = stripReferenceNumbers(l);
             if (c) descParts.push(c);
           }
+        }
+        if (amount === null && lastFxAmount !== null) {
+          amount = lastFxAmount;
+          stats.amountLinesDetected += 1;
+          stats.fxRowsAttached += 1;
         }
       }
 
@@ -1043,9 +1167,12 @@ export function parseCreditCardTransactions(
 function findLabeledAmount(lines: string[], labelRe: RegExp): number | null {
   for (let i = 0; i < lines.length; i += 1) {
     if (!labelRe.test(lines[i])) continue;
-    // Prefer a dollar amount on the same line.
-    const onLine = extractMoneyValues(lines[i], { requireDollar: true });
-    if (onLine.length > 0) return onLine[onLine.length - 1].value;
+    // Prefer a dollar amount on the labelled line, then any money value on it
+    // (many statements print balances without a "$", e.g. "Previous Balance 1,605.47").
+    const onLineDollar = extractMoneyValues(lines[i], { requireDollar: true });
+    if (onLineDollar.length > 0) return onLineDollar[onLineDollar.length - 1].value;
+    const onLineAny = extractMoneyValues(lines[i]);
+    if (onLineAny.length > 0) return onLineAny[onLineAny.length - 1].value;
     // Otherwise look at the next couple of lines for a standalone amount.
     for (let j = i + 1; j <= i + 2 && j < lines.length; j += 1) {
       const amt = parseAmountLine(lines[j]);
@@ -1063,7 +1190,9 @@ export function detectCreditCardBalances(lines: string[]): {
   opening: number | null;
   closing: number | null;
 } {
-  const opening = findLabeledAmount(lines, /previous (account )?balance/i);
+  const opening =
+    findLabeledAmount(lines, /previous (?:account |statement )?balance/i) ??
+    findLabeledAmount(lines, /previous statement balance/i);
   const closing =
     findLabeledAmount(lines, /\bnew balance\b/i) ??
     findLabeledAmount(lines, /total account balance/i) ??
@@ -1087,6 +1216,23 @@ export function detectCreditCardSummary(lines: string[]): {
     purchases !== null || interest !== null
       ? (purchases ?? 0) + (interest ?? 0)
       : null;
+  return { credits, debits };
+}
+
+/**
+ * Light bank-account summary detection (validation/scoring only). Reads labelled
+ * total deposits/credits and total withdrawals/debits where present.
+ */
+export function detectBankSummary(lines: string[]): {
+  credits: number | null;
+  debits: number | null;
+} {
+  const credits =
+    findLabeledAmount(lines, /total amounts? credited/i) ??
+    findLabeledAmount(lines, /total deposits/i);
+  const debits =
+    findLabeledAmount(lines, /total amounts? debited/i) ??
+    findLabeledAmount(lines, /total withdrawals/i);
   return { credits, debits };
 }
 
@@ -1127,13 +1273,23 @@ function parseBankAccountStatement(
 // Start of the real transaction table on a bank-account statement.
 const BANK_START_RE =
   /details of your account activity|account activity|transaction details|details of account/i;
-// End of the transaction table (legal/footer/closing sections).
+// End of the transaction table (legal/footer/closing sections). Once any of
+// these is seen inside the activity table, later text (legal/info/marketing) is
+// NOT scanned for transactions — this stops false amounts from informational
+// sections after the activity (e.g. a "$100,000.00" in a disclosure paragraph).
 const BANK_STOP_RE =
-  /important information about your account|how to (?:reach|contact) us|trade ?-?marks?|^member\b|closing notice/i;
+  /important information about your account|important account information|how to (?:reach|contact) us|trade ?-?marks?|^member\b|closing notice|closing totals/i;
+
+// Page-summary / statistical rows that are NEVER transactions even though they
+// carry a money value (end-of-account totals, per-page item statistics, average
+// balances, etc.). Reusable across banks; only applied to DATELESS lines so a
+// real dated transaction such as "Jan 31 Interest Paid 5.00" is never dropped.
+const BANK_SUMMARY_ROW_RE =
+  /^(?:total|sub-?total|interest\b|service charge|deposits?\b|withdrawals?\b|credits?\b|debits?\b|cheques?\b|chqs?\b|number of|no\.? of items|monthly (?:aver|min|average|minimum)|average (?:cr|dr|daily)?\.? ?bal|minimum (?:cr|dr)?\.? ?bal|cash content|next statement|statement date|items? (?:processed|enclosed|deposited)|transaction totals?)\b/i;
 // Lines that are never transactions: headers, addresses, phone, control numbers,
 // and "From <date> to <date>, <year>" statement-period lines.
 const BANK_IGNORE_LINE_RE =
-  /statement period|account number|card number|page \d+ of \d+|p\.?o\.? box|customer service|www\.|royal bank of canada|how to reach|\b1[-\s]?8\d{2}[-\s]?\d{3}[-\s]?\d{4}\b|\bfrom\b[^\n]{0,40}\bto\b[^\n]{0,30}20\d{2}/i;
+  /statement period|account number|card number|page \d+ of \d+|p\.?o\.? box|customer service|www\.|royal bank of canada|how to reach|\b1[-\s]?8\d{2}[-\s]?\d{3}[-\s]?\d{4}\b|\bfrom\b[^\n]{0,40}\bto\b[^\n]{0,30}20\d{2}|closing totals|total amounts? (?:debited|credited)|number of items processed|^account fees?\b|\bloc limit\b|minimum payment|payment due date/i;
 
 type BankEntry = {
   date: string;
@@ -1142,6 +1298,28 @@ type BankEntry = {
   balance: number | null; // running balance when displayed on this line
   prior: "credit" | "debit" | null;
 };
+
+// Bank fee rows often show a count/rate calculation instead of (or alongside) a
+// total, e.g. "Regular transaction fee 2 Drs @ 1.25" or "1 Dr @ 0.75 / 1 Cr @
+// 0.75". The bare rate (1.25) must NOT be read as the transaction amount; the
+// real amount is the sum of count × rate across the "@" clauses (2 × 1.25 =
+// 2.50). When an explicit total is also displayed it equals this sum, so using
+// the computed total is always safe and reconciles with the running balance.
+const FEE_COUNT_RATE_RE = /(\d+)\s*(?:drs?|crs?)\b\s*@\s*\$?\s*(\d+(?:\.\d{1,2})?)/gi;
+
+/** Sum of count × rate across "N Dr/Cr @ rate" clauses, or null if none. */
+function feeCountRateTotal(line: string): number | null {
+  if (!/@/.test(line)) return null;
+  FEE_COUNT_RATE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  let total = 0;
+  let found = false;
+  while ((m = FEE_COUNT_RATE_RE.exec(line)) !== null) {
+    found = true;
+    total += Number(m[1]) * Number(m[2]);
+  }
+  return found ? Math.round(total * 100) / 100 : null;
+}
 
 /** Bank-specific direction prior from the description wording. */
 function bankKeywordPrior(desc: string): "credit" | "debit" | null {
@@ -1220,9 +1398,26 @@ export function parseBankAccountTable(
   year: number | undefined,
   openingBalance: number | null,
   closingBalance: number | null,
-): { rows: TransactionRow[]; attempted: number; ignoredSummaryRows: number; reconciled: boolean } {
+): {
+  rows: TransactionRow[];
+  attempted: number;
+  ignoredSummaryRows: number;
+  reconciled: boolean;
+  lastBalance: number | null;
+  outOfPeriodRejected: number;
+  balanceForwardHandled: number;
+  summaryStatisticalRejected: number;
+  legalInfoIgnored: number;
+  feeCountRateNormalized: number;
+} {
   const entries: BankEntry[] = [];
   let ignoredSummaryRows = 0;
+  let outOfPeriodRejected = 0;
+  let balanceForwardHandled = 0;
+  let summaryStatisticalRejected = 0;
+  let legalInfoIgnored = 0;
+  let feeCountRateNormalized = 0;
+  let lastBalance: number | null = null;
   let carriedDate: string | null = null;
   let pendingDesc = "";
 
@@ -1232,7 +1427,13 @@ export function parseBankAccountTable(
   // ----- Phase 1: collect entries inside the activity table -----
   for (const line of lines) {
     if (BANK_STOP_RE.test(line)) {
-      if (inActivity) break;
+      // Everything after a legal/footer/closing-totals marker is informational
+      // and must never be parsed as transactions (e.g. a large dollar figure in
+      // a disclosure paragraph). Stop scanning the activity table here.
+      if (inActivity) {
+        legalInfoIgnored += 1;
+        break;
+      }
       continue;
     }
     if (!inActivity) {
@@ -1245,36 +1446,67 @@ export function parseBankAccountTable(
       continue;
     }
     if (detectBalanceLine(line)) {
-      // Opening/closing summary lines are anchors, handled separately.
+      // Opening/closing/balance-forward summary lines are anchors, not rows.
+      if (/\bbalance forward\b/i.test(line)) balanceForwardHandled += 1;
       ignoredSummaryRows += 1;
       continue;
     }
 
     const date = findDate(line);
     const moneys = extractMoneyValues(line);
+
+    // Dateless page-summary / statistical rows (end-of-account totals, per-page
+    // item counts, average/min balances) are never transactions, even when they
+    // carry a money value. Gated on "no date" so dated transactions survive.
+    if (!date && BANK_SUMMARY_ROW_RE.test(line)) {
+      summaryStatisticalRejected += 1;
+      pendingDesc = "";
+      continue;
+    }
+
     if (date) carriedDate = normalizeDate(date.match, year) ?? date.match;
 
     if (moneys.length >= 1) {
       const hasBalance = moneys.length >= 2;
       const amountMoney = hasBalance ? moneys[moneys.length - 2] : moneys[0];
       const balance = hasBalance ? moneys[moneys.length - 1].value : null;
-      const descStart = date ? date.end : 0;
+      // Description is the leading text up to the first money value; when a date
+      // LEADS the row, skip it (otherwise it is a mid/late date column — TD-style
+      // "Description Debit Credit DATE Balance" — and the leading text is desc).
+      const dateLeads = date !== null && date.index < moneys[0].index;
+      const descStart = dateLeads ? date!.end : 0;
       const descEnd = moneys[0].index;
       const inlineDesc = line
         .slice(descStart, Math.max(descStart, descEnd))
         .replace(/\s+/g, " ")
         .trim();
       const description = `${pendingDesc} ${inlineDesc}`.replace(/\s+/g, " ").trim();
+      // Fee count/rate rows: compute the real total from "N Dr/Cr @ rate" rather
+      // than letting the bare rate be read as the amount. Run on the joined
+      // description+line so a wrapped fee calculation still resolves.
+      const feeTotal = feeCountRateTotal(`${pendingDesc} ${line}`);
       pendingDesc = "";
       if (!carriedDate && !description) {
         // Not enough context to be a transaction.
         ignoredSummaryRows += 1;
         continue;
       }
+      // Reject impossible out-of-period years (e.g. a 2099 LOC expiry line).
+      const yr = /^(\d{4})-/.exec(carriedDate ?? "");
+      if (yr && Number(yr[1]) >= 2090) {
+        outOfPeriodRejected += 1;
+        continue;
+      }
+      let amount = Math.abs(amountMoney.value);
+      if (feeTotal !== null) {
+        amount = feeTotal;
+        feeCountRateNormalized += 1;
+      }
+      if (balance !== null) lastBalance = balance;
       entries.push({
         date: carriedDate ?? "",
         description,
-        amount: Math.abs(amountMoney.value),
+        amount,
         balance,
         prior: bankKeywordPrior(description),
       });
@@ -1315,7 +1547,7 @@ export function parseBankAccountTable(
     segment.forEach((e, idx) => {
       const row = newRow();
       row.date = e.date;
-      row.description = e.description;
+      row.description = cleanDescription(e.description);
       row.balance = e.balance;
       if (signs![idx] === "credit") row.credit = e.amount;
       else row.debit = e.amount;
@@ -1346,7 +1578,18 @@ export function parseBankAccountTable(
   // Trailing entries with no displayed balance reconcile against the closing.
   flushSegment(closingBalance);
 
-  return { rows, attempted: entries.length, ignoredSummaryRows, reconciled };
+  return {
+    rows,
+    attempted: entries.length,
+    ignoredSummaryRows,
+    reconciled,
+    lastBalance,
+    outOfPeriodRejected,
+    balanceForwardHandled,
+    summaryStatisticalRejected,
+    legalInfoIgnored,
+    feeCountRateNormalized,
+  };
 }
 
 // ----- Candidate-based parsing & scoring -----
@@ -1370,10 +1613,103 @@ type Candidate = {
   ignoredSpendReportRows: number;
   balance: CandidateBalance;
   score: number;
+  // Scoping/summary diagnostics (defaults for non-bank candidates).
+  accountSectionsDetected: number;
+  chosenAccountSection: string | null;
+  ignoredAccountSections: number;
+  balanceForwardHandled: number;
+  finalRunningBalanceUsedAsClosing: boolean;
+  outOfPeriodRejected: number;
+  summaryStatisticalRejected: number;
+  legalInfoIgnored: number;
+  paymentRemittanceRejected: number;
+  fxRowsAttached: number;
+  feeCountRateNormalized: number;
+  accountSectionOpeningSource: string | null;
+  selectedSectionHadOpeningClosing: boolean;
+  source: CandidateSource;
+  coord: CoordDiag | null;
+};
+
+/** Coordinate-table aggregate diagnostics carried on a candidate. */
+type CoordDiag = {
+  tableCandidatesFound: number;
+  chosenTableType: string | null;
+  headerColumnsDetected: number;
+  columnOrder: string | null;
+  rowsBuilt: number;
+  datelessRowsPromoted: number;
+  wrappedDescriptionsJoined: number;
+  fxDetailLinesAttached: number;
+  summaryRowsIgnored: number;
+  footerLegalRowsIgnored: number;
 };
 
 function toCents(n: number): number {
   return Math.round(n * 100);
+}
+
+/**
+ * Scope a multi-account bank statement to the transaction-heavy account block.
+ * Only activates when there are 2+ opening-balance/balance-forward anchors AND
+ * one block clearly dominates — single-account statements are untouched (so the
+ * passing baseline is unaffected).
+ */
+function scopeBankSection(lines: string[]): {
+  scopedLines: string[];
+  sectionsDetected: number;
+  chosenLabel: string | null;
+  ignored: number;
+} {
+  const anchors: number[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/\b(opening balance|balance forward)\b/i.test(lines[i])) anchors.push(i);
+  }
+  if (anchors.length < 2) {
+    return { scopedLines: lines, sectionsDetected: anchors.length, chosenLabel: null, ignored: 0 };
+  }
+
+  const blocks = anchors.map((a, idx) => ({
+    start: a,
+    end: idx + 1 < anchors.length ? anchors[idx + 1] : lines.length,
+  }));
+  const txCount = (b: { start: number; end: number }): number => {
+    let c = 0;
+    for (let i = b.start; i < b.end; i += 1) {
+      const l = lines[i];
+      const m = extractMoneyValues(l).length;
+      if (findDate(l) && m >= 1) c += 1;
+      else if (m >= 2) c += 1;
+    }
+    return c;
+  };
+  const counts = blocks.map(txCount);
+  let maxIdx = 0;
+  for (let i = 1; i < counts.length; i += 1) if (counts[i] > counts[maxIdx]) maxIdx = i;
+  const sorted = [...counts].sort((a, b) => b - a);
+  // Don't scope if no clear winner (avoids splitting a single real account).
+  if (sorted[0] === 0 || (sorted.length > 1 && sorted[1] > sorted[0] * 0.25)) {
+    return { scopedLines: lines, sectionsDetected: anchors.length, chosenLabel: null, ignored: 0 };
+  }
+
+  const chosen = blocks[maxIdx];
+  let chosenLabel: string | null = null;
+  // Look back for the section header, skipping balance/LOC/metadata lines.
+  for (let i = chosen.start - 1; i >= 0 && i >= chosen.start - 5; i -= 1) {
+    const l = lines[i].trim();
+    if (!l) continue;
+    if (/\b(opening|closing|previous|new) balance\b|\bloc limit\b|\bexp\b|balance forward/i.test(l)) {
+      continue;
+    }
+    chosenLabel = l;
+    break;
+  }
+  return {
+    scopedLines: lines.slice(chosen.start, chosen.end),
+    sectionsDetected: anchors.length,
+    chosenLabel,
+    ignored: anchors.length - 1,
+  };
 }
 
 /**
@@ -1441,7 +1777,12 @@ function scoreCandidate(c: Candidate): number {
 const SECTIONED_SIGNAL_RE =
   /your payments|your interest|your new charges|spend categor|trans(?:\.|action)? date|post(?:ing)? date|amount\s*\(\s*\$\s*\)|total balance/i;
 
-function buildCandidates(lines: string[], text: string, year: number | undefined): Candidate[] {
+function buildCandidates(
+  lines: string[],
+  text: string,
+  year: number | undefined,
+  items?: PdfTextItem[],
+): Candidate[] {
   const lower = text.toLowerCase();
   const looksCreditCard = CC_FAMILY_SIGNALS.some((re) => re.test(lower));
   const looksBank =
@@ -1451,6 +1792,66 @@ function buildCandidates(lines: string[], text: string, year: number | undefined
   const period = detectStatementPeriod(text);
 
   const candidates: Candidate[] = [];
+
+  const noScope = {
+    accountSectionsDetected: 0,
+    chosenAccountSection: null,
+    ignoredAccountSections: 0,
+    balanceForwardHandled: 0,
+    finalRunningBalanceUsedAsClosing: false,
+    outOfPeriodRejected: 0,
+    summaryStatisticalRejected: 0,
+    legalInfoIgnored: 0,
+    paymentRemittanceRejected: 0,
+    fxRowsAttached: 0,
+    feeCountRateNormalized: 0,
+    accountSectionOpeningSource: null,
+    selectedSectionHadOpeningClosing: false,
+    source: "text-parser" as CandidateSource,
+    coord: null,
+  };
+
+  // ----- Tier 1: coordinate-aware table candidates (digital PDFs only) -----
+  // These understand the table from text-item positions and column headers, so
+  // direction comes from the column a value lands in — not from string rules.
+  // They compete in the same reconciliation scorer; when coordinates are absent
+  // (plain-text path) none are produced and behaviour is unchanged.
+  if (items && items.length > 0) {
+    const coordCandidates = parseCoordinateTables(items, year);
+    for (const cc of coordCandidates) {
+      candidates.push({
+        name: "coordinate-table",
+        statementKind: cc.statementKind,
+        layoutFamily:
+          cc.statementKind === "credit-card" ? "credit-card-table" : "bank-account-table",
+        rows: cc.rows,
+        openingBalance: cc.opening,
+        closingBalance: cc.closing,
+        summary: cc.summary,
+        bankAttempted: cc.rows.length,
+        bankIgnored: cc.diagnostics.summaryRowsIgnored,
+        sectionsDetected: 0,
+        ignoredSpendReportRows: 0,
+        balance: reconcileCents(cc.opening, cc.closing, cc.rows, cc.statementKind),
+        score: 0,
+        ...noScope,
+        source: "coordinate-table",
+        fxRowsAttached: cc.diagnostics.fxDetailLinesAttached,
+        coord: {
+          tableCandidatesFound: cc.diagnostics.tableCandidatesFound,
+          chosenTableType: cc.diagnostics.chosenTableType,
+          headerColumnsDetected: cc.diagnostics.headerColumnsDetected,
+          columnOrder: cc.diagnostics.columnOrder,
+          rowsBuilt: cc.diagnostics.rowsBuilt,
+          datelessRowsPromoted: cc.diagnostics.datelessRowsPromoted,
+          wrappedDescriptionsJoined: cc.diagnostics.wrappedDescriptionsJoined,
+          fxDetailLinesAttached: cc.diagnostics.fxDetailLinesAttached,
+          summaryRowsIgnored: cc.diagnostics.summaryRowsIgnored,
+          footerLegalRowsIgnored: cc.diagnostics.footerLegalRowsIgnored,
+        },
+      });
+    }
+  }
 
   if (looksCreditCard) {
     const ccBalances = detectCreditCardBalances(lines);
@@ -1472,38 +1873,90 @@ function buildCandidates(lines: string[], text: string, year: number | undefined
         ignoredSpendReportRows: cc.stats.ignoredSpendReportRows,
         balance: reconcileCents(ccBalances.opening, ccBalances.closing, cc.rows, "credit-card"),
         score: 0,
+        ...noScope,
+        outOfPeriodRejected: cc.stats.periodRejected,
+        paymentRemittanceRejected: cc.stats.paymentRemittanceRejected,
+        fxRowsAttached: cc.stats.fxRowsAttached,
+        selectedSectionHadOpeningClosing:
+          ccBalances.opening !== null && ccBalances.closing !== null,
       });
     }
   }
 
   if (looksBank) {
-    const bankBalances = parseBankAccountStatement(lines, year);
-    const table = parseBankAccountTable(
-      lines,
-      year,
-      bankBalances.openingBalance,
-      bankBalances.closingBalance,
-    );
-    candidates.push({
-      name: "bank-account",
-      statementKind: "bank-account",
-      layoutFamily: "bank-account-table",
-      rows: table.rows,
-      openingBalance: bankBalances.openingBalance,
-      closingBalance: bankBalances.closingBalance,
-      summary: { credits: null, debits: null },
-      bankAttempted: table.attempted,
-      bankIgnored: table.ignoredSummaryRows,
-      sectionsDetected: 0,
-      ignoredSpendReportRows: 0,
-      balance: reconcileCents(
+    const scope = scopeBankSection(lines);
+    const makeBankCandidate = (
+      bankLines: string[],
+      chosenLabel: string | null,
+      ignoredSections: number,
+    ): Candidate => {
+      const bankBalances = parseBankAccountStatement(bankLines, year);
+      const table = parseBankAccountTable(
+        bankLines,
+        year,
         bankBalances.openingBalance,
         bankBalances.closingBalance,
-        table.rows,
-        "bank-account",
-      ),
-      score: 0,
-    });
+      );
+      // Use the last displayed running balance as closing when no explicit label.
+      const usedRunningClosing =
+        bankBalances.closingBalance === null && table.lastBalance !== null;
+      const effectiveClosing = bankBalances.closingBalance ?? table.lastBalance;
+      // Where did the section's opening figure come from? Helps explain scoping
+      // without exposing any amount (label only).
+      const openingSource =
+        bankBalances.openingBalance === null
+          ? null
+          : bankLines.some((l) => /\bbalance forward\b/i.test(l))
+            ? "balance forward"
+            : bankLines.some((l) => /\b(opening|beginning|previous) balance\b/i.test(l))
+              ? "opening balance"
+              : "running balance";
+      return {
+        name: "bank-account",
+        statementKind: "bank-account",
+        layoutFamily: "bank-account-table",
+        rows: table.rows,
+        openingBalance: bankBalances.openingBalance,
+        closingBalance: effectiveClosing,
+        summary: detectBankSummary(bankLines),
+        bankAttempted: table.attempted,
+        bankIgnored: table.ignoredSummaryRows,
+        sectionsDetected: 0,
+        ignoredSpendReportRows: 0,
+        balance: reconcileCents(
+          bankBalances.openingBalance,
+          effectiveClosing,
+          table.rows,
+          "bank-account",
+        ),
+        score: 0,
+        accountSectionsDetected: scope.sectionsDetected,
+        chosenAccountSection: chosenLabel,
+        ignoredAccountSections: ignoredSections,
+        balanceForwardHandled: table.balanceForwardHandled,
+        finalRunningBalanceUsedAsClosing: usedRunningClosing,
+        outOfPeriodRejected: table.outOfPeriodRejected,
+        summaryStatisticalRejected: table.summaryStatisticalRejected,
+        legalInfoIgnored: table.legalInfoIgnored,
+        paymentRemittanceRejected: 0,
+        fxRowsAttached: 0,
+        feeCountRateNormalized: table.feeCountRateNormalized,
+        accountSectionOpeningSource: openingSource,
+        selectedSectionHadOpeningClosing:
+          bankBalances.openingBalance !== null && effectiveClosing !== null,
+        source: "text-parser",
+        coord: null,
+      };
+    };
+
+    // Always try the full document. If scoping narrowed to one account section,
+    // also try the scoped version; reconciliation scoring picks the better one,
+    // so single-account statements are never harmed by scoping.
+    candidates.push(makeBankCandidate(lines, null, 0));
+    const narrowed = scope.scopedLines.length !== lines.length;
+    if (narrowed) {
+      candidates.push(makeBankCandidate(scope.scopedLines, scope.chosenLabel, scope.ignored));
+    }
   }
 
   // Fallback line parser is always available.
@@ -1522,6 +1975,8 @@ function buildCandidates(lines: string[], text: string, year: number | undefined
     ignoredSpendReportRows: 0,
     balance: reconcileCents(fb.openingBalance, fb.closingBalance, fb.rows, "bank-account"),
     score: 0,
+    ...noScope,
+    source: "fallback",
   });
 
   for (const c of candidates) {
@@ -1531,6 +1986,17 @@ function buildCandidates(lines: string[], text: string, year: number | undefined
     if (sectionedSignals) {
       if (c.name === "credit-card-sectioned") c.score += 30;
       if (c.name === "credit-card-simple" && !c.balance.passed) c.score -= 40;
+    }
+    // Rows that came from a detected table region are inherently more trustworthy
+    // than line-reconstructed text (the column tells us debit vs credit directly).
+    // A small base bonus breaks ties; when the coordinate candidate also fully
+    // reconciles it gets a larger bonus so it is preferred over a text candidate
+    // that merely matches layout signals. It still cannot beat a text candidate
+    // that reconciles strictly better — a non-reconciling coordinate keeps only
+    // the small bonus, so a passing text parse (+100) still wins.
+    if (c.source === "coordinate-table") {
+      c.score += 6;
+      if (c.balance.available && c.balance.passed) c.score += 30;
     }
   }
   return candidates;
@@ -1543,14 +2009,20 @@ function buildCandidates(lines: string[], text: string, year: number | undefined
  * none reconciles, the best-effort result is returned and the UI shows Needs
  * Review rather than pretending.
  */
-export function parseStatementText(text: string): ParsedStatement {
+export function parseStatementText(text: string, items?: PdfTextItem[]): ParseResult {
+  // Stage B (normalize) is handled inside the line/money/date helpers; here we
+  // split into trimmed non-empty lines and infer the statement period year used
+  // for date normalization downstream.
   const lines = text
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
 
   const year = detectStatementPeriodYear(text);
-  const candidates = buildCandidates(lines, text, year);
+  // Stage C: advisory statement-profile detection (guides; never overrides the
+  // generic parser). Recorded in diagnostics only.
+  const profile = detectStatementProfile(text);
+  const candidates = buildCandidates(lines, text, year, items);
 
   // Choose the highest-scoring candidate. Reconciliation dominates scoring, so a
   // candidate that balances is preferred over one that merely has more rows.
@@ -1593,6 +2065,44 @@ export function parseStatementText(text: string): ParsedStatement {
     ignoredSummaryRows: chosen.bankIgnored,
     ignoredSpendReportRows: chosen.ignoredSpendReportRows,
     candidateComparison,
+    accountSectionsDetected: chosen.accountSectionsDetected,
+    chosenAccountSection: chosen.chosenAccountSection,
+    ignoredAccountSections: chosen.ignoredAccountSections,
+    transactionTableStartFound:
+      chosen.sectionsDetected > 0 ||
+      lines.some((l) => BANK_START_RE.test(l) || isTransactionHeader(l)),
+    summaryRowsUsedForValidation:
+      (openingBalance !== null ? 1 : 0) +
+      (closingBalance !== null ? 1 : 0) +
+      (chosen.summary.credits !== null ? 1 : 0) +
+      (chosen.summary.debits !== null ? 1 : 0),
+    summaryRowsIgnoredAsTransactions: chosen.bankIgnored,
+    balanceForwardRowsHandled: chosen.balanceForwardHandled,
+    finalRunningBalanceUsedAsClosing: chosen.finalRunningBalanceUsedAsClosing,
+    outOfPeriodRowsRejected: chosen.outOfPeriodRejected,
+    accountFeeSummaryRowsIgnored: lines.filter((l) => /^account fees?\b/i.test(l)).length,
+    subtotalRowsIgnored: lines.filter((l) => /subtotal of monthly activity/i.test(l)).length,
+    summaryStatisticalRowsRejected: chosen.summaryStatisticalRejected,
+    legalInfoRowsIgnored: chosen.legalInfoIgnored,
+    paymentRemittanceRowsIgnored: chosen.paymentRemittanceRejected,
+    fxRowsAttached: chosen.fxRowsAttached,
+    feeCountRateRowsNormalized: chosen.feeCountRateNormalized,
+    accountSectionOpeningSource: chosen.accountSectionOpeningSource,
+    selectedSectionHadOpeningClosing: chosen.selectedSectionHadOpeningClosing,
+    coordinateExtractionAvailable: candidates.some((c) => c.source === "coordinate-table"),
+    tableCandidatesFound: chosen.coord?.tableCandidatesFound ?? 0,
+    chosenTableType: chosen.coord?.chosenTableType ?? null,
+    coordHeaderColumnsDetected: chosen.coord?.headerColumnsDetected ?? 0,
+    coordColumnOrder: chosen.coord?.columnOrder ?? null,
+    coordRowsBuilt: chosen.coord?.rowsBuilt ?? 0,
+    coordDatelessRowsPromoted: chosen.coord?.datelessRowsPromoted ?? 0,
+    coordWrappedDescriptionsJoined: chosen.coord?.wrappedDescriptionsJoined ?? 0,
+    coordFxDetailLinesAttached: chosen.coord?.fxDetailLinesAttached ?? 0,
+    coordSummaryRowsIgnored: chosen.coord?.summaryRowsIgnored ?? 0,
+    coordFooterLegalRowsIgnored: chosen.coord?.footerLegalRowsIgnored ?? 0,
+    finalBalanceDifference: chosen.balance.diffCents !== null ? chosen.balance.diffCents / 100 : null,
+    chosenCandidateSource: chosen.source,
+    detectedProfile: profile.name,
   };
 
   const warnings: string[] = [];
@@ -1607,6 +2117,7 @@ export function parseStatementText(text: string): ParsedStatement {
     rows,
     openingBalance,
     closingBalance,
+    summary: chosen.summary,
     warnings,
     creditCardStats: chosen.creditCardStats,
     parseStats,

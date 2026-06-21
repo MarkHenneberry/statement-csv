@@ -19,6 +19,7 @@ import type {
   CreditCardParseStats,
   LayoutParseStats,
 } from "@/lib/parser";
+import type { StatementValidation } from "@/lib/statement-model";
 import { UploadDropzone } from "@/components/upload/UploadDropzone";
 import { ProcessingSteps } from "@/components/upload/ProcessingSteps";
 import {
@@ -47,6 +48,7 @@ type PreviewMeta = {
   parserWarnings: string[];
   creditCardStats?: CreditCardParseStats;
   parseStats?: LayoutParseStats;
+  validation?: StatementValidation;
 };
 
 const isDev = process.env.NODE_ENV !== "production";
@@ -109,6 +111,7 @@ export function UploadFlow() {
       parserWarnings: data.warnings,
       creditCardStats: data.creditCardStats,
       parseStats: data.parseStats,
+      validation: data.validation,
     });
     setStatus("preview");
   }
@@ -324,6 +327,13 @@ export function UploadFlow() {
           </div>
         </div>
 
+        <p className="text-xs leading-relaxed text-slate-500">
+          <span className="font-medium text-slate-600">Debit</span> means money out, such as
+          purchases, withdrawals, fees, or charges.{" "}
+          <span className="font-medium text-slate-600">Credit</span> means money in, such as
+          deposits, payments, or refunds.
+        </p>
+
         <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-6 sm:flex-row sm:items-center sm:justify-between">
           <p className="max-w-md text-sm text-slate-600">
             Export the reviewed rows as a CSV or Excel file for spreadsheets, bookkeeping,
@@ -346,6 +356,7 @@ export function UploadFlow() {
               balanceCheck: check,
               creditCardStats: meta.creditCardStats,
               parseStats: meta.parseStats,
+              validation: meta.validation,
             })}
           />
         ) : null}

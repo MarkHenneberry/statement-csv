@@ -45,9 +45,19 @@ if (!existsSync(MANIFEST)) {
   process.exit(0);
 }
 
-const manifest = JSON.parse(readFileSync(MANIFEST, "utf8")) as {
-  statements: ManifestEntry[];
-};
+const raw = readFileSync(MANIFEST, "utf8").trim();
+if (raw === "") {
+  console.log(`${MANIFEST} is empty — skipping private regression (this is fine).`);
+  process.exit(0);
+}
+
+let manifest: { statements: ManifestEntry[] };
+try {
+  manifest = JSON.parse(raw) as { statements: ManifestEntry[] };
+} catch {
+  console.log(`${MANIFEST} is not valid JSON — fix it or empty it to skip. Aborting.`);
+  process.exit(1);
+}
 
 let failures = 0;
 
@@ -56,7 +66,7 @@ for (const entry of manifest.statements ?? []) {
   try {
     const bytes = new Uint8Array(readFileSync(entry.path));
     const extracted = await extractPdfText(bytes);
-    const parsed = parseStatementText(extracted.pages.join("\n"));
+    const parsed = parseStatementText(extracted.pages.join("\n"), extracted.items);
 
     const mode = parsed.statementKind === "credit-card" ? "credit-card" : "bank-account";
     const check = computeBalanceCheck(

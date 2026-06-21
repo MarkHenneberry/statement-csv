@@ -19,6 +19,7 @@ import {
   type CreditCardParseStats,
   type LayoutParseStats,
 } from "@/lib/parser";
+import type { StatementValidation } from "@/lib/statement-model";
 
 export type ParserQuality = "good" | "needs-review" | "poor";
 export type DiagnosticsBalanceStatus = "passed" | "needs-review" | "limited";
@@ -42,6 +43,8 @@ export type ParserDiagnostics = {
   warnings: string[];
   creditCardStats?: CreditCardParseStats;
   parseStats?: LayoutParseStats;
+  /** Canonical model validation (status / confidence / issues). */
+  validation?: StatementValidation;
   quality: ParserQuality;
   qualityLabel: string;
   qualityReason: string;
@@ -62,6 +65,7 @@ export function buildParserDiagnostics(input: {
   balanceCheck: BalanceCheck;
   creditCardStats?: CreditCardParseStats;
   parseStats?: LayoutParseStats;
+  validation?: StatementValidation;
 }): ParserDiagnostics {
   const {
     source,
@@ -75,6 +79,7 @@ export function buildParserDiagnostics(input: {
     balanceCheck,
     creditCardStats,
     parseStats,
+    validation,
   } = input;
 
   const totalRows = rows.length;
@@ -156,6 +161,7 @@ export function buildParserDiagnostics(input: {
     warnings,
     creditCardStats,
     parseStats,
+    validation,
     quality,
     qualityLabel,
     qualityReason,

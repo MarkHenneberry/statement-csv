@@ -4,6 +4,7 @@
 // src/lib/pdf-extract.ts, which is what app code imports.
 
 import { getDocumentProxy } from "unpdf";
+import type { PdfTextItem } from "@/lib/coordinate-table";
 
 export type ExtractedPdf = {
   pageCount: number | null;
@@ -11,9 +12,15 @@ export type ExtractedPdf = {
   pages: string[];
   /** Total count of non-whitespace characters across all pages. */
   textLength: number;
+  /**
+   * Structured text items with positions, for the coordinate-aware table parser.
+   * INTERNAL ONLY — never returned to the client, logged, or stored. The plain
+   * `pages` text above remains the fallback path.
+   */
+  items: PdfTextItem[];
 };
 
-type TextItem = { str?: string; transform?: number[] };
+type TextItem = { str?: string; transform?: number[]; width?: number; height?: number };
 
 /**
  * Rebuild lines from pdf.js text items by grouping items that share a baseline
@@ -57,17 +64,40 @@ function itemsToLines(items: TextItem[]): string {
     .join("\n");
 }
 
+/** Collect structured, positioned text items for one page (coordinate parser). */
+function itemsToStructured(items: TextItem[], page: number): PdfTextItem[] {
+  const out: PdfTextItem[] = [];
+  for (const item of items) {
+    const str = item.str ?? "";
+    if (!str.trim()) continue;
+    const transform = item.transform;
+    if (!transform || transform.length < 6) continue;
+    out.push({
+      page,
+      str,
+      x: transform[4],
+      y: transform[5],
+      width: item.width ?? 0,
+      height: item.height ?? 0,
+    });
+  }
+  return out;
+}
+
 export async function extractPdfText(bytes: Uint8Array): Promise<ExtractedPdf> {
   const pdf = await getDocumentProxy(bytes);
   const pageCount = pdf.numPages ?? null;
   const pages: string[] = [];
+  const items: PdfTextItem[] = [];
 
   for (let i = 1; i <= (pageCount ?? 0); i += 1) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    pages.push(itemsToLines(content.items as TextItem[]));
+    const pageItems = content.items as TextItem[];
+    pages.push(itemsToLines(pageItems));
+    items.push(...itemsToStructured(pageItems, i));
   }
 
   const textLength = pages.join("").replace(/\s/g, "").length;
-  return { pageCount, pages, textLength };
+  return { pageCount, pages, textLength, items };
 }

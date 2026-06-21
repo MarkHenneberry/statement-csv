@@ -45,6 +45,33 @@ for (const sample of parserSamples) {
     ["noDebit", e.noDebit === undefined || debitRows === 0],
     ["balancePasses", e.balancePasses === undefined || check.passed === e.balancePasses],
     ["balanceNull", e.balanceNull === undefined || allBalancesNull === e.balanceNull],
+    [
+      "firstDescription",
+      e.firstDescription === undefined || parsed.rows[0]?.description === e.firstDescription,
+    ],
+    [
+      "totalCredits",
+      e.totalCredits === undefined || Math.abs(check.totalCredits - e.totalCredits) < 0.01,
+    ],
+    [
+      "totalDebits",
+      e.totalDebits === undefined || Math.abs(check.totalDebits - e.totalDebits) < 0.01,
+    ],
+    [
+      "opening_",
+      e.opening_ === undefined ||
+        (parsed.openingBalance !== null && Math.abs(parsed.openingBalance - e.opening_) < 0.01),
+    ],
+    [
+      "closing_",
+      e.closing_ === undefined ||
+        (parsed.closingBalance !== null && Math.abs(parsed.closingBalance - e.closing_) < 0.01),
+    ],
+    [
+      "accountSection",
+      e.accountSectionIncludes === undefined ||
+        Boolean(parsed.parseStats?.chosenAccountSection?.includes(e.accountSectionIncludes)),
+    ],
   ];
 
   const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);

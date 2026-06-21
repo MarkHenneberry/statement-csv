@@ -1,11 +1,8 @@
 import { NextResponse } from "next/server";
 import { validateFile } from "@/lib/upload";
 import { extractPdfText } from "@/lib/pdf-extract";
-import {
-  parseStatementText,
-  SCANNED_PDF_WARNING,
-  type ParseStatementResponse,
-} from "@/lib/parser";
+import { SCANNED_PDF_WARNING, type ParseStatementResponse } from "@/lib/parser";
+import { parseStatement } from "@/lib/statement-pipeline";
 
 // PDF parsing needs the Node runtime (unpdf / pdf.js is not Edge-compatible).
 export const runtime = "nodejs";
@@ -90,23 +87,30 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json(body);
   }
 
-  const parsed = parseStatementText(extracted.pages.join("\n"));
+  // Run the explicit pipeline: extracted text + coordinate items → ParsedStatement
+  // (model) → validation. Export/preview rows come from the model's transactions,
+  // never from raw text. Items/text are used only here and are never returned to
+  // the client, logged, or stored.
+  const { statement, result, rows } = parseStatement({
+    text: extracted.pages.join("\n"),
+    items: extracted.items,
+    meta: { fileName, pageCount: extracted.pageCount ?? undefined },
+  });
 
-  // PRIVACY: extracted text is used only to produce the structured rows above.
-  // It is never returned to the client, logged, or stored. No raw text preview.
   const body: ParseStatementResponse = {
     ok: true,
     source: "real-parser",
     fileName,
     pageCount: extracted.pageCount,
-    statementKind: parsed.statementKind,
-    layoutFamily: parsed.layoutFamily,
-    rows: parsed.rows,
-    openingBalance: moneyString(parsed.openingBalance),
-    closingBalance: moneyString(parsed.closingBalance),
-    warnings: parsed.warnings,
-    creditCardStats: parsed.creditCardStats,
-    parseStats: parsed.parseStats,
+    statementKind: statement.statementKind,
+    layoutFamily: result.layoutFamily,
+    rows,
+    openingBalance: moneyString(statement.openingBalance ?? null),
+    closingBalance: moneyString(statement.closingBalance ?? null),
+    warnings: result.warnings,
+    creditCardStats: result.creditCardStats,
+    parseStats: result.parseStats,
+    validation: statement.validation,
   };
 
   return NextResponse.json(body);

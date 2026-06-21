@@ -68,6 +68,28 @@ export function ParserDiagnosticsPanel({
 
       <p className="mt-3 text-xs text-slate-600">{d.qualityReason}</p>
 
+      {d.validation ? (
+        <div className="mt-4">
+          <p className="text-xs font-medium text-slate-700">Statement validation (model)</p>
+          <dl className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+            <Metric label="Validation status" value={d.validation.status} />
+            <Metric label="Confidence" value={d.validation.confidence.toFixed(2)} />
+            <Metric
+              label="Reconciliation difference"
+              value={d.validation.difference === undefined ? "—" : d.validation.difference.toFixed(2)}
+            />
+            <Metric label="Issues" value={String(d.validation.issues.length)} />
+          </dl>
+          {d.validation.issues.length > 0 ? (
+            <ul className="mt-2 list-inside list-disc space-y-1 text-xs text-slate-600">
+              {d.validation.issues.map((issue) => (
+                <li key={issue}>{issue}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+
       <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
         <Metric label="Source" value={d.source === "real-parser" ? "Real parser" : "Sample data"} />
         <Metric label="Statement kind" value={kindLabel[d.statementKind]} />
@@ -91,6 +113,7 @@ export function ParserDiagnosticsPanel({
           <p className="text-xs font-medium text-slate-700">Layout parse</p>
           <dl className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
             <Metric label="Chosen candidate" value={d.parseStats.candidate} />
+            <Metric label="Detected profile" value={d.parseStats.detectedProfile} />
             <Metric label="Candidate score" value={String(d.parseStats.candidateScore)} />
             <Metric label="Candidates tried" value={String(d.parseStats.candidatesTried)} />
             <Metric label="Credit-card table" value={yesNo(d.parseStats.creditCardTableDetected)} />
@@ -104,6 +127,44 @@ export function ParserDiagnosticsPanel({
             <Metric label="Balance column rows" value={String(d.parseStats.balanceColumnRows)} />
             <Metric label="Ignored summary rows" value={String(d.parseStats.ignoredSummaryRows)} />
             <Metric label="Ignored spend-report rows" value={String(d.parseStats.ignoredSpendReportRows)} />
+            <Metric label="Account sections detected" value={String(d.parseStats.accountSectionsDetected)} />
+            <Metric label="Chosen account section" value={d.parseStats.chosenAccountSection ?? "—"} />
+            <Metric label="Ignored account sections" value={String(d.parseStats.ignoredAccountSections)} />
+            <Metric label="Tx table start found" value={yesNo(d.parseStats.transactionTableStartFound)} />
+            <Metric label="Summary rows used (validation)" value={String(d.parseStats.summaryRowsUsedForValidation)} />
+            <Metric label="Summary rows ignored as tx" value={String(d.parseStats.summaryRowsIgnoredAsTransactions)} />
+            <Metric label="Balance-forward rows handled" value={String(d.parseStats.balanceForwardRowsHandled)} />
+            <Metric label="Final running balance as closing" value={yesNo(d.parseStats.finalRunningBalanceUsedAsClosing)} />
+            <Metric label="Out-of-period rows rejected" value={String(d.parseStats.outOfPeriodRowsRejected)} />
+            <Metric label="Account-fee summary rows ignored" value={String(d.parseStats.accountFeeSummaryRowsIgnored)} />
+            <Metric label="Subtotal rows ignored" value={String(d.parseStats.subtotalRowsIgnored)} />
+            <Metric label="Summary/statistical rows rejected" value={String(d.parseStats.summaryStatisticalRowsRejected)} />
+            <Metric label="Legal/info rows ignored after table" value={String(d.parseStats.legalInfoRowsIgnored)} />
+            <Metric label="Payment/remittance rows ignored" value={String(d.parseStats.paymentRemittanceRowsIgnored)} />
+            <Metric label="FX detail rows attached" value={String(d.parseStats.fxRowsAttached)} />
+            <Metric label="Fee count/rate rows normalized" value={String(d.parseStats.feeCountRateRowsNormalized)} />
+            <Metric label="Account section opening source" value={d.parseStats.accountSectionOpeningSource ?? "—"} />
+            <Metric label="Section had opening & closing" value={yesNo(d.parseStats.selectedSectionHadOpeningClosing)} />
+          </dl>
+
+          <p className="mt-4 text-xs font-medium text-slate-700">Coordinate-aware table extraction</p>
+          <dl className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+            <Metric label="Chosen candidate source" value={d.parseStats.chosenCandidateSource} />
+            <Metric label="Coordinate extraction available" value={yesNo(d.parseStats.coordinateExtractionAvailable)} />
+            <Metric label="Table candidates found" value={String(d.parseStats.tableCandidatesFound)} />
+            <Metric label="Chosen table type" value={d.parseStats.chosenTableType ?? "—"} />
+            <Metric label="Header columns detected" value={String(d.parseStats.coordHeaderColumnsDetected)} />
+            <Metric label="Column order detected" value={d.parseStats.coordColumnOrder ?? "—"} />
+            <Metric label="Rows built from table" value={String(d.parseStats.coordRowsBuilt)} />
+            <Metric label="Dateless rows promoted" value={String(d.parseStats.coordDatelessRowsPromoted)} />
+            <Metric label="Wrapped descriptions joined" value={String(d.parseStats.coordWrappedDescriptionsJoined)} />
+            <Metric label="FX detail lines attached" value={String(d.parseStats.coordFxDetailLinesAttached)} />
+            <Metric label="Summary rows ignored (table)" value={String(d.parseStats.coordSummaryRowsIgnored)} />
+            <Metric label="Footer/legal rows ignored (table)" value={String(d.parseStats.coordFooterLegalRowsIgnored)} />
+            <Metric
+              label="Final balance difference"
+              value={d.parseStats.finalBalanceDifference === null ? "—" : d.parseStats.finalBalanceDifference.toFixed(2)}
+            />
           </dl>
 
           {d.parseStats.candidateComparison.length > 0 ? (
@@ -122,9 +183,9 @@ export function ParserDiagnosticsPanel({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
-                  {d.parseStats.candidateComparison.map((c) => (
+                  {d.parseStats.candidateComparison.map((c, ci) => (
                     <tr
-                      key={c.name}
+                      key={`${c.name}-${ci}`}
                       className={c.name === d.parseStats!.candidate ? "bg-emerald-50" : ""}
                     >
                       <td className="px-2 py-1">{c.name}</td>
