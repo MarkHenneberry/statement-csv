@@ -14,7 +14,7 @@ import {
 } from "../src/lib/statement-model.ts";
 import { detectStatementProfile, STATEMENT_PROFILES } from "../src/lib/statement-profiles.ts";
 import { rowsToCsv } from "../src/lib/upload.ts";
-import { groupVisualLines } from "../src/lib/coordinate-table.ts";
+import { groupVisualLines, probeCoordinateHeaders } from "../src/lib/coordinate-table.ts";
 import { buildItems, coordinateSamples } from "../src/lib/coordinate-table-samples.ts";
 
 let failures = 0;
@@ -178,6 +178,36 @@ const SUMMARY_HEAVY_CC = [
     gibberish.name,
   );
   check("profile names are generic layout families, not banks", STATEMENT_PROFILES.every((p) => !/^rbc$|^bmo$|^td$|^cibc$/i.test(p.name)));
+}
+
+// 9b. Coordinate header probe: sane aggregates + carries NO document text.
+{
+  const sample = coordinateSamples.find((s) => s.name === "A-standard-bank-table")!;
+  const items = buildItems(sample.rows);
+  const probe = probeCoordinateHeaders(items);
+  check(
+    "header probe reports sane aggregates for a clean table",
+    probe.coordinateItemsPresent &&
+      probe.visualLineCount > 0 &&
+      probe.maxItemsPerLine > 0 &&
+      probe.bestDistinctMeaningsOnALine >= 2 &&
+      probe.tableRegionsFound === 1,
+    JSON.stringify(probe),
+  );
+  const empty = probeCoordinateHeaders([]);
+  check(
+    "header probe is empty/safe when no coordinate items",
+    !empty.coordinateItemsPresent && empty.visualLineCount === 0 && empty.tableRegionsFound === 0,
+  );
+  // Privacy: the probe is counts/booleans only — no document text (not even the
+  // header words like "Description"/"Balance", nor any merchant/amount strings).
+  const serialized = JSON.stringify(probe);
+  const leakTokens = ["Payroll", "Grocery", "Coffee", "Opening", "Closing", "Description", "Balance", "Deposit", "2,200.00", "4,110.05"];
+  check(
+    "header probe serialization contains no document text",
+    leakTokens.every((tok) => !serialized.includes(tok)),
+    serialized,
+  );
 }
 
 // 9. The pipeline stages are represented in code, in order.

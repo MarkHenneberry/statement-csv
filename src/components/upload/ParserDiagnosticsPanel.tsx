@@ -167,6 +167,39 @@ export function ParserDiagnosticsPanel({
             />
           </dl>
 
+          <p className="mt-4 text-xs font-medium text-slate-700">
+            Coordinate header probe{" "}
+            <span className="font-normal text-slate-500">
+              (why table detection did/didn&apos;t find a header — no raw text)
+            </span>
+          </p>
+          <dl className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+            <Metric label="Items present" value={yesNo(d.parseStats.coordHeaderProbe.coordinateItemsPresent)} />
+            <Metric label="Visual lines" value={String(d.parseStats.coordHeaderProbe.visualLineCount)} />
+            <Metric label="Max items / line" value={String(d.parseStats.coordHeaderProbe.maxItemsPerLine)} />
+            <Metric label="Table regions found" value={String(d.parseStats.coordHeaderProbe.tableRegionsFound)} />
+            <Metric label="Lines with header token" value={String(d.parseStats.coordHeaderProbe.linesWithAnyHeaderToken)} />
+            <Metric label="Best distinct meanings / line" value={String(d.parseStats.coordHeaderProbe.bestDistinctMeaningsOnALine)} />
+            <Metric label="Anchor but no value col" value={String(d.parseStats.coordHeaderProbe.linesWithAnchorButNoValue)} />
+            <Metric label="Value but no anchor col" value={String(d.parseStats.coordHeaderProbe.linesWithValueButNoAnchor)} />
+            <Metric label="Relaxed header matches" value={String(d.parseStats.coordHeaderProbe.relaxedHeaderMatches)} />
+            <Metric label="Split/stacked headers merged" value={String(d.parseStats.coordHeaderProbe.splitHeaderCandidates)} />
+            <Metric label="Headerless candidate available" value={yesNo(d.parseStats.coordHeaderProbe.headerlessCandidateAvailable)} />
+            <Metric label="Stitched candidates tried" value={String(d.parseStats.coordHeaderProbe.stitchCandidatesTried)} />
+            <Metric label="Regions stitched" value={String(d.parseStats.coordHeaderProbe.stitchRegionsStitched)} />
+            <Metric label="Stitch rejections" value={String(d.parseStats.coordHeaderProbe.stitchRejectedCount)} />
+            <Metric
+              label="Stitch reject reasons"
+              value={
+                Object.entries(d.parseStats.coordHeaderProbe.stitchRejectReasons)
+                  .map(([k, v]) => `${k}:${v}`)
+                  .join(", ") || "—"
+              }
+            />
+            <Metric label="Chosen candidate stitched" value={yesNo(d.parseStats.coordStitched)} />
+            <Metric label="Chosen regions stitched" value={String(d.parseStats.coordRegionsStitched)} />
+          </dl>
+
           {d.parseStats.candidateComparison.length > 0 ? (
             <div className="mt-3 overflow-x-auto">
               <table className="w-full min-w-[640px] border-collapse text-[11px]">

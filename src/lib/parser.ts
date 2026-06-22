@@ -11,7 +11,12 @@
 // launch. Prefer warnings and lower confidence over guessing.
 
 import type { TransactionRow } from "@/lib/upload";
-import { parseCoordinateTables, type PdfTextItem } from "./coordinate-table.ts";
+import {
+  parseCoordinateTables,
+  probeCoordinateHeaders,
+  type PdfTextItem,
+  type CoordinateHeaderProbe,
+} from "./coordinate-table.ts";
 import { detectStatementProfile } from "./statement-profiles.ts";
 import type { StatementValidation } from "./statement-model.ts";
 
@@ -84,10 +89,16 @@ export type LayoutParseStats = {
   coordFxDetailLinesAttached: number;
   coordSummaryRowsIgnored: number;
   coordFooterLegalRowsIgnored: number;
+  /** True when the chosen candidate stitched multiple coordinate regions. */
+  coordStitched: boolean;
+  /** Number of coordinate regions combined into the chosen candidate. */
+  coordRegionsStitched: number;
   finalBalanceDifference: number | null;
   chosenCandidateSource: CandidateSource;
   /** Advisory statement profile name (generic fallback when unsure). */
   detectedProfile: string;
+  /** Safe aggregate telemetry explaining coordinate header detection (no text). */
+  coordHeaderProbe: CoordinateHeaderProbe;
 };
 
 /** Per-candidate aggregate comparison (dev diagnostics only; no row content). */
@@ -1643,6 +1654,8 @@ type CoordDiag = {
   fxDetailLinesAttached: number;
   summaryRowsIgnored: number;
   footerLegalRowsIgnored: number;
+  stitched: boolean;
+  regionsStitched: number;
 };
 
 function toCents(n: number): number {
@@ -1848,6 +1861,8 @@ function buildCandidates(
           fxDetailLinesAttached: cc.diagnostics.fxDetailLinesAttached,
           summaryRowsIgnored: cc.diagnostics.summaryRowsIgnored,
           footerLegalRowsIgnored: cc.diagnostics.footerLegalRowsIgnored,
+          stitched: cc.diagnostics.stitched,
+          regionsStitched: cc.diagnostics.regionsStitched,
         },
       });
     }
@@ -2100,9 +2115,12 @@ export function parseStatementText(text: string, items?: PdfTextItem[]): ParseRe
     coordFxDetailLinesAttached: chosen.coord?.fxDetailLinesAttached ?? 0,
     coordSummaryRowsIgnored: chosen.coord?.summaryRowsIgnored ?? 0,
     coordFooterLegalRowsIgnored: chosen.coord?.footerLegalRowsIgnored ?? 0,
+    coordStitched: chosen.coord?.stitched ?? false,
+    coordRegionsStitched: chosen.coord?.regionsStitched ?? 0,
     finalBalanceDifference: chosen.balance.diffCents !== null ? chosen.balance.diffCents / 100 : null,
     chosenCandidateSource: chosen.source,
     detectedProfile: profile.name,
+    coordHeaderProbe: probeCoordinateHeaders(items ?? []),
   };
 
   const warnings: string[] = [];

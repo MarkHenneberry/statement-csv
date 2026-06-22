@@ -75,6 +75,10 @@ export type CoordTableDiagnostics = {
   summaryRowsIgnored: number;
   footerLegalRowsIgnored: number;
   finalBalanceDifference: number | null;
+  /** True when this candidate combines multiple compatible regions. */
+  stitched: boolean;
+  /** Number of regions combined (1 for a single-region candidate). */
+  regionsStitched: number;
 };
 
 export type CoordTableCandidate = {
@@ -162,20 +166,53 @@ const HEADER_PATTERNS: { meaning: ColumnMeaning; re: RegExp }[] = [
   { meaning: "category", re: /^(spend categories|categories|category)$/ },
 ];
 
-function matchHeaderMeaning(text: string): ColumnMeaning | null {
-  const t = text.toLowerCase().replace(/\s+/g, " ").trim();
+/**
+ * Strip generic, reusable header noise so a real header cell matches the core
+ * phrase: a trailing currency/unit parenthetical ("Amount ($)", "Balance (CAD)"),
+ * a trailing colon/bullet ("Balance:"), or a trailing standalone currency unit
+ * ("Withdrawals CAD"). No bank/merchant/file-specific strings.
+ */
+function normalizeHeaderText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\s*[:•·]+\s*$/, "")
+    .replace(/\s*\(\s*(?:\$|cad|usd|c\$|us\$)\s*\)\s*$/i, "")
+    .replace(/\s+(?:cad|usd|c\$|us\$)\s*$/i, "")
+    .trim();
+}
+
+/**
+ * Resolve a header cell to a normalized column meaning. Matching is on the
+ * noise-stripped text, so suffixed/units variants resolve without loosening the
+ * core anchored phrase set (avoids false positives on description text).
+ * `stats.relaxed` counts cells that only matched after noise-stripping.
+ */
+function matchHeaderMeaning(text: string, stats?: DetectStats): ColumnMeaning | null {
+  const raw = text.toLowerCase().replace(/\s+/g, " ").trim();
+  const norm = normalizeHeaderText(text);
   for (const { meaning, re } of HEADER_PATTERNS) {
-    if (re.test(t)) return meaning;
+    if (re.test(norm)) {
+      if (stats && norm !== raw && !re.test(raw)) stats.relaxedHeaderMatches += 1;
+      return meaning;
+    }
   }
   return null;
 }
+
+/** Detection-level aggregate counters (safe; counts only, no text). */
+export type DetectStats = {
+  relaxedHeaderMatches: number;
+  splitHeaderCandidates: number;
+};
 
 /**
  * Map a visual line's items into header columns, greedily merging up to 4
  * adjacent items so multi-word headers ("Transaction Date", "Cheque/Debit")
  * resolve. Returns the columns sorted left-to-right (one per distinct meaning).
  */
-export function detectHeaderColumns(line: VisualLine): TableColumn[] {
+export function detectHeaderColumns(line: VisualLine, stats?: DetectStats): TableColumn[] {
   const items = line.items;
   const cols: TableColumn[] = [];
   const seen = new Set<ColumnMeaning>();
@@ -186,7 +223,7 @@ export function detectHeaderColumns(line: VisualLine): TableColumn[] {
     for (let w = Math.min(4, items.length - i); w >= 1; w -= 1) {
       const slice = items.slice(i, i + w);
       const text = slice.map((s) => s.str).join(" ");
-      const m = matchHeaderMeaning(text);
+      const m = matchHeaderMeaning(text, stats);
       if (m) {
         matched = m;
         end = i + w;
@@ -242,24 +279,305 @@ export type TableRegion = {
   confidence: number;
 };
 
-/** Find every header row across the visual lines (one region per header). */
-export function detectTableRegions(lines: VisualLine[]): TableRegion[] {
+/** Merge two visual lines into one synthetic line (items unioned, sorted by x). */
+function mergeTwoLines(a: VisualLine, b: VisualLine): VisualLine {
+  const items = [...a.items, ...b.items].slice().sort((p, q) => p.x - q.x);
+  return {
+    page: a.page,
+    y: Math.min(a.y, b.y),
+    items,
+    text: items.map((s) => s.str).join(" ").replace(/\s+/g, " ").trim(),
+  };
+}
+
+/**
+ * Find every header row. A header is normally one visual line, but real tables
+ * often STACK the header across two nearby lines (e.g. "Transaction"/"Date" or
+ * value-column headers printed a line below "Date Description"). When a single
+ * line is not a full header, we try merging it with the adjacent line and, if the
+ * union resolves to more columns and both lines individually carried header
+ * tokens, treat the pair as one logical header (data starts after the lower line).
+ */
+export function detectTableRegions(lines: VisualLine[], stats?: DetectStats): TableRegion[] {
   const regions: TableRegion[] = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    const cols = detectHeaderColumns(lines[i]);
-    if (!isTableHeader(cols)) continue;
-    // Confidence: share of the line's "words" that resolved to known columns,
-    // blended with how many columns were found (more columns = clearer table).
-    const confidence = Math.min(1, cols.length / 5 + 0.3);
-    regions.push({
-      headerIndex: i,
-      page: lines[i].page,
-      columns: cols,
-      statementKind: kindFromColumns(cols),
-      confidence,
-    });
+  let i = 0;
+  while (i < lines.length) {
+    const cols = detectHeaderColumns(lines[i], stats);
+
+    // Stacked-header attempt: merge with the next line on the same page. This is
+    // tried even when the single line is already a (possibly incomplete) header,
+    // because the value/date columns are often printed a line above or below — the
+    // merged header is preferred when it resolves strictly MORE columns. A data
+    // line contributes no header tokens (nextCols=0), so header+data never merges.
+    const next = i + 1 < lines.length ? lines[i + 1] : null;
+    if (next && next.page === lines[i].page && cols.length >= 1) {
+      const nextCols = detectHeaderColumns(next);
+      if (nextCols.length >= 1) {
+        const merged = detectHeaderColumns(mergeTwoLines(lines[i], next));
+        if (
+          isTableHeader(merged) &&
+          merged.length > cols.length &&
+          merged.length > nextCols.length
+        ) {
+          if (stats) stats.splitHeaderCandidates += 1;
+          regions.push({
+            headerIndex: i + 1, // data starts after the lower header line
+            page: lines[i].page,
+            columns: merged,
+            statementKind: kindFromColumns(merged),
+            confidence: Math.min(1, merged.length / 5 + 0.3),
+          });
+          i += 2;
+          continue;
+        }
+      }
+    }
+
+    if (isTableHeader(cols)) {
+      regions.push({
+        headerIndex: i,
+        page: lines[i].page,
+        columns: cols,
+        statementKind: kindFromColumns(cols),
+        confidence: Math.min(1, cols.length / 5 + 0.3),
+      });
+      i += 1;
+      continue;
+    }
+    i += 1;
   }
   return regions;
+}
+
+// ----- Coordinate header-detection telemetry (safe aggregates) -----
+
+/**
+ * Safe, aggregate-only telemetry about WHY coordinate table detection did or did
+ * not find a header. Every field is a number/boolean derived from item positions
+ * and column-meaning matches — it contains NO text from the document, so it can
+ * be surfaced in dev diagnostics without leaking statement content.
+ */
+export type CoordinateHeaderProbe = {
+  coordinateItemsPresent: boolean;
+  visualLineCount: number;
+  maxItemsPerLine: number;
+  /** Lines where at least one header column-meaning resolved. */
+  linesWithAnyHeaderToken: number;
+  /** Best (max) count of distinct column meanings found on any single line. */
+  bestDistinctMeaningsOnALine: number;
+  /** Lines with a date/description anchor but no value column (split header?). */
+  linesWithAnchorButNoValue: number;
+  /** Lines with a value column but no date/description anchor (split header?). */
+  linesWithValueButNoAnchor: number;
+  /** Table regions detected (0 means detection failed → text fallback). */
+  tableRegionsFound: number;
+  /** Header cells that only matched after noise-stripping (suffixes/units). */
+  relaxedHeaderMatches: number;
+  /** Stacked headers merged across two visual lines into one logical header. */
+  splitHeaderCandidates: number;
+  /** Whether a conservative headerless x-clustering candidate is available. */
+  headerlessCandidateAvailable: boolean;
+  /** Multi-region stitched candidates attempted. */
+  stitchCandidatesTried: number;
+  /** Regions absorbed into a multi-region stitch group. */
+  stitchRegionsStitched: number;
+  /** Region adjacencies rejected for stitching. */
+  stitchRejectedCount: number;
+  /** Counts of stitch-reject reasons (labels only, no document text). */
+  stitchRejectReasons: Record<string, number>;
+};
+
+export const EMPTY_HEADER_PROBE: CoordinateHeaderProbe = {
+  coordinateItemsPresent: false,
+  visualLineCount: 0,
+  maxItemsPerLine: 0,
+  linesWithAnyHeaderToken: 0,
+  bestDistinctMeaningsOnALine: 0,
+  linesWithAnchorButNoValue: 0,
+  linesWithValueButNoAnchor: 0,
+  tableRegionsFound: 0,
+  relaxedHeaderMatches: 0,
+  splitHeaderCandidates: 0,
+  headerlessCandidateAvailable: false,
+  stitchCandidatesTried: 0,
+  stitchRegionsStitched: 0,
+  stitchRejectedCount: 0,
+  stitchRejectReasons: {},
+};
+
+/**
+ * Compute header-detection telemetry from coordinate items. Pure and read-only;
+ * does not change any parse outcome. Reuses the same grouping/header logic the
+ * real detector uses, so the counts explain its behaviour exactly.
+ */
+export function probeCoordinateHeaders(items: PdfTextItem[]): CoordinateHeaderProbe {
+  if (!items || items.length === 0) return EMPTY_HEADER_PROBE;
+  const lines = groupVisualLines(items);
+  let maxItemsPerLine = 0;
+  let linesWithAnyHeaderToken = 0;
+  let bestDistinctMeaningsOnALine = 0;
+  let linesWithAnchorButNoValue = 0;
+  let linesWithValueButNoAnchor = 0;
+
+  for (const line of lines) {
+    if (line.items.length > maxItemsPerLine) maxItemsPerLine = line.items.length;
+    const cols = detectHeaderColumns(line);
+    if (cols.length === 0) continue;
+    linesWithAnyHeaderToken += 1;
+    if (cols.length > bestDistinctMeaningsOnALine) bestDistinctMeaningsOnALine = cols.length;
+    const has = (m: ColumnMeaning) => cols.some((c) => c.meaning === m);
+    const anchor = has("date") || has("description");
+    const value = has("amount") || has("debit") || has("credit") || has("balance");
+    if (anchor && !value) linesWithAnchorButNoValue += 1;
+    if (value && !anchor) linesWithValueButNoAnchor += 1;
+  }
+
+  const stats: DetectStats = { relaxedHeaderMatches: 0, splitHeaderCandidates: 0 };
+  const regions = detectTableRegions(lines, stats);
+  // A headerless candidate is only relevant (and only attempted) when no header
+  // region was found AND there are enough aligned transaction-like rows.
+  const headerlessCandidateAvailable =
+    regions.length === 0 && transactionLikeLines(lines).rows.length >= 4;
+  const ends = regions.map((_, r) => regionEnd(lines, regions, r));
+  const plan = planStitch(lines, regions, ends);
+
+  return {
+    coordinateItemsPresent: true,
+    visualLineCount: lines.length,
+    maxItemsPerLine,
+    linesWithAnyHeaderToken,
+    bestDistinctMeaningsOnALine,
+    linesWithAnchorButNoValue,
+    linesWithValueButNoAnchor,
+    tableRegionsFound: regions.length,
+    relaxedHeaderMatches: stats.relaxedHeaderMatches,
+    splitHeaderCandidates: stats.splitHeaderCandidates,
+    headerlessCandidateAvailable,
+    stitchCandidatesTried: plan.stitchedCandidatesTried,
+    stitchRegionsStitched: plan.regionsStitched,
+    stitchRejectedCount: plan.rejectedCount,
+    stitchRejectReasons: plan.rejectReasons,
+  };
+}
+
+// ----- 3. Conservative headerless x-clustering fallback -----
+
+// A standalone money token (so we can cluster value columns by item x-position).
+const MONEY_TOKEN_RE = /^\(?\$?\s?\d{1,3}(?:,\d{3})*(?:\.\d{2})?-?\)?$|^\(?\$?\s?\d+\.\d{2}-?\)?$/;
+// A self-contained numeric date token (split month-name dates are handled by the
+// description fallback, not as a date column).
+const DATE_TOKEN_RE = /^(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})$/;
+
+/** Cluster x-centers into zones (1D agglomerative within a tolerance). */
+function clusterCenters(centers: number[], tol = 18): { center: number; count: number }[] {
+  const sorted = [...centers].sort((a, b) => a - b);
+  const zones: { sum: number; count: number; center: number }[] = [];
+  for (const c of sorted) {
+    const z = zones[zones.length - 1];
+    if (z && c - z.center <= tol) {
+      z.sum += c;
+      z.count += 1;
+      z.center = z.sum / z.count;
+    } else {
+      zones.push({ sum: c, count: 1, center: c });
+    }
+  }
+  return zones.map((z) => ({ center: z.center, count: z.count }));
+}
+
+type TxScan = {
+  rows: number[]; // indices of transaction-like lines
+  moneyCenters: number[];
+  dateCenters: number[];
+  firstIdx: number;
+  lastIdx: number;
+};
+
+/**
+ * Identify transaction-like lines (a money token plus either a date token or
+ * descriptive text), excluding summary/footer/balance lines. Used by both the
+ * headerless detector and the probe. Read-only; counts/positions only.
+ */
+function transactionLikeLines(lines: VisualLine[]): TxScan {
+  const rows: number[] = [];
+  const moneyCenters: number[] = [];
+  const dateCenters: number[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const l = lines[i];
+    if (COORD_STOP_RE.test(l.text)) break;
+    if (COORD_IGNORE_RE.test(l.text) || detectBalanceLine(l.text)) continue;
+    const moneyItems = l.items.filter((it) => MONEY_TOKEN_RE.test(it.str.trim()));
+    if (moneyItems.length === 0) continue;
+    const dateItem = l.items.find((it) => DATE_TOKEN_RE.test(it.str.trim()));
+    const hasText = l.items.some((it) => /[A-Za-z]{3,}/.test(it.str));
+    if (!dateItem && !hasText) continue;
+    rows.push(i);
+    for (const m of moneyItems) moneyCenters.push(m.x + (m.width || 0) / 2);
+    if (dateItem) dateCenters.push(dateItem.x + (dateItem.width || 0) / 2);
+  }
+  return {
+    rows,
+    moneyCenters,
+    dateCenters,
+    firstIdx: rows.length ? rows[0] : -1,
+    lastIdx: rows.length ? rows[rows.length - 1] : -1,
+  };
+}
+
+function syntheticColumn(meaning: ColumnMeaning, center: number): TableColumn {
+  return { meaning, header: meaning, xStart: center - 1, xEnd: center + 1, center };
+}
+
+/**
+ * Build ONE conservative coordinate candidate from x-clustering when no header
+ * region was found. It only fires for a clean aligned table (≥4 transaction-like
+ * rows, 1–3 stable money columns); the candidate still must reconcile to win, so
+ * a wrong guess loses to the text fallback.
+ */
+function detectHeaderlessRegion(
+  lines: VisualLine[],
+): { region: TableRegion; end: number } | null {
+  const scan = transactionLikeLines(lines);
+  if (scan.rows.length < 4) return null;
+
+  const moneyZones = clusterCenters(scan.moneyCenters)
+    .filter((z) => z.count >= Math.max(2, Math.floor(scan.rows.length * 0.4)))
+    .sort((a, b) => a.center - b.center);
+  if (moneyZones.length < 1 || moneyZones.length > 3) return null;
+
+  const dateZones = clusterCenters(scan.dateCenters).filter(
+    (z) => z.count >= scan.rows.length * 0.5,
+  );
+  const hasDate = dateZones.length >= 1;
+
+  const cols: TableColumn[] = [];
+  if (hasDate) cols.push(syntheticColumn("date", dateZones[0].center));
+  const firstMoney = moneyZones[0].center;
+  const descCenter = hasDate ? (dateZones[0].center + firstMoney) / 2 : firstMoney / 2;
+  cols.push(syntheticColumn("description", descCenter));
+  if (moneyZones.length === 1) {
+    cols.push(syntheticColumn("amount", moneyZones[0].center));
+  } else if (moneyZones.length === 2) {
+    cols.push(syntheticColumn("amount", moneyZones[0].center));
+    cols.push(syntheticColumn("balance", moneyZones[1].center));
+  } else {
+    cols.push(syntheticColumn("debit", moneyZones[0].center));
+    cols.push(syntheticColumn("credit", moneyZones[1].center));
+    cols.push(syntheticColumn("balance", moneyZones[2].center));
+  }
+  cols.sort((a, b) => a.center - b.center);
+
+  const statementKind = cols.some((c) => c.meaning === "balance")
+    ? "bank-account"
+    : "credit-card";
+  const region: TableRegion = {
+    headerIndex: scan.firstIdx - 1,
+    page: lines[scan.firstIdx].page,
+    columns: cols,
+    statementKind,
+    confidence: 0.4,
+  };
+  return { region, end: scan.lastIdx + 1 };
 }
 
 // ----- 4. Column boundaries from x positions -----
@@ -300,6 +618,12 @@ const COORD_IGNORE_RE =
 // Hard stop: legal/info/footer region — nothing after it on the page is a row.
 const COORD_STOP_RE =
   /important (?:information about your account|account information)|how to (?:reach|contact) us|trade ?-?marks?|closing notice|protecting your/i;
+
+// A barrier between two regions that must STOP stitching: legal/footer (above)
+// plus remittance/payment-slip/interest-rate sections. A continuation page never
+// contains these between its transaction blocks; a new statement section does.
+const STITCH_BARRIER_RE =
+  /important (?:information about your account|account information)|how to (?:reach|contact) us|trade ?-?marks?|closing notice|protecting your|payment slip|remittance|please pay|amount past due|interest rate chart|time to pay|total payment enclosed/i;
 
 // Foreign-currency / exchange detail sub-line (attached to the row above).
 function isFxDetail(text: string): boolean {
@@ -543,6 +867,249 @@ function regionEnd(lines: VisualLine[], regions: TableRegion[], idx: number): nu
  * full statement interpretation (rows + balances + summary) that the parser's
  * reconciliation scorer ranks against the text-parser candidates.
  */
+/**
+ * Build one candidate from a single region. `allowRunningClose` permits using the
+ * last running balance as the bank closing only for a complete, sole table (one
+ * region, or the headerless whole-block candidate) — never for a fragment.
+ */
+function buildRegionCandidate(
+  lines: VisualLine[],
+  region: TableRegion,
+  end: number,
+  year: number | undefined,
+  tableCandidatesFound: number,
+  allowRunningClose: boolean,
+  headerless: boolean,
+): CoordTableCandidate | null {
+  const winStart = Math.max(0, region.headerIndex - 10);
+  const regionTexts = lines.slice(winStart, Math.max(winStart, end)).map((l) => l.text);
+  const ccBalances = detectCreditCardBalances(regionTexts);
+  const bankOpenClose = regionBankBalances(lines, Math.max(0, region.headerIndex), end);
+  const ccSummary = detectCreditCardSummary(regionTexts);
+  const bankSummary = detectBankSummary(regionTexts);
+  const diag: Diag = {
+    rowsBuilt: 0,
+    datelessRowsPromoted: 0,
+    wrappedDescriptionsJoined: 0,
+    fxDetailLinesAttached: 0,
+    summaryRowsIgnored: 0,
+    footerLegalRowsIgnored: 0,
+  };
+  const isCc = region.statementKind === "credit-card";
+  const seedBalance = isCc ? null : bankOpenClose.opening;
+  const rows = buildRegionRows(lines, region, end, year, diag, seedBalance);
+  if (rows.length === 0) return null;
+
+  const opening = isCc ? ccBalances.opening : bankOpenClose.opening;
+  // Bank closing: prefer an explicit statement balance label. Only fall back to
+  // the last running balance for a sole/complete table; for one of several
+  // regions the last running balance is a mid-statement value and would let a
+  // fragment trivially "reconcile" (opening + credits − debits == lastBalance
+  // holds for any contiguous subset) and wrongly beat the complete text parse.
+  const closing = isCc
+    ? ccBalances.closing
+    : (bankOpenClose.closing ?? (allowRunningClose ? lastRowBalance(rows) : null));
+  const summary = isCc
+    ? ccSummary
+    : { credits: bankSummary.credits, debits: bankSummary.debits };
+  const columnOrder = region.columns.map((c) => c.meaning).join("|");
+
+  return {
+    statementKind: region.statementKind,
+    rows,
+    opening,
+    closing,
+    summary,
+    columnOrder,
+    headerColumns: region.columns.length,
+    confidence: headerless ? Math.min(region.confidence, 0.45) : region.confidence,
+    diagnostics: {
+      coordinateAvailable: true,
+      tableCandidatesFound,
+      chosenTableType: region.statementKind,
+      headerColumnsDetected: region.columns.length,
+      columnOrder,
+      rowsBuilt: diag.rowsBuilt,
+      datelessRowsPromoted: diag.datelessRowsPromoted,
+      wrappedDescriptionsJoined: diag.wrappedDescriptionsJoined,
+      fxDetailLinesAttached: diag.fxDetailLinesAttached,
+      summaryRowsIgnored: diag.summaryRowsIgnored,
+      footerLegalRowsIgnored: diag.footerLegalRowsIgnored,
+      finalBalanceDifference: null,
+      stitched: false,
+      regionsStitched: 1,
+    },
+  };
+}
+
+// ----- 8. Region stitching (combine continued/sectioned table regions) -----
+
+export type StitchPlan = {
+  /** Consecutive region indices grouped together (length 1 = not stitched). */
+  groups: number[][];
+  /** Multi-region groups (each yields one stitched candidate attempt). */
+  stitchedCandidatesTried: number;
+  regionsStitched: number;
+  rejectedCount: number;
+  rejectReasons: Record<string, number>;
+};
+
+/** A stable, order-independent signature of a region's column meanings. */
+function meaningSet(cols: TableColumn[]): string {
+  return [...new Set(cols.map((c) => c.meaning))].sort().join(",");
+}
+
+/** Do shared columns sit at similar x-centers (same physical layout)? */
+function centersAlign(a: TableColumn[], b: TableColumn[], tol = 30): boolean {
+  const mb = new Map(b.map((c) => [c.meaning, c.center] as const));
+  for (const c of a) {
+    const other = mb.get(c.meaning);
+    if (other === undefined || Math.abs(other - c.center) > tol) return false;
+  }
+  return true;
+}
+
+/**
+ * Why two consecutive regions cannot be stitched, or null when compatible.
+ * Conservative: same kind, same column meanings at aligned x, sequential pages,
+ * no legal/remittance/footer barrier between them, and (for bank tables) no fresh
+ * account opening between them — a balance-forward continuation is allowed.
+ */
+function stitchRejectReason(
+  lines: VisualLine[],
+  prev: TableRegion,
+  prevEnd: number,
+  next: TableRegion,
+): string | null {
+  if (prev.statementKind !== next.statementKind) return "kind-mismatch";
+  if (meaningSet(prev.columns) !== meaningSet(next.columns)) return "columns-mismatch";
+  if (!centersAlign(prev.columns, next.columns)) return "centers-misaligned";
+  if (next.page < prev.page || next.page - prev.page > 1) return "page-gap";
+  for (let i = prevEnd; i < next.headerIndex && i < lines.length; i += 1) {
+    if (STITCH_BARRIER_RE.test(lines[i].text)) return "hard-stop";
+  }
+  if (prev.statementKind === "bank-account") {
+    const scanEnd = Math.min(next.headerIndex + 4, lines.length);
+    for (let i = prevEnd; i < scanEnd; i += 1) {
+      const t = lines[i].text;
+      if (/\b(opening|beginning) balance\b/i.test(t) && !/balance forward/i.test(t)) {
+        return "new-account";
+      }
+    }
+  }
+  return null;
+}
+
+/** Group consecutive compatible regions (sequential continuation/sections only). */
+export function planStitch(
+  lines: VisualLine[],
+  regions: TableRegion[],
+  ends: number[],
+): StitchPlan {
+  const groups: number[][] = [];
+  const rejectReasons: Record<string, number> = {};
+  let rejectedCount = 0;
+  if (regions.length === 0) {
+    return { groups, stitchedCandidatesTried: 0, regionsStitched: 0, rejectedCount: 0, rejectReasons };
+  }
+  let current = [0];
+  for (let i = 1; i < regions.length; i += 1) {
+    const reason = stitchRejectReason(lines, regions[i - 1], ends[i - 1], regions[i]);
+    if (reason === null) {
+      current.push(i);
+    } else {
+      rejectedCount += 1;
+      rejectReasons[reason] = (rejectReasons[reason] ?? 0) + 1;
+      groups.push(current);
+      current = [i];
+    }
+  }
+  groups.push(current);
+  const multi = groups.filter((g) => g.length > 1);
+  return {
+    groups,
+    stitchedCandidatesTried: multi.length,
+    regionsStitched: multi.reduce((a, g) => a + g.length, 0),
+    rejectedCount,
+    rejectReasons,
+  };
+}
+
+/**
+ * Build one statement-level candidate from a group of compatible regions: rows
+ * are concatenated in page order, opening/summary recomputed over the combined
+ * span, closing taken from the LAST region's label (or its final running balance,
+ * since a stitched table is complete). Competes normally; reconciliation decides.
+ */
+function buildStitchedCandidate(
+  lines: VisualLine[],
+  regions: TableRegion[],
+  ends: number[],
+  group: number[],
+  regionCandidates: (CoordTableCandidate | null)[],
+  tableCandidatesFound: number,
+): CoordTableCandidate | null {
+  if (group.length < 2) return null;
+  const firstIdx = group[0];
+  const lastIdx = group[group.length - 1];
+  const first = regions[firstIdx];
+  const last = regions[lastIdx];
+  const isCc = first.statementKind === "credit-card";
+  const rows = group.flatMap((idx) => regionCandidates[idx]!.rows);
+  if (rows.length === 0) return null;
+
+  const spanStart = Math.max(0, first.headerIndex - 10);
+  const spanEnd = ends[lastIdx];
+  const spanTexts = lines.slice(spanStart, spanEnd).map((l) => l.text);
+
+  let opening: number | null;
+  let closing: number | null;
+  let summary: { credits: number | null; debits: number | null };
+  if (isCc) {
+    const b = detectCreditCardBalances(spanTexts);
+    opening = b.opening;
+    closing = b.closing;
+    summary = detectCreditCardSummary(spanTexts);
+  } else {
+    opening = regionBankBalances(lines, first.headerIndex, ends[firstIdx]).opening;
+    const lastClose = regionBankBalances(lines, last.headerIndex, ends[lastIdx]).closing;
+    closing = lastClose ?? lastRowBalance(rows);
+    const bs = detectBankSummary(spanTexts);
+    summary = { credits: bs.credits, debits: bs.debits };
+  }
+
+  const columnOrder = first.columns.map((c) => c.meaning).join("|");
+  const sum = (pick: (d: CoordTableDiagnostics) => number) =>
+    group.reduce((a, idx) => a + pick(regionCandidates[idx]!.diagnostics), 0);
+
+  return {
+    statementKind: first.statementKind,
+    rows,
+    opening,
+    closing,
+    summary,
+    columnOrder,
+    headerColumns: first.columns.length,
+    confidence: Math.min(0.9, 0.5 + group.length * 0.1),
+    diagnostics: {
+      coordinateAvailable: true,
+      tableCandidatesFound,
+      chosenTableType: first.statementKind,
+      headerColumnsDetected: first.columns.length,
+      columnOrder,
+      rowsBuilt: rows.length,
+      datelessRowsPromoted: sum((d) => d.datelessRowsPromoted),
+      wrappedDescriptionsJoined: sum((d) => d.wrappedDescriptionsJoined),
+      fxDetailLinesAttached: sum((d) => d.fxDetailLinesAttached),
+      summaryRowsIgnored: sum((d) => d.summaryRowsIgnored),
+      footerLegalRowsIgnored: sum((d) => d.footerLegalRowsIgnored),
+      finalBalanceDifference: null,
+      stitched: true,
+      regionsStitched: group.length,
+    },
+  };
+}
+
 export function parseCoordinateTables(
   items: PdfTextItem[],
   year?: number,
@@ -551,68 +1118,35 @@ export function parseCoordinateTables(
   const lines = groupVisualLines(items);
   if (lines.length === 0) return [];
   const regions = detectTableRegions(lines);
-  if (regions.length === 0) return [];
 
+  // No header anywhere: try ONE conservative headerless x-clustering candidate.
+  // It still competes via reconciliation, so a wrong guess loses to the text
+  // fallback. Header-based detection is always preferred when present.
+  if (regions.length === 0) {
+    const headerless = detectHeaderlessRegion(lines);
+    if (!headerless) return [];
+    const cand = buildRegionCandidate(lines, headerless.region, headerless.end, year, 1, true, true);
+    return cand ? [cand] : [];
+  }
+
+  const ends = regions.map((_, r) => regionEnd(lines, regions, r));
+  const regionCandidates = regions.map((region, r) =>
+    buildRegionCandidate(lines, region, ends[r], year, regions.length, regions.length === 1, false),
+  );
+
+  // Per-region candidates are kept (useful as diagnostics + they still compete).
   const candidates: CoordTableCandidate[] = [];
-  for (let r = 0; r < regions.length; r += 1) {
-    const region = regions[r];
-    const end = regionEnd(lines, regions, r);
-    // Scope balance/summary detection to this account's region (plus a small
-    // lookback for labels printed just above the header) so a multi-account
-    // statement gives each section its own opening/closing, not the first.
-    const winStart = Math.max(0, region.headerIndex - 10);
-    const regionTexts = lines.slice(winStart, end).map((l) => l.text);
-    const ccBalances = detectCreditCardBalances(regionTexts);
-    const bankOpenClose = regionBankBalances(lines, region.headerIndex, end);
-    const ccSummary = detectCreditCardSummary(regionTexts);
-    const bankSummary = detectBankSummary(regionTexts);
-    const diag: Diag = {
-      rowsBuilt: 0,
-      datelessRowsPromoted: 0,
-      wrappedDescriptionsJoined: 0,
-      fxDetailLinesAttached: 0,
-      summaryRowsIgnored: 0,
-      footerLegalRowsIgnored: 0,
-    };
-    const isCc = region.statementKind === "credit-card";
-    const seedBalance = isCc ? null : bankOpenClose.opening;
-    const rows = buildRegionRows(lines, region, end, year, diag, seedBalance);
-    if (rows.length === 0) continue;
+  for (const c of regionCandidates) if (c) candidates.push(c);
 
-    const opening = isCc ? ccBalances.opening : bankOpenClose.opening;
-    const runningClose = lastRowBalance(rows);
-    const closing = isCc
-      ? ccBalances.closing
-      : (bankOpenClose.closing ?? runningClose);
-    const summary = isCc
-      ? ccSummary
-      : { credits: bankSummary.credits, debits: bankSummary.debits };
-    const columnOrder = region.columns.map((c) => c.meaning).join("|");
-
-    candidates.push({
-      statementKind: region.statementKind,
-      rows,
-      opening,
-      closing,
-      summary,
-      columnOrder,
-      headerColumns: region.columns.length,
-      confidence: region.confidence,
-      diagnostics: {
-        coordinateAvailable: true,
-        tableCandidatesFound: regions.length,
-        chosenTableType: region.statementKind,
-        headerColumnsDetected: region.columns.length,
-        columnOrder,
-        rowsBuilt: diag.rowsBuilt,
-        datelessRowsPromoted: diag.datelessRowsPromoted,
-        wrappedDescriptionsJoined: diag.wrappedDescriptionsJoined,
-        fxDetailLinesAttached: diag.fxDetailLinesAttached,
-        summaryRowsIgnored: diag.summaryRowsIgnored,
-        footerLegalRowsIgnored: diag.footerLegalRowsIgnored,
-        finalBalanceDifference: null,
-      },
-    });
+  // Stitched candidates combine compatible consecutive regions into one
+  // statement-level interpretation. They DO NOT replace region candidates and are
+  // not preferred — reconciliation scoring still decides the winner.
+  const plan = planStitch(lines, regions, ends);
+  for (const group of plan.groups) {
+    const valid = group.filter((idx) => regionCandidates[idx] !== null);
+    if (valid.length < 2) continue;
+    const stitched = buildStitchedCandidate(lines, regions, ends, valid, regionCandidates, regions.length);
+    if (stitched) candidates.push(stitched);
   }
   return candidates;
 }

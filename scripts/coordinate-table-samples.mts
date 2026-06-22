@@ -10,7 +10,7 @@
 import { parseStatementText } from "../src/lib/parser.ts";
 import { computeBalanceCheck } from "../src/lib/upload.ts";
 import { groupVisualLines } from "../src/lib/coordinate-table.ts";
-import { buildItems, coordinateSamples } from "../src/lib/coordinate-table-samples.ts";
+import { buildSampleItems, coordinateSamples } from "../src/lib/coordinate-table-samples.ts";
 
 const approx = (a: number | null, b: number | null): boolean => {
   if (a === null || b === null) return a === b;
@@ -20,13 +20,14 @@ const approx = (a: number | null, b: number | null): boolean => {
 let mismatches = 0;
 
 for (const sample of coordinateSamples) {
-  const items = buildItems(sample.rows);
+  const items = buildSampleItems(sample);
   // The plain-text fallback sees exactly what the production extractor produces.
   const text = groupVisualLines(items)
     .map((l) => l.text)
     .join("\n");
   const parsed = parseStatementText(text, items);
   const e = sample.expect;
+  const expectedSource = e.source ?? "coordinate-table";
 
   const mode = parsed.statementKind === "credit-card" ? "credit-card" : "bank-account";
   const check = computeBalanceCheck(parsed.openingBalance, parsed.closingBalance, parsed.rows, mode);
@@ -39,7 +40,7 @@ for (const sample of coordinateSamples) {
   );
 
   const checks: [string, boolean][] = [
-    ["source", ps?.chosenCandidateSource === "coordinate-table"],
+    ["source", ps?.chosenCandidateSource === expectedSource],
     ["statementKind", parsed.statementKind === e.statementKind],
     ["rows", parsed.rows.length === e.rows],
     ["opening", approx(parsed.openingBalance, e.opening)],
@@ -47,8 +48,14 @@ for (const sample of coordinateSamples) {
     ["totalCredits", approx(totalCredits, e.totalCredits)],
     ["totalDebits", approx(totalDebits, e.totalDebits)],
     ["balancePasses", check.passed === e.balancePasses],
-    ["columnOrder", ps?.coordColumnOrder === e.columnOrder],
+    // Column order is only meaningful when a coordinate candidate was chosen.
+    ["columnOrder", expectedSource !== "coordinate-table" || ps?.coordColumnOrder === e.columnOrder],
     ["noSummaryInDesc", descViolations.length === 0],
+    ["stitched", e.stitched === undefined || ps?.coordStitched === e.stitched],
+    [
+      "regionsStitched",
+      e.regionsStitched === undefined || ps?.coordRegionsStitched === e.regionsStitched,
+    ],
   ];
 
   const failed = checks.filter(([, ok]) => !ok).map(([n]) => n);
