@@ -8,6 +8,7 @@ import {
   blankRow,
   computeBalanceCheck,
   resolveBalanceStatus,
+  exportPresentation,
   countFlaggedRows,
   countLowConfidence,
   createMockStatement,
@@ -328,6 +329,38 @@ export function UploadFlow() {
           parserWarningCount={meta.parserWarnings.length}
           rowWarningCount={flaggedCount}
         />
+
+        {(() => {
+          // Prominent export area above the table. "safe" tone ONLY for a passed
+          // balance check; needs-review/limited keeps export available but with an
+          // amber warning and no green/safe styling.
+          const xp = exportPresentation(balanceStatus, rows.length);
+          if (!xp.showTop) return null;
+          const safe = xp.tone === "safe";
+          return (
+            <div
+              className={`flex flex-col gap-4 rounded-2xl border p-6 sm:flex-row sm:items-center sm:justify-between ${
+                safe ? "border-emerald-200 bg-emerald-50" : "border-amber-300 bg-amber-50"
+              }`}
+            >
+              <div className="max-w-md">
+                <p
+                  className={`text-sm font-semibold ${
+                    safe ? "text-emerald-800" : "text-amber-800"
+                  }`}
+                >
+                  {safe ? "Ready to export" : "Review recommended before export"}
+                </p>
+                <p
+                  className={`mt-1 text-sm ${safe ? "text-emerald-700" : "text-amber-700"}`}
+                >
+                  {xp.note}
+                </p>
+              </div>
+              <TransactionExportButtons rows={rows} sourceFileName={meta.fileName} />
+            </div>
+          );
+        })()}
 
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="lg:col-span-2">

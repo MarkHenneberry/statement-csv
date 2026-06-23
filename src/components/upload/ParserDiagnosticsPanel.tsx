@@ -1,4 +1,5 @@
 import type { ParserDiagnostics, ParserQuality } from "@/lib/parser-diagnostics";
+import { estimateAiCost, formatUsd } from "@/lib/ai-cost";
 
 // Developer-only diagnostics. Render only when NODE_ENV !== "production"
 // (the caller is responsible for that gate). Shows safe aggregate metrics — no
@@ -197,6 +198,37 @@ export function ParserDiagnosticsPanel({
             ) : null}
           </dl>
         </div>
+      ) : null}
+
+      {d.aiAssist ? (
+        (() => {
+          const a = d.aiAssist;
+          const ms = (v: number | null) => (v === null ? "—" : `${v} ms`);
+          const num = (v: number | null) => (v === null ? "—" : String(v));
+          const cost = estimateAiCost(a.model, a.aiInputTokenCount, a.aiOutputTokenCount, a.aiTotalTokenCount);
+          return (
+            <div className="mt-4">
+              <p className="text-xs font-medium text-slate-700">Performance &amp; cost (development only)</p>
+              <dl className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                <Metric label="Render duration" value={ms(a.renderDurationMs)} />
+                <Metric label="AI call duration" value={ms(a.aiCallDurationMs)} />
+                <Metric label="Route duration" value={ms(a.routeDurationMs)} />
+                <Metric label="Fallback type" value={a.aiFallbackType} />
+                <Metric label="Vision used" value={yesNo(a.aiVisionUsed)} />
+                <Metric label="AI call count" value={String(a.aiCallCount)} />
+                <Metric label="Image crops" value={String(a.aiImageCropsCount)} />
+                <Metric label="Full-page images" value={String(a.aiFullPageImagesCount)} />
+                <Metric label="Input tokens" value={num(a.aiInputTokenCount)} />
+                <Metric label="Output tokens" value={num(a.aiOutputTokenCount)} />
+                <Metric label="Total tokens" value={num(a.aiTotalTokenCount)} />
+                <Metric
+                  label="Estimated cost"
+                  value={cost.available && cost.usd !== null ? `${formatUsd(cost.usd)} (${cost.note})` : cost.note}
+                />
+              </dl>
+            </div>
+          );
+        })()
       ) : null}
 
       <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">

@@ -107,6 +107,10 @@ export type AiAssistOutcome = {
   visionSelection: VisionSelectionDiag | null;
   /** Wall-clock duration of the single AI call (ms), when measured. */
   aiCallDurationMs: number | null;
+  /** Wall-clock duration of vision rendering (ms), set by the route when measured. */
+  renderDurationMs: number | null;
+  /** Wall-clock duration of the whole parse route (ms), set by the route. */
+  routeDurationMs: number | null;
   /** A deterministic credit-card interest/fee repair was applied to the result. */
   interestFeeRepairApplied: boolean;
   /** Number of interest/fee rows added by the repair. */
@@ -911,6 +915,8 @@ function baseOutcome(statement: ParsedStatement, config: AiAssistConfig): AiAssi
     aiRenderFailedReason: null,
     visionSelection: null,
     aiCallDurationMs: null,
+    renderDurationMs: null,
+    routeDurationMs: null,
     interestFeeRepairApplied: false,
     interestFeeRowsAdded: 0,
   };
@@ -1093,6 +1099,8 @@ export function notAttemptedOutcome(
     aiRenderFailedReason: null,
     visionSelection: null,
     aiCallDurationMs: null,
+    renderDurationMs: null,
+    routeDurationMs: null,
     interestFeeRepairApplied: false,
     interestFeeRowsAdded: 0,
   };

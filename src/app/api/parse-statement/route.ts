@@ -317,6 +317,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
   }
 
+  // Surface safe performance diagnostics on the outcome (dev panel reads these).
+  aiOutcome.renderDurationMs = renderDurationMs;
+  aiOutcome.routeDurationMs = Date.now() - routeStart;
+
   // Safe dev-only trace of the decision path (no statement text/rows/key/prompt).
   if (IS_DEV) {
     console.log("[parse-statement] flow", {

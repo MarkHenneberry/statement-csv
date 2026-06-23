@@ -26,7 +26,8 @@ import {
   type ParsedStatement,
 } from "../src/lib/statement-model.ts";
 import type { TransactionRow } from "../src/lib/upload.ts";
-import { computeBalanceCheck, resolveBalanceStatus } from "../src/lib/upload.ts";
+import { computeBalanceCheck, resolveBalanceStatus, exportPresentation } from "../src/lib/upload.ts";
+import { estimateAiCost, formatUsd, AI_MODEL_PRICING } from "../src/lib/ai-cost.ts";
 import { selectReviewMessage } from "../src/lib/review-messages.ts";
 import { pricingPlans, pricingSubheadline, pricingFooter } from "../src/lib/pricing.ts";
 import { SCANNED_PDF_WARNING } from "../src/lib/parser.ts";
@@ -651,6 +652,48 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, crop: 
   );
   check("repaired adopted statement has the interest row", (r.rows ?? []).some((row) => /interest/i.test(row.description) && (row.debit ?? 0) > 0));
   check("AI call duration recorded", typeof r.outcome.aiCallDurationMs === "number");
+}
+
+// ----- export presentation (top export area) -----
+{
+  const passed = exportPresentation("passed", 50);
+  check("passed conversion shows a top export area", passed.showTop === true);
+  check("passed conversion uses safe tone", passed.tone === "safe");
+  check("passed conversion recommends review", /export now/i.test(passed.note) && /review/i.test(passed.note));
+
+  const review = exportPresentation("review", 50);
+  check("needs-review conversion still shows top export area", review.showTop === true);
+  check("needs-review conversion is NOT safe tone", review.tone !== "safe" && review.tone === "review");
+  check("needs-review conversion shows warning copy", /needs review before export/i.test(review.note));
+
+  const limited = exportPresentation("limited", 50);
+  check("limited conversion is not safe tone", limited.tone === "review");
+
+  const empty = exportPresentation("passed", 0);
+  check("no top export area when there are no rows", empty.showTop === false);
+}
+
+// ----- dev-only cost estimate -----
+{
+  check("gpt-5.4-mini is in the pricing table", Boolean(AI_MODEL_PRICING["gpt-5.4-mini"]));
+  const exact = estimateAiCost("gpt-5.4-mini", 12000, 1500, 13500);
+  check("cost: exact when input+output known", exact.available === true && typeof exact.usd === "number");
+  const p = AI_MODEL_PRICING["gpt-5.4-mini"];
+  const expected = (12000 / 1e6) * p.inputPer1M + (1500 / 1e6) * p.outputPer1M;
+  check("cost: matches the model pricing constants", Math.abs((exact.usd ?? -1) - expected) < 1e-9);
+  check("cost: formats as USD string", /^\$\d/.test(formatUsd(exact.usd ?? 0)));
+
+  const totalOnly = estimateAiCost("gpt-5.4-mini", null, null, 13500);
+  check("cost: total-only is flagged unavailable", totalOnly.available === false && /total tokens only/i.test(totalOnly.note));
+
+  const none = estimateAiCost(null, null, null, null);
+  check("cost: no tokens → unavailable", none.available === false && none.usd === null);
+
+  const unknownModel = estimateAiCost("some-future-model", 1000, 1000, 2000);
+  check("cost: unknown model falls back to default pricing", unknownModel.available === true && /default pricing/i.test(unknownModel.note));
+
+  // Cost output carries no statement content — only numbers, a model name, a label.
+  check("cost note carries no private content", !/\$\d{3,}|account|merchant/i.test(`${exact.note} ${totalOnly.note}`));
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

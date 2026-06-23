@@ -234,6 +234,41 @@ export function computeBalanceCheck(
 /** User-facing balance-check states (mirrors the summary card badge). */
 export type EffectiveBalanceStatus = "passed" | "review" | "limited";
 
+export type ExportPresentation = {
+  /** Whether to show a prominent export area above the transaction table. */
+  showTop: boolean;
+  /** Visual tone: "safe" only for a passed balance check, else "review". */
+  tone: "safe" | "review";
+  /** Short copy shown next to the top export buttons. */
+  note: string;
+};
+
+/**
+ * Decide how the prominent (top-of-results) export area should present. A passed
+ * balance check gets a "safe" tone with an export-now note (still recommending a
+ * review); anything else (needs review / limited) keeps export available but with
+ * a "review" tone + warning copy so it never looks equally safe. No top area when
+ * there are no rows to export.
+ */
+export function exportPresentation(
+  status: EffectiveBalanceStatus,
+  rowCount: number,
+): ExportPresentation {
+  if (rowCount === 0) return { showTop: false, tone: "review", note: "" };
+  if (status === "passed") {
+    return {
+      showTop: true,
+      tone: "safe",
+      note: "Balance check passed. You can export now, but we still recommend reviewing the rows.",
+    };
+  }
+  return {
+    showTop: true,
+    tone: "review",
+    note: "This conversion needs review before export.",
+  };
+}
+
 /**
  * The user-facing balance status MUST reflect the full validation engine, not
  * just the arithmetic identity. The arithmetic check can be trivially "passed"
