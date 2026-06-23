@@ -115,6 +115,10 @@ export type AiAssistOutcome = {
   interestFeeRepairApplied: boolean;
   /** Number of interest/fee rows added by the repair. */
   interestFeeRowsAdded: number;
+  /** Safe labels for why AI was (or could be) run. Empty when verified. */
+  aiEligibilityReasons: string[];
+  /** Safe label for why AI was skipped (null when it ran/was eligible). */
+  aiSkippedReason: string | null;
 };
 
 export type VisionSelectionDiag = {
@@ -153,16 +157,55 @@ export function aiAssistConfig(env: NodeJS.ProcessEnv = process.env): AiAssistCo
   };
 }
 
+export type AiEligibility = {
+  eligible: boolean;
+  /** Safe labels for WHY AI may run (empty when verified). No statement content. */
+  reasons: string[];
+  /** Safe label for why AI was skipped (null when eligible). */
+  skippedReason: string | null;
+};
+
+const hasAmt = (v: number | undefined) => typeof v === "number" && Math.abs(v) >= 0.005;
+
+/**
+ * Decide whether the AI fallback should run, with SAFE diagnostic labels. AI must
+ * NOT run on an already-verified parser result (passed + high confidence + no
+ * material row issues); it runs only when something material prevents verification.
+ * Returns aggregate labels only — never statement content.
+ */
+export function evaluateAiEligibility(statement: ParsedStatement): AiEligibility {
+  const v = statement.validation;
+  const txns = statement.transactions;
+  const reasons: string[] = [];
+
+  if (v.status !== "passed") reasons.push("validation-not-passed");
+  if (v.confidence < LOW_CONFIDENCE_THRESHOLD) reasons.push("low-confidence");
+  if (statement.statementKind === "unknown") reasons.push("unknown-statement-kind");
+  if (txns.length === 0) reasons.push("no-transactions");
+
+  // A row with NO amount on either side is material (it cannot reconcile).
+  if (txns.some((t) => !hasAmt(t.debit) && !hasAmt(t.credit))) {
+    reasons.push("row-missing-amount");
+  }
+  // Missing date/description only matters when it affects a MATERIAL share of rows
+  // (a single stray field on an otherwise-reconciling statement is not worth a call).
+  if (txns.length > 0) {
+    const missingMeta = txns.filter((t) => !t.transactionDate || !t.description.trim()).length;
+    if (missingMeta / txns.length > 0.1) reasons.push("rows-missing-date-or-description");
+  }
+
+  const eligible = reasons.length > 0;
+  return {
+    eligible,
+    reasons,
+    // Skipped because the parser result is already verified / does not need help.
+    skippedReason: eligible ? null : "parser-verified",
+  };
+}
+
 /** AI assist is eligible ONLY when the parser result needs help. */
 export function isAiAssistEligible(statement: ParsedStatement): boolean {
-  const v = statement.validation;
-  if (v.status !== "passed") return true;
-  if (v.confidence < LOW_CONFIDENCE_THRESHOLD) return true;
-  if (statement.statementKind === "unknown") return true;
-  if (statement.transactions.length === 0) return true;
-  return statement.transactions.some(
-    (t) => !t.transactionDate || !t.description.trim() || (t.debit === undefined && t.credit === undefined),
-  );
+  return evaluateAiEligibility(statement).eligible;
 }
 
 // ----- Evidence (compact, no full raw doc) sent to the model -----
@@ -323,6 +366,12 @@ function sanitizeTransactions(arr: unknown): Transaction[] | null {
     if (amount === undefined) {
       amount = debit !== undefined ? -Math.abs(debit) : credit !== undefined ? Math.abs(credit) : 0;
     }
+    // A row with NO real amount on any side is not a transaction (e.g. a zero
+    // "Interest Charge on Cash Advances $0.00" line or a section header the model
+    // echoed). It contributes nothing to reconciliation, so drop it rather than
+    // emit a "missing amount" warning row.
+    const realAmount = (v: number | undefined) => v !== undefined && Math.abs(v) >= 0.005;
+    if (!realAmount(debit) && !realAmount(credit) && !realAmount(amount)) continue;
     out.push({
       transactionDate: typeof raw.transactionDate === "string" ? raw.transactionDate : undefined,
       postingDate: typeof raw.postingDate === "string" ? raw.postingDate : undefined,
@@ -878,8 +927,9 @@ export type AiAssistOptions = {
 
 function baseOutcome(statement: ParsedStatement, config: AiAssistConfig): AiAssistOutcome {
   const d = statement.validation.difference;
+  const elig = evaluateAiEligibility(statement);
   return {
-    eligible: isAiAssistEligible(statement),
+    eligible: elig.eligible,
     configured: config.hasKey && Boolean(config.model),
     enabled: config.enabled,
     attempted: false,
@@ -919,6 +969,8 @@ function baseOutcome(statement: ParsedStatement, config: AiAssistConfig): AiAssi
     routeDurationMs: null,
     interestFeeRepairApplied: false,
     interestFeeRowsAdded: 0,
+    aiEligibilityReasons: elig.reasons,
+    aiSkippedReason: elig.skippedReason,
   };
 }
 
@@ -1103,6 +1155,8 @@ export function notAttemptedOutcome(
     routeDurationMs: null,
     interestFeeRepairApplied: false,
     interestFeeRowsAdded: 0,
+    aiEligibilityReasons: [],
+    aiSkippedReason: status === "not-eligible" ? "parser-verified" : null,
   };
 }
 

@@ -26,7 +26,11 @@ import {
   type ParsedStatement,
 } from "../src/lib/statement-model.ts";
 import type { TransactionRow } from "../src/lib/upload.ts";
-import { computeBalanceCheck, resolveBalanceStatus, exportPresentation } from "../src/lib/upload.ts";
+import { computeBalanceCheck, resolveBalanceStatus, getRowWarnings, deriveAmount, countRowWarningSeverity } from "../src/lib/upload.ts";
+import { conversionPresentation, resolveConversionState, type ConversionInputs } from "../src/lib/conversion-state.ts";
+import { evaluateAiEligibility } from "../src/lib/ai-assist.ts";
+import { recoverDescriptionFromLine } from "../src/lib/parser.ts";
+import { detectMeaningfulPages, analyzePreviewLimit } from "../src/lib/free-preview.ts";
 import { estimateAiCost, formatUsd, AI_MODEL_PRICING } from "../src/lib/ai-cost.ts";
 import { selectReviewMessage } from "../src/lib/review-messages.ts";
 import { pricingPlans, pricingSubheadline, pricingFooter } from "../src/lib/pricing.ts";
@@ -454,13 +458,15 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, crop: 
   const ccBroken = cc([row({ description: "ON YOUR LAST STATEMENT. IF THE", debit: null, credit: null })], 23058.3, 23058.3, { credits: 1519.68, debits: 22972.51 });
   check("broken CC parse is AI-eligible", isAiAssistEligible(ccBroken) === true);
   // AI returns a one-row, near-zero candidate (the false-pass shape) → must be rejected.
+  // The zero-amount row is now dropped during sanitization, leaving no usable rows,
+  // so the safe reason is "no-transaction-table-candidate" (still a clean rejection).
   const r = await runAiAssist(ccBroken, ON, {}, {
     env: {} as NodeJS.ProcessEnv,
     call: reply({ candidate: { statementKind: "credit-card", openingBalance: 23058.3, closingBalance: 23058.3, transactions: [{ description: "ON YOUR LAST STATEMENT", amount: 0 }] } }),
   });
   check(
     "AI near-zero candidate rejected with a safe reason",
-    r.outcome.aiRejectedReason === "ai-returned-near-zero-rows",
+    ["ai-returned-near-zero-rows", "no-transaction-table-candidate"].includes(r.outcome.aiRejectedReason ?? ""),
     `reason=${r.outcome.aiRejectedReason}`,
   );
   check("AI near-zero candidate not adopted", r.outcome.adoptedCandidateSource === "parser" && r.outcome.improved === false);
@@ -654,23 +660,171 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, crop: 
   check("AI call duration recorded", typeof r.outcome.aiCallDurationMs === "number");
 }
 
-// ----- export presentation (top export area) -----
+// ----- zero debit/credit normalization (no false "both filled" warning) -----
 {
-  const passed = exportPresentation("passed", 50);
-  check("passed conversion shows a top export area", passed.showTop === true);
-  check("passed conversion uses safe tone", passed.tone === "safe");
-  check("passed conversion recommends review", /export now/i.test(passed.note) && /review/i.test(passed.note));
+  const debitOnly = row({ debit: 228.85, credit: 0 });
+  check("debit + credit:0 is NOT flagged 'both filled'", !getRowWarnings(debitOnly).includes("Debit and credit cannot both be filled."));
+  check("debit + credit:0 derives a negative (debit) amount", deriveAmount(228.85, 0) === -228.85);
 
-  const review = exportPresentation("review", 50);
-  check("needs-review conversion still shows top export area", review.showTop === true);
-  check("needs-review conversion is NOT safe tone", review.tone !== "safe" && review.tone === "review");
-  check("needs-review conversion shows warning copy", /needs review before export/i.test(review.note));
+  const creditOnly = row({ debit: 0, credit: 263.97 });
+  check("credit + debit:0 is NOT flagged 'both filled'", !getRowWarnings(creditOnly).includes("Debit and credit cannot both be filled."));
+  check("credit + debit:0 derives a positive (credit) amount", deriveAmount(0, 263.97) === 263.97);
 
-  const limited = exportPresentation("limited", 50);
-  check("limited conversion is not safe tone", limited.tone === "review");
+  const bothZero = row({ debit: 0, credit: 0 });
+  check("debit:0 + credit:0 is flagged as missing amount", getRowWarnings(bothZero).includes("Add a debit or credit amount."));
 
-  const empty = exportPresentation("passed", 0);
-  check("no top export area when there are no rows", empty.showTop === false);
+  // A reconciled credit-card result (every row one-sided, opposite column 0) has no row warnings.
+  const ccRows = [
+    row({ debit: 22000, credit: 0, date: "2025-01-10", description: "Purchase A" }),
+    row({ debit: 936.57, credit: 0, date: "2025-01-12", description: "Purchase B" }),
+    row({ debit: 35.94, credit: 0, date: "2025-01-29", description: "Interest Charge on Purchases" }),
+    row({ debit: 0, credit: 1519.68, date: "2025-01-05", description: "Payment" }),
+  ];
+  const sev = countRowWarningSeverity(ccRows);
+  check("zero-normalized credit-card rows have no material warnings", sev.material === 0, `material=${sev.material}`);
+}
+
+// ----- conversion presentation state -----
+{
+  const base: ConversionInputs = {
+    balanceStatus: "passed",
+    confidence: 0.95,
+    rowCount: 50,
+    materialWarningCount: 0,
+    minorWarningCount: 0,
+    summaryMatched: true,
+    previewLimited: false,
+    unsupported: false,
+  };
+  const verified = conversionPresentation(base);
+  check("verified state when passed + high conf + no warnings", verified.state === "verified");
+  check("verified badge is green + 'Verified'", verified.badgeTone === "green" && verified.badgeLabel === "Verified");
+  check("verified shows safe export + export-ready copy", verified.showTopExport && verified.exportTone === "safe");
+  check("verified secondary copy is optional spot-check", /spot-check/i.test(verified.secondaryCopy ?? ""));
+
+  const reviewRec = conversionPresentation({ ...base, minorWarningCount: 3 });
+  check("review-recommended when passed but minor warnings", reviewRec.state === "review-recommended");
+  check("review-recommended is not safe export tone", reviewRec.exportTone !== "safe");
+
+  const needs = conversionPresentation({ ...base, balanceStatus: "review", materialWarningCount: 5 });
+  check("needs-review state when not passed / material warnings", needs.state === "needs-review");
+  check("needs-review never shows green 'Ready to export'", needs.exportTone !== "safe" && needs.badgeTone !== "green");
+  check("needs-review copy says could not verify", /could not fully verify/i.test(needs.bannerBody));
+
+  const preview = conversionPresentation({ ...base, previewLimited: true });
+  check("preview-limited state when only preview pages converted", preview.state === "preview-limited");
+  check("preview-limited is NOT phrased as parser failure", !/fail/i.test(preview.bannerBody) && /preview/i.test(preview.bannerTitle));
+  check("preview-limited export uses 'preview' label + neutral tone", preview.exportLabelPrefix === "preview" && preview.exportTone !== "safe");
+
+  const unsupported = conversionPresentation({ ...base, unsupported: true, rowCount: 0 });
+  check("unsupported state hides top export", unsupported.state === "unsupported" && unsupported.showTopExport === false);
+
+  const noRows = conversionPresentation({ ...base, rowCount: 0 });
+  check("no rows → needs-review, no top export", resolveConversionState({ ...base, rowCount: 0 }) === "needs-review" && noRows.showTopExport === false);
+
+  // Reclassification: 1 missing description in a reconciled 65-row statement is a
+  // SMALL localized issue → review-recommended, NOT needs-review.
+  const oneLocalized = conversionPresentation({ ...base, rowCount: 65, materialWarningCount: 1 });
+  check("1 material warning in 65 reconciled rows → review-recommended", oneLocalized.state === "review-recommended");
+  check("localized review copy says totals matched (not 'could not verify')", /totals matched/i.test(oneLocalized.bannerBody) && !/could not fully verify/i.test(oneLocalized.bannerBody));
+  check("localized review copy mentions the highlighted row count", /1 highlighted row/i.test(oneLocalized.bannerBody));
+
+  // Many material warnings (over the rate/count threshold) → needs-review.
+  const manyMaterial = conversionPresentation({ ...base, rowCount: 65, materialWarningCount: 10 });
+  check("many material warnings → needs-review", manyMaterial.state === "needs-review");
+
+  // Preview-limited overlay must NOT hide a genuine needs-review problem.
+  const previewButBroken = conversionPresentation({ ...base, previewLimited: true, rowCount: 65, materialWarningCount: 10 });
+  check("preview-limited does not mask needs-review", previewButBroken.state === "needs-review");
+
+  // Preview-limited overlays a verified/review base (page cap, content otherwise good).
+  const previewOverVerified = conversionPresentation({ ...base, previewLimited: true });
+  check("preview-limited overlays an otherwise-verified base", previewOverVerified.state === "preview-limited");
+}
+
+// ----- zero/no-amount AI rows are dropped (cleanup) -----
+{
+  const broken = cc([row({ description: "warn", debit: null, credit: null })], 23058.3, 23058.3, { credits: 1519.68, debits: 22972.51 });
+  const r = await runAiAssist(broken, ON, {}, {
+    env: {} as NodeJS.ProcessEnv,
+    evidence: { detectedBalances: [1605.47, 23058.3] },
+    // AI returns the real rows PLUS a zero "Interest Charge on Cash Advances" row.
+    call: reply({ candidate: { statementKind: "credit-card", openingBalance: 1605.47, closingBalance: 23058.3, summaryTotals: { totalCredits: 1519.68, totalDebits: 22972.51 }, transactions: [
+      { transactionDate: "2025-01-10", description: "Purchase A", debit: 22000, amount: -22000 },
+      { transactionDate: "2025-01-12", description: "Purchase B", debit: 936.57, amount: -936.57 },
+      { transactionDate: "2025-01-29", description: "Interest Charge on Purchases", debit: 35.94, amount: -35.94 },
+      { transactionDate: "2025-01-29", description: "Interest Charge on Cash Advances", debit: 0, credit: 0, amount: 0 },
+      { transactionDate: "2025-01-05", description: "Payment", credit: 1519.68, amount: 1519.68 },
+    ] } }),
+  });
+  check("zero/no-amount AI row is dropped (4 real rows, not 5)", (r.rows ?? []).length === 4, `rows=${(r.rows ?? []).length}`);
+  check("no row is the zero cash-advance line", !(r.rows ?? []).some((x) => /cash advances/i.test(x.description)));
+  check("reconciled credit-card is warning-free after cleanup", countRowWarningSeverity(r.rows ?? []).material === 0);
+  check("cleanup result still reconciles + adopted", r.outcome.improved === true && r.statement!.validation.status === "passed");
+}
+
+// ----- meaningful-page detection + preview-limit analysis -----
+{
+  const txPage = "01/02 Coffee Shop $4.50\n02/02 Grocery $52.10\n03/02 Payment $100.00";
+  const trailerPage = "Thank you for banking with us.\nContact us at the number on the back of your card.";
+  const summaryPage = "Statement Period 01/02/2025 - 28/02/2025\nTotal Deposits $100.00";
+  const meaningful = detectMeaningfulPages([summaryPage, txPage, trailerPage]);
+  check("meaningful pages = transaction pages only", meaningful.length === 1 && meaningful[0] === 2);
+
+  // Skipped page is a trailer → NOT preview-limited.
+  const a1 = analyzePreviewLimit([txPage, trailerPage], 1);
+  check("trailer-only skipped page → not preview-limited", a1.previewLimited === false && a1.previewLimitedReason === "skipped-pages-not-meaningful");
+  // Skipped page has transactions → preview-limited.
+  const a2 = analyzePreviewLimit([summaryPage, txPage], 1);
+  check("skipped transaction page → preview-limited", a2.previewLimited === true && a2.skippedMeaningfulPagesCount === 1 && a2.previewLimitedReason === "skipped-meaningful-pages");
+  // No truncation.
+  const a3 = analyzePreviewLimit([txPage], 1);
+  check("no truncation → not preview-limited", a3.previewLimited === false && a3.previewLimitedReason === "no-truncation");
+  check("preview analysis contains no private content", !JSON.stringify(a2).match(/coffee|grocery|\$/i));
+}
+
+// ----- generic bank-table description recovery -----
+{
+  // Description appears AFTER the amount/date columns (leading-text rule misses it).
+  const recovered = recoverDescriptionFromLine("01/02 1,234.56 5,000.00 PAYROLL DEPOSIT", "01/02");
+  check("recovers description from trailing text", /payroll deposit/i.test(recovered));
+  // Nothing word-like → empty (caller still flags).
+  const none = recoverDescriptionFromLine("01/02 1,234.56 5,000.00", "01/02");
+  check("no description to recover → empty string", none === "");
+}
+
+// ----- AI not called for a minor localized warning after reconciliation -----
+{
+  // 1 missing description in 65 reconciled rows: validation passed, high conf.
+  const many: TransactionRow[] = [];
+  for (let i = 0; i < 64; i += 1) many.push(row({ debit: 10, credit: 0, date: "2025-01-02", description: `Row ${i}` }));
+  many.push(row({ debit: 10, credit: 0, date: "2025-01-02", description: "" })); // 1 missing description
+  const stmt = cc(many, 0, 650, { credits: 0, debits: 650 });
+  const elig = evaluateAiEligibility(stmt);
+  check("AI not called for 1 missing description in 65 reconciled rows", elig.eligible === false, `reasons=${elig.reasons.join(",")}`);
+}
+
+// ----- AI eligibility tightening -----
+{
+  // Verified parser result (passed, high confidence, clean rows) → AI skipped.
+  const clean = cc(
+    [row({ debit: 100, credit: 0, date: "2025-01-02", description: "A" }), row({ credit: 100, debit: 0, date: "2025-01-03", description: "Pay" })],
+    100,
+    100,
+    { credits: 100, debits: 100 },
+  );
+  const cleanElig = evaluateAiEligibility(clean);
+  check("AI not eligible for verified parser result", cleanElig.eligible === false && cleanElig.reasons.length === 0);
+  check("AI skipped reason is a safe label", cleanElig.skippedReason === "parser-verified");
+
+  // Summary mismatch / missed-table credit card → AI eligible.
+  const missed = cc([row({ description: "warn", debit: null, credit: null })], 23058.3, 23058.3, { credits: 1519.68, debits: 22972.51 });
+  const missedElig = evaluateAiEligibility(missed);
+  check("AI eligible for missed-table credit card", missedElig.eligible === true);
+  check("AI eligibility reasons are safe labels", missedElig.reasons.every((r) => /^[a-z-]+$/.test(r)) && missedElig.reasons.includes("validation-not-passed"));
+
+  // Diagnostics carry no private content.
+  check("eligibility labels contain no private content", !JSON.stringify({ ...cleanElig, ...missedElig }).match(/\$|account|merchant|warn/i));
 }
 
 // ----- dev-only cost estimate -----

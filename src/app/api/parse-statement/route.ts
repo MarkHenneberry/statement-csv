@@ -31,6 +31,7 @@ import {
 import {
   FREE_PREVIEW_MAX_PAGES,
   FREE_PREVIEW_TRUNCATION_NOTICE,
+  analyzePreviewLimit,
 } from "@/lib/free-preview";
 
 // PDF parsing needs the Node runtime (unpdf / pdf.js is not Edge-compatible).
@@ -93,6 +94,8 @@ function errorResponse(fileName: string, warning: string, status = 400) {
     openingBalance: null,
     closingBalance: null,
     warnings: [warning],
+    previewLimited: false,
+    pagesProcessed: 0,
   };
   return NextResponse.json(body, { status });
 }
@@ -160,6 +163,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       openingBalance: null,
       closingBalance: null,
       warnings: [SCANNED_PDF_WARNING],
+      previewLimited: false,
+      pagesProcessed: 0,
       // Always include aiAssist so the client/diagnostics can rely on it.
       aiAssist: notAttemptedOutcome(aiAssistConfig(), "not-eligible"),
     };
@@ -171,11 +176,15 @@ export async function POST(request: Request): Promise<NextResponse> {
   // NOT enforced here (see free-preview.ts TODO). This is honest free-preview
   // behavior, not abuse protection.
   const totalPages = extracted.pageCount ?? extracted.pages.length;
-  const truncated = totalPages > FREE_PREVIEW_MAX_PAGES;
-  const previewPages = truncated ? extracted.pages.slice(0, FREE_PREVIEW_MAX_PAGES) : extracted.pages;
-  const previewItems = truncated
+  const capped = totalPages > FREE_PREVIEW_MAX_PAGES;
+  const previewPages = capped ? extracted.pages.slice(0, FREE_PREVIEW_MAX_PAGES) : extracted.pages;
+  const previewItems = capped
     ? extracted.items.filter((it) => it.page <= FREE_PREVIEW_MAX_PAGES)
     : extracted.items;
+  // Preview is only "limited" when the SKIPPED pages carry meaningful (transaction)
+  // content. Skipping blank/trailer/contact pages is not a limitation.
+  const previewAnalysis = analyzePreviewLimit(extracted.pages, previewPages.length);
+  const truncated = previewAnalysis.previewLimited;
 
   // Run the explicit pipeline: extracted text + coordinate items → ParsedStatement
   // (model) → validation. Export/preview rows come from the model's transactions,
@@ -329,7 +338,13 @@ export async function POST(request: Request): Promise<NextResponse> {
       validationStatus: finalStatement.validation.status,
       validationDifference: finalStatement.validation.difference ?? null,
       confidence: finalStatement.validation.confidence,
+      previewLimited: truncated,
+      previewLimitedReason: previewAnalysis.previewLimitedReason,
+      meaningfulPagesDetected: previewAnalysis.meaningfulPagesDetected,
+      skippedMeaningfulPagesCount: previewAnalysis.skippedMeaningfulPagesCount,
       aiEligible: aiOutcome.eligible,
+      aiEligibilityReasons: aiOutcome.aiEligibilityReasons,
+      aiSkippedReason: aiOutcome.aiSkippedReason,
       aiConfigured: aiOutcome.configured,
       aiEnabled: aiOutcome.enabled,
       aiAttempted: aiOutcome.attempted,
@@ -381,6 +396,11 @@ export async function POST(request: Request): Promise<NextResponse> {
     openingBalance: moneyString(finalStatement.openingBalance ?? null),
     closingBalance: moneyString(finalStatement.closingBalance ?? null),
     warnings,
+    previewLimited: truncated,
+    pagesProcessed: previewPages.length,
+    meaningfulPagesDetected: previewAnalysis.meaningfulPagesDetected,
+    skippedMeaningfulPagesCount: previewAnalysis.skippedMeaningfulPagesCount,
+    previewLimitedReason: previewAnalysis.previewLimitedReason,
     creditCardStats: result.creditCardStats,
     parseStats: result.parseStats,
     validation: finalStatement.validation,

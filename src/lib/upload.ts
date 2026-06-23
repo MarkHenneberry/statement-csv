@@ -85,7 +85,26 @@ export function fromCents(cents: number): number {
 }
 
 /**
+ * A debit/credit column counts as "filled" only when it holds a real, nonzero
+ * amount. A numeric 0 means "this side is empty" (e.g. a credit-card row with a
+ * real debit and credit 0) and must NOT be treated as a filled value — otherwise
+ * a normal one-sided row is falsely flagged "debit and credit both filled".
+ */
+export function hasAmount(v: number | null | undefined): v is number {
+  return typeof v === "number" && Number.isFinite(v) && Math.abs(v) >= 0.005;
+}
+
+/**
+ * Normalize a debit/credit field for display + export: a missing or zero value
+ * becomes null (blank), so the opposite column is never shown as "0.00".
+ */
+export function normalizeMoneyField(v: number | null | undefined): number | null {
+  return hasAmount(v) ? v : null;
+}
+
+/**
  * Derive the signed Amount from debit/credit. Amount is never edited directly.
+ * Zero counts as empty (see hasAmount), so debit:228.85/credit:0 is debit-only.
  *  - debit only  -> negative amount
  *  - credit only -> positive amount
  *  - both blank  -> null (blank); row gets a warning elsewhere
@@ -95,11 +114,11 @@ export function deriveAmount(
   debit: number | null,
   credit: number | null,
 ): number | null {
-  const hasDebit = debit !== null;
-  const hasCredit = credit !== null;
-  if (hasDebit && hasCredit) return null;
-  if (hasDebit) return fromCents(-toCents(debit as number));
-  if (hasCredit) return fromCents(toCents(credit as number));
+  const debitFilled = hasAmount(debit);
+  const creditFilled = hasAmount(credit);
+  if (debitFilled && creditFilled) return null;
+  if (debitFilled) return fromCents(-toCents(debit as number));
+  if (creditFilled) return fromCents(toCents(credit as number));
   return null;
 }
 
@@ -160,15 +179,17 @@ export function getRowWarnings(row: TransactionRow): string[] {
   if (!row.date.trim()) warnings.push("Missing date.");
   if (!row.description.trim()) warnings.push("Missing description.");
 
-  const hasDebit = row.debit !== null;
-  const hasCredit = row.credit !== null;
-  if (hasDebit && hasCredit) {
+  // Zero counts as empty, so a normal one-sided row (real debit + credit 0) is
+  // NOT flagged "both filled". Both-empty rows are still flagged as missing.
+  const debitFilled = hasAmount(row.debit);
+  const creditFilled = hasAmount(row.credit);
+  if (debitFilled && creditFilled) {
     warnings.push("Debit and credit cannot both be filled.");
   }
-  if (!hasDebit && !hasCredit) {
+  if (!debitFilled && !creditFilled) {
     warnings.push("Add a debit or credit amount.");
   }
-  if ((hasDebit && (row.debit as number) < 0) || (hasCredit && (row.credit as number) < 0)) {
+  if ((row.debit !== null && (row.debit as number) < 0) || (row.credit !== null && (row.credit as number) < 0)) {
     warnings.push("Money values cannot be negative.");
   }
   if (row.confidence < LOW_CONFIDENCE_THRESHOLD) {
@@ -188,6 +209,33 @@ export function countFlaggedRows(rows: TransactionRow[]): number {
 
 export function countLowConfidence(rows: TransactionRow[]): number {
   return rows.filter((r) => r.confidence < LOW_CONFIDENCE_THRESHOLD).length;
+}
+
+// Warnings that, on their own, do NOT block a "verified" conversion (the row is
+// usable; the user may still want to glance at it).
+const MINOR_ROW_WARNINGS = new Set<string>(["Low confidence — please review."]);
+
+/** Severity of a row's warnings: material issues block verification, minor ones don't. */
+export function rowWarningSeverity(row: TransactionRow): "none" | "minor" | "material" {
+  const warnings = getRowWarnings(row);
+  if (warnings.length === 0) return "none";
+  // The row's own extraction note (sourceNote) is advisory, not a hard data error.
+  const material = warnings.some(
+    (w) => !MINOR_ROW_WARNINGS.has(w) && w !== row.warning,
+  );
+  return material ? "material" : "minor";
+}
+
+/** Count rows by warning severity — drives the conversion presentation state. */
+export function countRowWarningSeverity(rows: TransactionRow[]): { material: number; minor: number } {
+  let material = 0;
+  let minor = 0;
+  for (const row of rows) {
+    const sev = rowWarningSeverity(row);
+    if (sev === "material") material += 1;
+    else if (sev === "minor") minor += 1;
+  }
+  return { material, minor };
 }
 
 export function computeBalanceCheck(
@@ -233,41 +281,6 @@ export function computeBalanceCheck(
 
 /** User-facing balance-check states (mirrors the summary card badge). */
 export type EffectiveBalanceStatus = "passed" | "review" | "limited";
-
-export type ExportPresentation = {
-  /** Whether to show a prominent export area above the transaction table. */
-  showTop: boolean;
-  /** Visual tone: "safe" only for a passed balance check, else "review". */
-  tone: "safe" | "review";
-  /** Short copy shown next to the top export buttons. */
-  note: string;
-};
-
-/**
- * Decide how the prominent (top-of-results) export area should present. A passed
- * balance check gets a "safe" tone with an export-now note (still recommending a
- * review); anything else (needs review / limited) keeps export available but with
- * a "review" tone + warning copy so it never looks equally safe. No top area when
- * there are no rows to export.
- */
-export function exportPresentation(
-  status: EffectiveBalanceStatus,
-  rowCount: number,
-): ExportPresentation {
-  if (rowCount === 0) return { showTop: false, tone: "review", note: "" };
-  if (status === "passed") {
-    return {
-      showTop: true,
-      tone: "safe",
-      note: "Balance check passed. You can export now, but we still recommend reviewing the rows.",
-    };
-  }
-  return {
-    showTop: true,
-    tone: "review",
-    note: "This conversion needs review before export.",
-  };
-}
 
 /**
  * The user-facing balance status MUST reflect the full validation engine, not

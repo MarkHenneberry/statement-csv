@@ -29,13 +29,17 @@ export function TransactionExportButtons({
   rows,
   sourceFileName,
   className = "",
+  labelPrefix,
 }: {
   rows: TransactionRow[];
   sourceFileName: string;
   className?: string;
+  /** Optional label qualifier, e.g. "preview" → "Download preview CSV". */
+  labelPrefix?: string;
 }) {
   const [excelBusy, setExcelBusy] = useState(false);
   const disabled = rows.length === 0;
+  const qualifier = labelPrefix ? `${labelPrefix} ` : "";
 
   function handleCsv() {
     // Pure client-side export — no upload, no storage.
@@ -85,7 +89,7 @@ export function TransactionExportButtons({
         <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor" aria-hidden="true">
           <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
         </svg>
-        Download CSV
+        Download {qualifier}CSV
       </button>
       <button
         type="button"
@@ -96,7 +100,7 @@ export function TransactionExportButtons({
         <svg className="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor" aria-hidden="true">
           <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
         </svg>
-        {excelBusy ? "Preparing…" : "Download Excel"}
+        {excelBusy ? "Preparing…" : `Download ${qualifier}Excel`}
       </button>
     </div>
   );

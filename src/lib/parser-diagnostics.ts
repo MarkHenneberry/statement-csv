@@ -51,6 +51,14 @@ export type ParserDiagnostics = {
   quality: ParserQuality;
   qualityLabel: string;
   qualityReason: string;
+  /** Free-preview page-cap diagnostics (safe counts/labels only). */
+  preview?: {
+    previewLimited: boolean;
+    pagesProcessed: number | null;
+    meaningfulPagesDetected: number | null;
+    skippedMeaningfulPagesCount: number | null;
+    previewLimitedReason: string | null;
+  };
 };
 
 // Warning count at or above this is treated as a poor-quality signal.
@@ -70,6 +78,7 @@ export function buildParserDiagnostics(input: {
   parseStats?: LayoutParseStats;
   validation?: StatementValidation;
   aiAssist?: AiAssistOutcome;
+  preview?: ParserDiagnostics["preview"];
 }): ParserDiagnostics {
   const {
     source,
@@ -85,6 +94,7 @@ export function buildParserDiagnostics(input: {
     parseStats,
     validation,
     aiAssist,
+    preview,
   } = input;
 
   const totalRows = rows.length;
@@ -178,5 +188,6 @@ export function buildParserDiagnostics(input: {
     quality,
     qualityLabel,
     qualityReason,
+    preview,
   };
 }

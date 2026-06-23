@@ -8,12 +8,14 @@ import {
   blankRow,
   computeBalanceCheck,
   resolveBalanceStatus,
-  exportPresentation,
   countFlaggedRows,
   countLowConfidence,
+  countRowWarningSeverity,
   createMockStatement,
   type BalanceMode,
 } from "@/lib/upload";
+import { conversionPresentation } from "@/lib/conversion-state";
+import { SCANNED_PDF_WARNING } from "@/lib/review-messages";
 import type {
   ParseStatementResponse,
   StatementKind,
@@ -34,7 +36,6 @@ import { TransactionExportButtons } from "@/components/upload/TransactionExportB
 import { UploadWarning } from "@/components/upload/UploadWarning";
 import { ParserDiagnosticsPanel } from "@/components/upload/ParserDiagnosticsPanel";
 import { buildParserDiagnostics } from "@/lib/parser-diagnostics";
-import { selectReviewMessage } from "@/lib/review-messages";
 import type { AiAssistOutcome } from "@/lib/ai-assist";
 
 type Status = "upload" | "processing" | "preview" | "error";
@@ -50,6 +51,11 @@ type PreviewMeta = {
   openingBalance: number | null;
   closingBalance: number | null;
   parserWarnings: string[];
+  previewLimited: boolean;
+  pagesProcessed: number | null;
+  meaningfulPagesDetected?: number;
+  skippedMeaningfulPagesCount?: number;
+  previewLimitedReason?: string;
   creditCardStats?: CreditCardParseStats;
   parseStats?: LayoutParseStats;
   validation?: StatementValidation;
@@ -114,6 +120,11 @@ export function UploadFlow() {
       openingBalance: data.openingBalance !== null ? Number(data.openingBalance) : null,
       closingBalance: data.closingBalance !== null ? Number(data.closingBalance) : null,
       parserWarnings: data.warnings,
+      previewLimited: data.previewLimited ?? false,
+      pagesProcessed: data.pagesProcessed ?? null,
+      meaningfulPagesDetected: data.meaningfulPagesDetected,
+      skippedMeaningfulPagesCount: data.skippedMeaningfulPagesCount,
+      previewLimitedReason: data.previewLimitedReason,
       creditCardStats: data.creditCardStats,
       parseStats: data.parseStats,
       validation: data.validation,
@@ -163,6 +174,8 @@ export function UploadFlow() {
       openingBalance: stmt.openingBalance,
       closingBalance: stmt.closingBalance,
       parserWarnings: [],
+      previewLimited: false,
+      pagesProcessed: stmt.pagesUsed,
     });
     setErrorMessage(null);
     setStatus("preview");
@@ -236,20 +249,36 @@ export function UploadFlow() {
     const validationStatus = meta.validation?.status;
     const balanceStatus: BalanceStatus = resolveBalanceStatus(check, validationStatus);
 
-    const reviewReasons: string[] = [...meta.parserWarnings];
+    // Centralized conversion presentation state (verified / review-recommended /
+    // needs-review / preview-limited / unsupported). Drives badge, banner, copy,
+    // and export styling so confidence is communicated consistently.
+    const { material: materialWarningCount, minor: minorWarningCount } =
+      countRowWarningSeverity(rows);
+    const unsupported = meta.parserWarnings.includes(SCANNED_PDF_WARNING);
+    const presentation = conversionPresentation({
+      balanceStatus,
+      confidence: meta.validation?.confidence ?? (balanceStatus === "passed" ? 1 : 0),
+      rowCount: rows.length,
+      materialWarningCount,
+      minorWarningCount,
+      summaryMatched: null,
+      previewLimited: meta.previewLimited,
+      unsupported,
+    });
+
+    // Specific issues to list under the banner (preview truncation is NOT a parse
+    // problem and is communicated by the preview-limited state, so exclude it).
+    const reviewReasons: string[] = meta.parserWarnings.filter(
+      (w) => w !== SCANNED_PDF_WARNING && !/free preview covers the first/i.test(w),
+    );
     if (check.available && !check.passed) {
       reviewReasons.push(
         "The balance check did not match the statement's closing balance.",
       );
     }
-    // Surface validation-engine issues (e.g. parsed totals not matching the
-    // statement's summary totals) even when the arithmetic difference is 0.
     if (validationStatus === "needs-review") {
       for (const issue of meta.validation?.issues ?? []) {
         if (!reviewReasons.includes(issue)) reviewReasons.push(issue);
-      }
-      if ((meta.validation?.issues ?? []).length === 0) {
-        reviewReasons.push("The parsed transactions do not match the statement summary totals.");
       }
     }
     if (lowConfidenceCount > 0) {
@@ -259,7 +288,6 @@ export function UploadFlow() {
         } found — check the highlighted rows.`,
       );
     }
-    const needsReview = reviewReasons.length > 0 || rows.length === 0;
 
     return (
       <div className="space-y-6">
@@ -295,19 +323,26 @@ export function UploadFlow() {
         ) : null}
 
         {(() => {
-          // Honest result banner. AI-assisted wording only appears when a real,
-          // usable AI result was applied (status improved/no-improvement/reconciled).
-          const msg = selectReviewMessage(meta.aiAssist?.status, needsReview);
+          // State-driven result banner. Copy matches the conversion state so we
+          // never imply a parse failure for a preview-limited result, nor green
+          // "verified" wording when the conversion still needs review.
+          const showReasons =
+            (presentation.state === "needs-review" ||
+              presentation.state === "review-recommended") &&
+            reviewReasons.length > 0;
           return (
-            <UploadWarning variant={msg.variant} title={msg.title}>
-              <p>{msg.body}</p>
-              {rows.length === 0 ? (
+            <UploadWarning variant={presentation.bannerVariant} title={presentation.bannerTitle}>
+              <p>{presentation.bannerBody}</p>
+              {presentation.secondaryCopy ? (
+                <p className="mt-1 text-sm opacity-90">{presentation.secondaryCopy}</p>
+              ) : null}
+              {rows.length === 0 && presentation.state !== "unsupported" ? (
                 <p className="mt-1">
                   No transaction rows were found. You can add rows manually below, or load
                   the sample preview to see how a completed conversion looks.
                 </p>
               ) : null}
-              {msg.variant === "warning" && reviewReasons.length > 0 ? (
+              {showReasons ? (
                 <ul className="mt-1 list-inside list-disc space-y-0.5">
                   {reviewReasons.map((reason) => (
                     <li key={reason}>{reason}</li>
@@ -328,36 +363,41 @@ export function UploadFlow() {
           balanceStatus={balanceStatus}
           parserWarningCount={meta.parserWarnings.length}
           rowWarningCount={flaggedCount}
+          conversionBadge={{ label: presentation.badgeLabel, tone: presentation.badgeTone }}
         />
 
         {(() => {
-          // Prominent export area above the table. "safe" tone ONLY for a passed
-          // balance check; needs-review/limited keeps export available but with an
-          // amber warning and no green/safe styling.
-          const xp = exportPresentation(balanceStatus, rows.length);
-          if (!xp.showTop) return null;
-          const safe = xp.tone === "safe";
+          // Prominent export area above the table. Styling + heading come from the
+          // conversion state: green/safe ONLY when verified; amber for review;
+          // neutral for a preview-limited (partial) export. "Ready to export" is
+          // never shown for needs-review or preview-limited.
+          if (!presentation.showTopExport) return null;
+          const tone = presentation.exportTone;
+          const container =
+            tone === "safe"
+              ? "border-emerald-200 bg-emerald-50"
+              : tone === "review"
+                ? "border-amber-300 bg-amber-50"
+                : "border-slate-200 bg-slate-50";
+          const titleColor =
+            tone === "safe" ? "text-emerald-800" : tone === "review" ? "text-amber-800" : "text-slate-800";
+          const noteColor =
+            tone === "safe" ? "text-emerald-700" : tone === "review" ? "text-amber-700" : "text-slate-600";
+          const heading =
+            tone === "safe" ? "Ready to export" : tone === "neutral" ? "Download preview" : "Review before export";
           return (
             <div
-              className={`flex flex-col gap-4 rounded-2xl border p-6 sm:flex-row sm:items-center sm:justify-between ${
-                safe ? "border-emerald-200 bg-emerald-50" : "border-amber-300 bg-amber-50"
-              }`}
+              className={`flex flex-col gap-4 rounded-2xl border p-6 sm:flex-row sm:items-center sm:justify-between ${container}`}
             >
               <div className="max-w-md">
-                <p
-                  className={`text-sm font-semibold ${
-                    safe ? "text-emerald-800" : "text-amber-800"
-                  }`}
-                >
-                  {safe ? "Ready to export" : "Review recommended before export"}
-                </p>
-                <p
-                  className={`mt-1 text-sm ${safe ? "text-emerald-700" : "text-amber-700"}`}
-                >
-                  {xp.note}
-                </p>
+                <p className={`text-sm font-semibold ${titleColor}`}>{heading}</p>
+                <p className={`mt-1 text-sm ${noteColor}`}>{presentation.exportNote}</p>
               </div>
-              <TransactionExportButtons rows={rows} sourceFileName={meta.fileName} />
+              <TransactionExportButtons
+                rows={rows}
+                sourceFileName={meta.fileName}
+                labelPrefix={presentation.exportLabelPrefix ?? undefined}
+              />
             </div>
           );
         })()}
@@ -407,6 +447,13 @@ export function UploadFlow() {
               parseStats: meta.parseStats,
               validation: meta.validation,
               aiAssist: meta.aiAssist,
+              preview: {
+                previewLimited: meta.previewLimited,
+                pagesProcessed: meta.pagesProcessed,
+                meaningfulPagesDetected: meta.meaningfulPagesDetected ?? null,
+                skippedMeaningfulPagesCount: meta.skippedMeaningfulPagesCount ?? null,
+                previewLimitedReason: meta.previewLimitedReason ?? null,
+              },
             })}
           />
         ) : null}

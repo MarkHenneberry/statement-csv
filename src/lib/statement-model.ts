@@ -17,6 +17,7 @@ import {
   computeBalanceCheck,
   deriveAmount,
   getRowWarnings,
+  normalizeMoneyField,
   blankRow,
   toCents,
   LOW_CONFIDENCE_THRESHOLD,
@@ -122,8 +123,10 @@ export function transactionToRow(t: Transaction): TransactionRow {
   row.id = t.id ?? row.id;
   row.date = t.transactionDate ?? "";
   row.description = t.description;
-  row.debit = t.debit ?? null;
-  row.credit = t.credit ?? null;
+  // A zero debit/credit means "this side is empty" — store null so the opposite
+  // column never renders/exports as "0.00" and the row isn't falsely flagged.
+  row.debit = normalizeMoneyField(t.debit);
+  row.credit = normalizeMoneyField(t.credit);
   row.balance = t.balance ?? null;
   row.category = t.category ?? "";
   row.confidence = t.confidence;

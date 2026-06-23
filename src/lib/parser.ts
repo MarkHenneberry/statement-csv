@@ -168,6 +168,16 @@ export type ParseStatementResponse = {
   openingBalance: string | null;
   closingBalance: string | null;
   warnings: string[];
+  /** True when MEANINGFUL pages were skipped by the free-preview page cap. */
+  previewLimited: boolean;
+  /** Pages actually converted (<= pageCount when previewLimited). */
+  pagesProcessed: number | null;
+  /** Pages that contain transaction-like content (safe count, no text). */
+  meaningfulPagesDetected?: number;
+  /** Meaningful pages skipped by the page cap (safe count). */
+  skippedMeaningfulPagesCount?: number;
+  /** Safe label for the preview-limit decision. */
+  previewLimitedReason?: "no-truncation" | "skipped-meaningful-pages" | "skipped-pages-not-meaningful";
   /** Safe aggregate parsing counters (dev diagnostics). No raw content. */
   creditCardStats?: CreditCardParseStats;
   parseStats?: LayoutParseStats;
@@ -256,6 +266,27 @@ const LEADING_JUNK_RE =
 export function cleanDescription(s: string): string {
   const collapsed = s.replace(/\s+/g, " ").trim();
   return collapsed.replace(LEADING_JUNK_RE, "").trim();
+}
+
+/**
+ * Best-effort description recovery for a bank-table row whose description column
+ * was not captured by the leading-text rule (e.g. the description sits AFTER the
+ * amount/date columns). Strips the date token and money amounts from the whole
+ * line and keeps the remaining alphabetic text. Generic — no bank-specific text.
+ * Returns "" when nothing word-like remains (so the caller still flags the row).
+ */
+export function recoverDescriptionFromLine(line: string, dateMatch: string | null): string {
+  let s = line;
+  if (dateMatch) s = s.split(dateMatch).join(" ");
+  // Remove money amounts (with/without $, thousands, parens, trailing minus).
+  s = s
+    .replace(/\(?-?\$?\s*\d{1,3}(?:,\d{3})+(?:\.\d{2})?\)?-?/g, " ")
+    .replace(/\(?-?\$?\s*\d+\.\d{2}\)?-?/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  // Require at least one real word so we don't promote a stray reference number.
+  if (!/[A-Za-z]{2,}/.test(s)) return "";
+  return cleanDescription(s);
 }
 
 export type MoneyMatch = { raw: string; value: number; index: number; end: number };
@@ -1590,7 +1621,13 @@ export function parseBankAccountTable(
         .slice(descStart, Math.max(descStart, descEnd))
         .replace(/\s+/g, " ")
         .trim();
-      const description = `${pendingDesc} ${inlineDesc}`.replace(/\s+/g, " ").trim();
+      let description = `${pendingDesc} ${inlineDesc}`.replace(/\s+/g, " ").trim();
+      // Recovery: if the leading-text rule found no description (e.g. the label
+      // sits after the amount columns), recover it from the rest of the line
+      // before we fall back to a placeholder + warning.
+      if (!description) {
+        description = recoverDescriptionFromLine(line, date ? date.match : null);
+      }
       // Fee count/rate rows: compute the real total from "N Dr/Cr @ rate" rather
       // than letting the bare rate be read as the amount. Run on the joined
       // description+line so a wrapped fee calculation still resolves.

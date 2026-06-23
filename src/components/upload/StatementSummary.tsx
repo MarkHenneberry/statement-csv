@@ -19,6 +19,15 @@ const balanceBadge: Record<BalanceStatus, { label: string; tone: string; dot: st
   limited: { label: "Limited", tone: "bg-slate-100 text-slate-600", dot: "bg-slate-400" },
 };
 
+export type ConversionBadgeTone = "green" | "amber" | "red" | "neutral";
+
+const conversionBadgeTone: Record<ConversionBadgeTone, { tone: string; dot: string }> = {
+  green: { tone: "bg-emerald-50 text-emerald-700", dot: "bg-emerald-500" },
+  amber: { tone: "bg-amber-50 text-amber-700", dot: "bg-amber-500" },
+  red: { tone: "bg-red-50 text-red-700", dot: "bg-red-500" },
+  neutral: { tone: "bg-slate-100 text-slate-600", dot: "bg-slate-400" },
+};
+
 export function StatementSummary({
   source,
   fileName,
@@ -29,6 +38,7 @@ export function StatementSummary({
   balanceStatus,
   parserWarningCount,
   rowWarningCount,
+  conversionBadge,
 }: {
   source: "real-parser" | "mock-fallback";
   fileName: string;
@@ -39,8 +49,13 @@ export function StatementSummary({
   balanceStatus: BalanceStatus;
   parserWarningCount: number;
   rowWarningCount: number;
+  /** Prominent conversion-state badge (verified / review / preview / unsupported). */
+  conversionBadge?: { label: string; tone: ConversionBadgeTone };
 }) {
   const badge = balanceBadge[balanceStatus];
+  const stateBadge = conversionBadge
+    ? { ...conversionBadgeTone[conversionBadge.tone], label: conversionBadge.label }
+    : null;
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6">
@@ -54,10 +69,12 @@ export function StatementSummary({
           </p>
         </div>
         <span
-          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium ${badge.tone}`}
+          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium ${
+            stateBadge ? stateBadge.tone : badge.tone
+          }`}
         >
-          <span className={`h-2 w-2 rounded-full ${badge.dot}`} />
-          Balance check: {badge.label}
+          <span className={`h-2 w-2 rounded-full ${stateBadge ? stateBadge.dot : badge.dot}`} />
+          {stateBadge ? stateBadge.label : `Balance check: ${badge.label}`}
         </span>
       </div>
 

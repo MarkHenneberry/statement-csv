@@ -97,6 +97,11 @@ export function ParserDiagnosticsPanel({
           <dl className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
             <Metric label="AI status" value={d.aiAssist.status} />
             <Metric label="Eligible" value={yesNo(d.aiAssist.eligible)} />
+            <Metric
+              label="Eligibility reasons"
+              value={d.aiAssist.aiEligibilityReasons.length ? d.aiAssist.aiEligibilityReasons.join(", ") : "—"}
+            />
+            <Metric label="Skipped reason" value={d.aiAssist.aiSkippedReason ?? "—"} />
             <Metric label="Configured" value={yesNo(d.aiAssist.configured)} />
             <Metric label="Enabled" value={yesNo(d.aiAssist.enabled)} />
             <Metric label="Attempted" value={yesNo(d.aiAssist.attempted)} />
@@ -229,6 +234,25 @@ export function ParserDiagnosticsPanel({
             </div>
           );
         })()
+      ) : null}
+
+      {d.preview ? (
+        <div className="mt-4">
+          <p className="text-xs font-medium text-slate-700">Free preview (development only)</p>
+          <dl className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+            <Metric label="Preview limited" value={yesNo(d.preview.previewLimited)} />
+            <Metric label="Pages processed" value={d.preview.pagesProcessed === null ? "—" : String(d.preview.pagesProcessed)} />
+            <Metric
+              label="Meaningful pages detected"
+              value={d.preview.meaningfulPagesDetected === null ? "—" : String(d.preview.meaningfulPagesDetected)}
+            />
+            <Metric
+              label="Skipped meaningful pages"
+              value={d.preview.skippedMeaningfulPagesCount === null ? "—" : String(d.preview.skippedMeaningfulPagesCount)}
+            />
+            <Metric label="Preview-limited reason" value={d.preview.previewLimitedReason ?? "—"} />
+          </dl>
+        </div>
       ) : null}
 
       <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
