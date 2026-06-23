@@ -34,6 +34,8 @@ import {
   type VisionImage,
   type RegionRenderer,
 } from "../src/lib/pdf-render.ts";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 let failures = 0;
 let rid = 0;
@@ -253,9 +255,44 @@ check("footer says scanned/image not supported", /scanned or image-based stateme
   const fulls = await renderVisionEvidence(bytes, regions, { enabled: true, renderer: pageRenderer });
   check("full-page fallback used when crops unavailable", fulls.available && fulls.fullPages > 0 && fulls.crops === 0);
   const none = await renderVisionEvidence(bytes, regions, { enabled: true, renderer: noRenderer });
-  check("graceful degrade to no images when renderer unavailable", none.available === false && none.images.length === 0);
+  check(
+    "graceful degrade to no images + failure reason when renderer unavailable",
+    none.available === false && none.images.length === 0 && Boolean(none.failureReason),
+  );
   const disabled = await renderVisionEvidence(bytes, regions, { enabled: false });
-  check("no rendering when vision disabled", disabled.available === false);
+  check("no rendering when vision disabled", disabled.available === false && disabled.failureReason === "vision-disabled");
+}
+
+// renderFailedReason flows into the outcome (text-layout fallback diagnostics).
+{
+  const r = await runAiAssist(brokenStmt, ON, {}, {
+    env: {} as NodeJS.ProcessEnv,
+    renderFailedReason: "canvas-backend-unavailable",
+    call: reply({ candidate: { statementKind: "bank-account", openingBalance: 100, closingBalance: 200, transactions: [{ description: "D", credit: 100, amount: 100 }] } }),
+  });
+  check(
+    "render failure reason surfaced + text-layout fallback",
+    r.outcome.aiRenderFailedReason === "canvas-backend-unavailable" && r.outcome.aiFallbackType === "text-layout" && r.outcome.aiVisionUsed === false,
+  );
+}
+
+// Client bundle must not statically import the native renderer / canvas.
+{
+  function clientFilesImportingNative(dir: string): string[] {
+    const hits: string[] = [];
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) hits.push(...clientFilesImportingNative(full));
+      else if (/\.(tsx|ts)$/.test(entry)) {
+        const src = readFileSync(full, "utf8");
+        if (!src.includes('"use client"')) continue;
+        if (/@napi-rs\/canvas/.test(src) || /["']@?\/?.*pdf-render/.test(src)) hits.push(full);
+      }
+    }
+    return hits;
+  }
+  const offenders = clientFilesImportingNative("src");
+  check("no client component imports native renderer / pdf-render", offenders.length === 0, offenders.join(", "));
 }
 
 // ----- vision fallback: one multimodal call + diagnostics -----

@@ -56,6 +56,8 @@ export type VisionRenderResult = {
   renderedPages: number;
   crops: number;
   fullPages: number;
+  /** Safe label when no images were produced (e.g. "render-backend-unavailable"). */
+  failureReason: string | null;
 };
 
 export type SelectRegionsInput = {
@@ -105,45 +107,111 @@ export type RegionRenderer = (
   region: VisionRegion,
 ) => Promise<{ dataUrl: string; crop: boolean } | null>;
 
-/**
- * Best-effort default renderer: dynamically imports unpdf's image renderer and
- * renders the region's PAGE (downscaled) as a full relevant page (crop=false).
- * Real per-region cropping needs a canvas-based cropper; until one is wired this
- * returns the relevant page (the documented full-page fallback). Returns null on
- * any failure so the caller degrades to text/layout-only evidence.
- */
-const defaultRegionRenderer: RegionRenderer = async (bytes, region) => {
-  try {
-    const mod = (await import("unpdf")) as unknown as {
-      renderPageAsImage?: (
-        data: Uint8Array,
-        page: number,
-        opts?: Record<string, unknown>,
-      ) => Promise<ArrayBuffer | Uint8Array>;
-    };
-    if (typeof mod.renderPageAsImage !== "function") return null;
-    const out = await mod.renderPageAsImage(bytes, region.page, { scale: 1 });
-    const b64 = Buffer.from(out instanceof Uint8Array ? out : new Uint8Array(out)).toString("base64");
-    return { dataUrl: `data:image/png;base64,${b64}`, crop: false };
-  } catch {
-    return null; // no canvas / render failure → degrade gracefully
+const toDataUrl = (png: Uint8Array): string =>
+  `data:image/png;base64,${Buffer.from(png).toString("base64")}`;
+
+/** PNG IHDR width/height (offsets 16..23). Dimensions only — no pixel content. */
+function pngDimensions(png: Uint8Array): { width: number; height: number } {
+  const read = (o: number) => (png[o] << 24) | (png[o + 1] << 16) | (png[o + 2] << 8) | png[o + 3];
+  return { width: read(16) >>> 0, height: read(20) >>> 0 };
+}
+
+function bandRange(band: VisionBand, h: number): [number, number] {
+  switch (band) {
+    case "top":
+      return [0, Math.round(h * 0.45)];
+    case "middle":
+      return [Math.round(h * 0.25), Math.round(h * 0.78)];
+    case "bottom":
+      return [Math.round(h * 0.55), h];
+    default:
+      return [0, h];
   }
-};
+}
+
+/** Is a server-side render backend (unpdf + @napi-rs/canvas) available? */
+export async function probeRenderBackend(): Promise<{
+  available: boolean;
+  backend: string | null;
+  reason: string | null;
+}> {
+  try {
+    const canvas = await import("@napi-rs/canvas");
+    if (typeof canvas.createCanvas !== "function") {
+      return { available: false, backend: null, reason: "canvas-backend-unavailable" };
+    }
+    const unpdf = await import("unpdf");
+    if (typeof unpdf.renderPageAsImage !== "function") {
+      return { available: false, backend: null, reason: "pdf-renderer-unavailable" };
+    }
+    return { available: true, backend: "@napi-rs/canvas", reason: null };
+  } catch {
+    return { available: false, backend: null, reason: "canvas-backend-unavailable" };
+  }
+}
 
 /**
- * Render the selected regions to images (best-effort). Prefers crops; uses a
- * downscaled full relevant page only when a crop is unavailable. Caps the number
- * of images for token control. Returns available=false (no images) when the
- * renderer is missing — the caller then runs the AI fallback on text evidence.
+ * Real default renderer: renders each PDF page once (unpdf + @napi-rs/canvas),
+ * caches it, then crops the region's vertical band (napi-canvas). Falls back to
+ * the full relevant page if cropping fails, and returns null if the page cannot be
+ * rendered at all (no backend) so the caller degrades to text-layout evidence.
+ * Native deps are imported dynamically (server-only) so they never reach a client
+ * bundle. `scaleWidth` bounds the rendered width for token/size control.
+ */
+export function createDefaultRegionRenderer(scaleWidth = 1100): RegionRenderer {
+  const pageCache = new Map<number, { png: Uint8Array; height: number } | null>();
+  return async (bytes, region) => {
+    let page = pageCache.get(region.page);
+    if (page === undefined) {
+      try {
+        const { renderPageAsImage } = await import("unpdf");
+        const out = await renderPageAsImage(bytes, region.page, {
+          canvasImport: () => import("@napi-rs/canvas"),
+          width: scaleWidth,
+        });
+        const u8 = out instanceof Uint8Array ? out : new Uint8Array(out);
+        page = { png: u8, height: pngDimensions(u8).height };
+      } catch {
+        page = null;
+      }
+      pageCache.set(region.page, page);
+    }
+    if (!page) return null;
+    if (region.band === "full") return { dataUrl: toDataUrl(page.png), crop: false };
+    try {
+      const { createCanvas, loadImage } = await import("@napi-rs/canvas");
+      const img = await loadImage(Buffer.from(page.png));
+      const [y0, y1] = bandRange(region.band, img.height);
+      const ch = Math.max(1, y1 - y0);
+      const canvas = createCanvas(img.width, ch);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, y0, img.width, ch, 0, 0, img.width, ch);
+      return { dataUrl: `data:image/png;base64,${canvas.toBuffer("image/png").toString("base64")}`, crop: true };
+    } catch {
+      return { dataUrl: toDataUrl(page.png), crop: false }; // page rendered, crop failed
+    }
+  };
+}
+
+/**
+ * Render the selected regions to images (best-effort). Prefers crops; uses a full
+ * relevant page only when cropping is unavailable. Caps image count for token
+ * control. Returns available=false with a safe failureReason when no images are
+ * produced — the caller then runs the AI fallback on text-layout evidence only.
  */
 export async function renderVisionEvidence(
   bytes: Uint8Array,
   regions: VisionRegion[],
   opts: { enabled: boolean; renderer?: RegionRenderer; maxImages?: number } = { enabled: false },
 ): Promise<VisionRenderResult> {
-  const empty: VisionRenderResult = { available: false, images: [], renderedPages: 0, crops: 0, fullPages: 0 };
-  if (!opts.enabled || regions.length === 0) return empty;
-  const renderer = opts.renderer ?? defaultRegionRenderer;
+  if (!opts.enabled) {
+    return { available: false, images: [], renderedPages: 0, crops: 0, fullPages: 0, failureReason: "vision-disabled" };
+  }
+  if (regions.length === 0) {
+    return { available: false, images: [], renderedPages: 0, crops: 0, fullPages: 0, failureReason: "no-regions" };
+  }
+  const usingDefault = !opts.renderer;
+  const renderer = opts.renderer ?? createDefaultRegionRenderer();
   const max = opts.maxImages ?? 6;
 
   const images: VisionImage[] = [];
@@ -161,12 +229,16 @@ export async function renderVisionEvidence(
       dataUrl: rendered.dataUrl,
     });
   }
-  if (images.length === 0) return empty;
+  if (images.length === 0) {
+    const reason = usingDefault ? (await probeRenderBackend()).reason ?? "render-failed" : "render-failed";
+    return { available: false, images: [], renderedPages: 0, crops: 0, fullPages: 0, failureReason: reason };
+  }
   return {
     available: true,
     images,
     renderedPages: pages.size,
     crops: images.filter((i) => i.crop).length,
     fullPages: images.filter((i) => !i.crop).length,
+    failureReason: null,
   };
 }

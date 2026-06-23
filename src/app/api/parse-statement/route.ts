@@ -173,22 +173,29 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const aiConfig = aiAssistConfig();
 
-  // Vision fallback: render targeted crops ONLY when the parser result needs help
-  // and vision is enabled. One multimodal call follows (never a separate text +
-  // vision call). Rendering is best-effort and degrades to text-layout evidence.
+  // Vision fallback: render targeted crops ONLY when the parser result needs help.
+  // One multimodal call follows (never a separate text + vision call). Rendering is
+  // best-effort and degrades to text-layout evidence with a safe failure reason.
   let visionImages: VisionImage[] = [];
-  if (aiConfig.visionEnabled && pdfBytes && isAiAssistEligible(statement)) {
-    try {
-      const hasLowConfidence =
-        statement.validation.confidence < 0.7 || statement.transactions.some((t) => t.confidence < 0.7);
-      const regions = selectVisionRegions({
-        pageCount: previewPages.length,
-        hasLowConfidence,
-      });
-      const rendered = await renderVisionEvidence(pdfBytes, regions, { enabled: true });
-      visionImages = rendered.images;
-    } catch {
-      visionImages = []; // never fail the conversion because rendering failed
+  let renderFailedReason: string | null = null;
+  if (pdfBytes && aiConfig.enabled && isAiAssistEligible(statement)) {
+    const visionRequested = process.env.ENABLE_AI_VISION_FALLBACK !== "false";
+    if (visionRequested && !aiConfig.visionModel) {
+      renderFailedReason = "vision-model-not-configured";
+    } else if (aiConfig.visionEnabled) {
+      try {
+        const hasLowConfidence =
+          statement.validation.confidence < 0.7 ||
+          statement.transactions.some((t) => t.confidence < 0.7);
+        const regions = selectVisionRegions({ pageCount: previewPages.length, hasLowConfidence });
+        const rendered = await renderVisionEvidence(pdfBytes, regions, { enabled: true });
+        visionImages = rendered.images;
+        if (!rendered.available) renderFailedReason = rendered.failureReason;
+      } catch {
+        // Never fail the conversion because rendering failed; degrade to text-layout.
+        visionImages = [];
+        renderFailedReason = "render-error";
+      }
     }
   }
 
@@ -201,7 +208,11 @@ export async function POST(request: Request): Promise<NextResponse> {
     rows,
     aiConfig,
     { fileName, pageCount: extracted.pageCount ?? undefined },
-    { evidence: { detectedBalances, regionLines, candidateSummaries }, images: visionImages },
+    {
+      evidence: { detectedBalances, regionLines, candidateSummaries },
+      images: visionImages,
+      renderFailedReason,
+    },
   );
 
   // Safe dev-only trace of the decision path (no statement text/rows/key/prompt).
@@ -235,6 +246,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       aiFullPageImagesCount: aiOutcome.aiFullPageImagesCount,
       aiTotalTokenCount: aiOutcome.aiTotalTokenCount,
       aiProviderResponseId: aiOutcome.aiProviderResponseId,
+      aiRenderFailedReason: aiOutcome.aiRenderFailedReason,
     });
   }
 

@@ -151,6 +151,7 @@ export function ParserDiagnosticsPanel({
               value={d.aiAssist.aiTotalTokenCount === null ? "—" : String(d.aiAssist.aiTotalTokenCount)}
             />
             <Metric label="Provider response id" value={d.aiAssist.aiProviderResponseId ?? "—"} />
+            <Metric label="Render failed reason" value={d.aiAssist.aiRenderFailedReason ?? "—"} />
           </dl>
         </div>
       ) : null}

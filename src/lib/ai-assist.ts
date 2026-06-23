@@ -101,6 +101,8 @@ export type AiAssistOutcome = {
   aiOutputTokenCount: number | null;
   aiTotalTokenCount: number | null;
   aiProviderResponseId: string | null;
+  /** Why vision rendering produced no images (safe label), if applicable. */
+  aiRenderFailedReason: string | null;
 };
 
 export type AiAssistRun = {
@@ -618,6 +620,8 @@ export type AiAssistOptions = {
   evidence?: Partial<AiEvidence>;
   /** Rendered vision images (crops/pages). When present the call is multimodal. */
   images?: VisionImage[];
+  /** Why vision rendering produced no images (surfaced in diagnostics). */
+  renderFailedReason?: string | null;
   call?: ChatCaller;
   env?: NodeJS.ProcessEnv;
 };
@@ -658,6 +662,7 @@ function baseOutcome(statement: ParsedStatement, config: AiAssistConfig): AiAssi
     aiOutputTokenCount: null,
     aiTotalTokenCount: null,
     aiProviderResponseId: null,
+    aiRenderFailedReason: null,
   };
 }
 
@@ -675,6 +680,7 @@ export async function runAiAssist(
 ): Promise<AiAssistRun> {
   const env = opts.env ?? process.env;
   const out = baseOutcome(statement, config);
+  out.aiRenderFailedReason = opts.renderFailedReason ?? null;
 
   if (!out.eligible) return { outcome: out };
   if (!config.enabled) {
@@ -805,6 +811,7 @@ export function notAttemptedOutcome(
     aiOutputTokenCount: null,
     aiTotalTokenCount: null,
     aiProviderResponseId: null,
+    aiRenderFailedReason: null,
   };
 }
 
