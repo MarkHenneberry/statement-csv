@@ -32,6 +32,8 @@ import { TransactionExportButtons } from "@/components/upload/TransactionExportB
 import { UploadWarning } from "@/components/upload/UploadWarning";
 import { ParserDiagnosticsPanel } from "@/components/upload/ParserDiagnosticsPanel";
 import { buildParserDiagnostics } from "@/lib/parser-diagnostics";
+import { selectReviewMessage } from "@/lib/review-messages";
+import type { AiAssistOutcome } from "@/lib/ai-assist";
 
 type Status = "upload" | "processing" | "preview" | "error";
 
@@ -49,6 +51,7 @@ type PreviewMeta = {
   creditCardStats?: CreditCardParseStats;
   parseStats?: LayoutParseStats;
   validation?: StatementValidation;
+  aiAssist?: AiAssistOutcome;
 };
 
 const isDev = process.env.NODE_ENV !== "production";
@@ -112,6 +115,7 @@ export function UploadFlow() {
       creditCardStats: data.creditCardStats,
       parseStats: data.parseStats,
       validation: data.validation,
+      aiAssist: data.aiAssist,
     });
     setStatus("preview");
   }
@@ -278,28 +282,29 @@ export function UploadFlow() {
           </UploadWarning>
         ) : null}
 
-        {needsReview ? (
-          <UploadWarning variant="warning" title="This conversion needs review">
-            {rows.length === 0 ? (
-              <p>
-                No transaction rows were found. You can add rows manually below, or load
-                the sample preview to see how a completed conversion looks.
-              </p>
-            ) : null}
-            {reviewReasons.length > 0 ? (
-              <ul className="mt-1 list-inside list-disc space-y-0.5">
-                {reviewReasons.map((reason) => (
-                  <li key={reason}>{reason}</li>
-                ))}
-              </ul>
-            ) : null}
-          </UploadWarning>
-        ) : (
-          <UploadWarning variant="success" title="Balance check passed">
-            The extracted totals match the statement&apos;s closing balance. Please still
-            review the rows — we do not claim perfect accuracy.
-          </UploadWarning>
-        )}
+        {(() => {
+          // Honest result banner. AI-assisted wording only appears when a real,
+          // usable AI result was applied (status improved/no-improvement/reconciled).
+          const msg = selectReviewMessage(meta.aiAssist?.status, needsReview);
+          return (
+            <UploadWarning variant={msg.variant} title={msg.title}>
+              <p>{msg.body}</p>
+              {rows.length === 0 ? (
+                <p className="mt-1">
+                  No transaction rows were found. You can add rows manually below, or load
+                  the sample preview to see how a completed conversion looks.
+                </p>
+              ) : null}
+              {msg.variant === "warning" && reviewReasons.length > 0 ? (
+                <ul className="mt-1 list-inside list-disc space-y-0.5">
+                  {reviewReasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </UploadWarning>
+          );
+        })()}
 
         <StatementSummary
           source={meta.source}
@@ -357,6 +362,7 @@ export function UploadFlow() {
               creditCardStats: meta.creditCardStats,
               parseStats: meta.parseStats,
               validation: meta.validation,
+              aiAssist: meta.aiAssist,
             })}
           />
         ) : null}

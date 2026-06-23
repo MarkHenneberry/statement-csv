@@ -33,9 +33,14 @@ next-env.d.ts
 /test-statements/
 /statements/
 /private-statements/
+/statementcsv-private-test-files/
 /uploads/
 /tmp/
 *.pdf
 
 # private parser regression (never commit real statements or expected values)
 /private-test-manifest.json
+/private-target-manifest.json
+
+# private debug reports (raw diagnostics; never committed)
+/private-debug/

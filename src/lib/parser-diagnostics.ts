@@ -20,6 +20,7 @@ import {
   type LayoutParseStats,
 } from "@/lib/parser";
 import type { StatementValidation } from "@/lib/statement-model";
+import type { AiAssistOutcome } from "@/lib/ai-assist";
 
 export type ParserQuality = "good" | "needs-review" | "poor";
 export type DiagnosticsBalanceStatus = "passed" | "needs-review" | "limited";
@@ -45,6 +46,8 @@ export type ParserDiagnostics = {
   parseStats?: LayoutParseStats;
   /** Canonical model validation (status / confidence / issues). */
   validation?: StatementValidation;
+  /** AI-assist outcome (status/config/diagnostics; aggregate-only). */
+  aiAssist?: AiAssistOutcome;
   quality: ParserQuality;
   qualityLabel: string;
   qualityReason: string;
@@ -66,6 +69,7 @@ export function buildParserDiagnostics(input: {
   creditCardStats?: CreditCardParseStats;
   parseStats?: LayoutParseStats;
   validation?: StatementValidation;
+  aiAssist?: AiAssistOutcome;
 }): ParserDiagnostics {
   const {
     source,
@@ -80,6 +84,7 @@ export function buildParserDiagnostics(input: {
     creditCardStats,
     parseStats,
     validation,
+    aiAssist,
   } = input;
 
   const totalRows = rows.length;
@@ -162,6 +167,7 @@ export function buildParserDiagnostics(input: {
     creditCardStats,
     parseStats,
     validation,
+    aiAssist,
     quality,
     qualityLabel,
     qualityReason,

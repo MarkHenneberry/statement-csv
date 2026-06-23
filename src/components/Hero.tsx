@@ -39,8 +39,7 @@ export function Hero({
               advertised here depend on the validation and deletion/logging
               pipeline, which is not fully verified yet. Verify before launch. */}
           <p className="mt-6 text-sm text-slate-500">
-            No bank login &middot; No ads &middot; Balance checks &middot; No stored
-            statement data
+            No bank login &middot; Balance checks &middot; No stored statement data
           </p>
         </div>
       </Container>

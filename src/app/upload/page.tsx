@@ -25,7 +25,7 @@ export default function UploadPage() {
       <Container className="mt-12">
         <p className="mx-auto max-w-2xl text-center text-sm text-slate-500">
           <span className="font-semibold text-slate-700">
-            No bank login. No ads. No stored statement data.
+            No bank login. No stored statement data.
           </span>{" "}
           StatementCSV is designed so your bank statement is used only to create your
           spreadsheet file. We do not keep your bank statement data.

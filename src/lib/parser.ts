@@ -19,6 +19,7 @@ import {
 } from "./coordinate-table.ts";
 import { detectStatementProfile } from "./statement-profiles.ts";
 import type { StatementValidation } from "./statement-model.ts";
+import type { AiAssistOutcome } from "./ai-assist.ts";
 
 export type StatementKind = "credit-card" | "bank-account" | "unknown";
 
@@ -93,6 +94,10 @@ export type LayoutParseStats = {
   coordStitched: boolean;
   /** Number of coordinate regions combined into the chosen candidate. */
   coordRegionsStitched: number;
+  /** Credit-card amount rows rejected as summary/metadata in the chosen candidate. */
+  coordCcRowsRejectedAsNonTx: number;
+  /** Optional CC columns (category/posting date) ignored in the chosen candidate. */
+  coordCcOptionalColumnsIgnored: number;
   finalBalanceDifference: number | null;
   chosenCandidateSource: CandidateSource;
   /** Advisory statement profile name (generic fallback when unsure). */
@@ -168,6 +173,8 @@ export type ParseStatementResponse = {
   parseStats?: LayoutParseStats;
   /** Canonical model validation (status / confidence / issues). No raw content. */
   validation?: StatementValidation;
+  /** Explicit AI-assist outcome (status/config/diagnostics). No raw content. */
+  aiAssist?: AiAssistOutcome;
   // NOTE: a raw text preview is intentionally NOT part of the response. Raw
   // statement text is too easy to leak via screenshots, so it is never returned
   // or shown, even in development.
@@ -194,7 +201,7 @@ export type ParseResult = {
 };
 
 export const SCANNED_PDF_WARNING =
-  "This looks like a scanned or image-only PDF. OCR support is not enabled yet.";
+  "This looks like a scanned or image-based statement. StatementCSV currently supports digital PDF statements only.";
 export const NO_ROWS_WARNING =
   "We could not confidently identify any transaction rows in this PDF.";
 export const MISSING_BALANCE_WARNING =
@@ -1469,10 +1476,24 @@ export function parseBankAccountTable(
     // Dateless page-summary / statistical rows (end-of-account totals, per-page
     // item counts, average/min balances) are never transactions, even when they
     // carry a money value. Gated on "no date" so dated transactions survive.
+    // EXCEPTION: a dateless service/fee row inside the active table carries an
+    // amount AND a running balance that CONTINUES the sequence (balance ≈ prior
+    // balance ± amount). Section totals also carry two figures but their balance
+    // does NOT continue the running balance, so they remain summaries. This keeps
+    // real end-of-statement fee charges without absorbing totals — generically.
     if (!date && BANK_SUMMARY_ROW_RE.test(line)) {
-      summaryStatisticalRejected += 1;
-      pendingDesc = "";
-      continue;
+      let runningFeeRow = false;
+      if (moneys.length >= 2 && lastBalance !== null) {
+        const amt = Math.abs(moneys[moneys.length - 2].value);
+        const bal = moneys[moneys.length - 1].value;
+        runningFeeRow =
+          Math.abs(bal - (lastBalance - amt)) < 0.01 || Math.abs(bal - (lastBalance + amt)) < 0.01;
+      }
+      if (!runningFeeRow) {
+        summaryStatisticalRejected += 1;
+        pendingDesc = "";
+        continue;
+      }
     }
 
     if (date) carriedDate = normalizeDate(date.match, year) ?? date.match;
@@ -1656,6 +1677,8 @@ type CoordDiag = {
   footerLegalRowsIgnored: number;
   stitched: boolean;
   regionsStitched: number;
+  ccRowsRejectedAsNonTx: number;
+  ccOptionalColumnsIgnored: number;
 };
 
 function toCents(n: number): number {
@@ -1863,6 +1886,8 @@ function buildCandidates(
           footerLegalRowsIgnored: cc.diagnostics.footerLegalRowsIgnored,
           stitched: cc.diagnostics.stitched,
           regionsStitched: cc.diagnostics.regionsStitched,
+          ccRowsRejectedAsNonTx: cc.diagnostics.ccRowsRejectedAsNonTx,
+          ccOptionalColumnsIgnored: cc.diagnostics.ccOptionalColumnsIgnored,
         },
       });
     }
@@ -2117,6 +2142,8 @@ export function parseStatementText(text: string, items?: PdfTextItem[]): ParseRe
     coordFooterLegalRowsIgnored: chosen.coord?.footerLegalRowsIgnored ?? 0,
     coordStitched: chosen.coord?.stitched ?? false,
     coordRegionsStitched: chosen.coord?.regionsStitched ?? 0,
+    coordCcRowsRejectedAsNonTx: chosen.coord?.ccRowsRejectedAsNonTx ?? 0,
+    coordCcOptionalColumnsIgnored: chosen.coord?.ccOptionalColumnsIgnored ?? 0,
     finalBalanceDifference: chosen.balance.diffCents !== null ? chosen.balance.diffCents / 100 : null,
     chosenCandidateSource: chosen.source,
     detectedProfile: profile.name,

@@ -21,7 +21,7 @@ import {
   toCents,
   LOW_CONFIDENCE_THRESHOLD,
 } from "./upload.ts";
-import type { ParseResult, StatementKind, LayoutParseStats } from "./parser.ts";
+import type { ParseResult, StatementKind, LayoutFamily, LayoutParseStats } from "./parser.ts";
 
 export type Transaction = {
   transactionDate?: string;
@@ -76,6 +76,8 @@ export type ParsedStatement = {
   summaryTotals?: SummaryTotals;
   transactions: Transaction[];
   validation: StatementValidation;
+  /** True when AI-assisted repair produced these transactions (re-validated). */
+  aiAssisted?: boolean;
   /** Safe aggregate diagnostics only (counts/labels; no raw content). */
   diagnostics?: LayoutParseStats;
 };
@@ -232,6 +234,63 @@ function buildValidation(
  * and deterministic; performs Stages H (normalize transactions) and I (validate)
  * of the pipeline. Raw text never reaches this layer.
  */
+/**
+ * Build a ParsedStatement from AI-repaired transactions, then run the SAME
+ * validation engine again. Balances/summary stay from the original parser (AI
+ * repairs rows, it does not invent statement balances); the result is flagged
+ * `aiAssisted` and must still go through the review screen before export.
+ */
+export function buildAiAssistedStatement(
+  base: ParsedStatement,
+  aiTransactions: Transaction[],
+  meta: BuildStatementMeta = {},
+): ParsedStatement {
+  const rows = aiTransactions.map(transactionToRow);
+  const result: ParseResult = {
+    statementKind: base.statementKind,
+    layoutFamily: (base.layoutFamily as LayoutFamily) ?? "unknown",
+    rows,
+    openingBalance: base.openingBalance ?? null,
+    closingBalance: base.closingBalance ?? null,
+    summary: {
+      credits: base.summaryTotals?.totalCredits ?? null,
+      debits: base.summaryTotals?.totalDebits ?? null,
+    },
+    warnings: [],
+  };
+  const statement = buildParsedStatement(result, meta);
+  statement.aiAssisted = true;
+  return statement;
+}
+
+/**
+ * Build + validate a ParsedStatement from explicit parts (rows + chosen
+ * balances/summary). Used to turn an AI candidate or repair-plan result into a
+ * comparable, RE-VALIDATED ParsedStatement using the same validation engine.
+ */
+export function buildStatementFromRows(
+  rows: TransactionRow[],
+  parts: {
+    statementKind: StatementKind;
+    layoutFamily?: string;
+    openingBalance: number | null;
+    closingBalance: number | null;
+    summary?: { credits: number | null; debits: number | null };
+  },
+  meta: BuildStatementMeta = {},
+): ParsedStatement {
+  const result: ParseResult = {
+    statementKind: parts.statementKind,
+    layoutFamily: (parts.layoutFamily as LayoutFamily) ?? "unknown",
+    rows,
+    openingBalance: parts.openingBalance,
+    closingBalance: parts.closingBalance,
+    summary: parts.summary ?? { credits: null, debits: null },
+    warnings: [],
+  };
+  return buildParsedStatement(result, meta);
+}
+
 export function buildParsedStatement(
   result: ParseResult,
   meta: BuildStatementMeta = {},

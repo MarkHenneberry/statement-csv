@@ -6,7 +6,7 @@ import { FAQSection } from "@/components/FAQSection";
 import { CTASection } from "@/components/CTASection";
 import { absoluteUrl } from "@/lib/site";
 import { generalFaqs } from "@/lib/faq";
-import { pricingNote } from "@/lib/pricing";
+import { pricingHeadline, pricingSubheadline, pricingFooter } from "@/lib/pricing";
 
 export const metadata: Metadata = {
   title: "Pricing",
@@ -22,7 +22,6 @@ const pricingFaqs = generalFaqs.filter((faq) =>
     "Is this free?",
     "What are balance checks?",
     "Are scanned statements supported?",
-    "Why is there no ad-supported version?",
   ].includes(faq.question),
 );
 
@@ -32,19 +31,18 @@ export default function PricingPage() {
       <Section>
         <SectionHeading
           eyebrow="Pricing"
-          title="Affordable conversion with balance checks"
-          description="Run a free preview first, then choose a monthly plan based on how many pages you convert. Every paid plan includes balance checks."
+          title={pricingHeadline}
+          description={pricingSubheadline}
           centered
         />
         <div className="mt-12">
           <PricingCards />
         </div>
-        {/* TODO(launch-blocker): pricingNote references OCR support for scanned/
-            image-heavy statements, which is not implemented yet. Balance checks
-            advertised on the plans above also depend on the unbuilt validation
-            pipeline. Verify both before charging for these plans. */}
+        {/* TODO(launch-blocker): paid tiers require auth + payments + server-side
+            page-quota enforcement (none built yet). Only the free preview is
+            actually available today; the paid cards describe intended plans. */}
         <p className="mx-auto mt-8 max-w-2xl text-center text-sm text-slate-500">
-          Prices are in USD. {pricingNote}
+          {pricingFooter}
         </p>
       </Section>
 
@@ -70,7 +68,7 @@ export default function PricingPage() {
 
       <CTASection
         title="Preview your statement free"
-        description="Preview up to 3 pages to see how your statement converts before choosing a plan."
+        description="Preview up to 5 pages to see how your statement converts before choosing a plan."
         primaryCta={{ label: "Convert a Statement", href: "/upload" }}
         secondaryCta={{ label: "Read the FAQ", href: "/faq" }}
       />

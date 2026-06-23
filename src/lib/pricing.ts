@@ -1,3 +1,5 @@
+import { FREE_PREVIEW_MAX_PAGES, FREE_PREVIEW_INTERVAL_HOURS } from "./free-preview.ts";
+
 export type PricingPlan = {
   name: string;
   price: string;
@@ -8,16 +10,28 @@ export type PricingPlan = {
   highlighted?: boolean;
 };
 
-// Page-based pricing. Pages are counted after upload (see pricingNote).
+export const pricingHeadline = "Affordable statement conversion with balance checks";
+
+export const pricingSubheadline =
+  "Run a free preview first, then choose a monthly plan based on how many pages you convert. " +
+  "Every plan includes CSV and Excel exports, balance checks, and AI-assisted repair when needed.";
+
+// Page-based pricing. Pages are counted after upload (see pricingFooter). Every
+// tier includes CSV + Excel export, balance checks, and AI-assisted repair when
+// the parser needs help. Digital PDF statements only; no bank login.
 export const pricingPlans: PricingPlan[] = [
   {
     name: "Free Preview",
     price: "$0",
     description: "See how your statement converts before you pay.",
     features: [
-      "Preview up to 3 pages",
-      "See how your statement converts",
-      "No account required",
+      `Preview up to ${FREE_PREVIEW_MAX_PAGES} pages`,
+      `1 preview every ${FREE_PREVIEW_INTERVAL_HOURS} hours`,
+      "CSV + Excel export for previewed rows",
+      "Balance check included",
+      "AI-assisted repair when needed, capped",
+      "Digital PDFs only",
+      "No bank login",
     ],
     cta: { label: "Try the free preview", href: "/upload" },
   },
@@ -28,9 +42,10 @@ export const pricingPlans: PricingPlan[] = [
     description: "For occasional conversions.",
     features: [
       "50 pages/month",
-      "CSV export",
+      "CSV + Excel export",
       "Balance checks",
-      "No ads",
+      "AI-assisted repair when needed",
+      "Digital PDFs only",
       "No bank login",
     ],
     cta: { label: "Get Starter", href: "/upload" },
@@ -42,9 +57,10 @@ export const pricingPlans: PricingPlan[] = [
     description: "Good for taxes and small business cleanup.",
     features: [
       "150 pages/month",
-      "CSV export",
+      "CSV + Excel export",
       "Balance checks",
-      "No ads",
+      "AI-assisted repair when needed",
+      "Digital PDFs only",
       "No bank login",
     ],
     cta: { label: "Get Plus", href: "/upload" },
@@ -56,19 +72,19 @@ export const pricingPlans: PricingPlan[] = [
     priceSuffix: "/month",
     description: "Best for bookkeepers and regular use.",
     features: [
-      "500 pages/month",
+      "300 pages/month",
       "CSV + Excel export",
       "Balance checks",
-      "No ads",
+      "AI-assisted repair when needed",
+      "Digital PDFs only",
       "No bank login",
     ],
     cta: { label: "Get Pro", href: "/upload" },
   },
 ];
 
-// TODO(launch-blocker): "Balance checks" above are stated as plan features but
-// the validation pipeline does not exist yet. OCR support for scanned/image-heavy
-// statements (referenced in pricingNote) is also not built. Both must be
-// implemented and verified before these plans are sold.
-export const pricingNote =
-  "Pages are counted after upload. Digital PDF statements are included. Scanned or image-heavy statements may require OCR support and can take longer to process.";
+// TODO(launch-blocker): paid tiers require auth + payments + server-side page
+// quota enforcement, none of which exist yet. Until then only the free preview
+// is actually available; the paid cards describe intended plans.
+export const pricingFooter =
+  "Prices are in USD. Page limits apply to digital PDF statements. Scanned or image-based statements are not currently supported.";

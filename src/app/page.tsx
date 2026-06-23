@@ -14,7 +14,7 @@ import { BuiltForBankStatementsBlock } from "@/components/content/BuiltForBankSt
 import { DataRetentionTrustBlock } from "@/components/content/DataRetentionTrustBlock";
 import { RelatedPagesLinks } from "@/components/content/RelatedPagesLinks";
 import { generalFaqs } from "@/lib/faq";
-import { pricingNote } from "@/lib/pricing";
+import { pricingFooter } from "@/lib/pricing";
 import { absoluteUrl } from "@/lib/site";
 import {
   softwareApplicationJsonLd,
@@ -24,9 +24,9 @@ import {
 const homeFaqs = generalFaqs.slice(0, 6);
 
 export const metadata: Metadata = {
-  title: "Bank Statement to CSV Converter | No Ads, No Bank Login",
+  title: "Bank Statement to CSV Converter | No Bank Login",
   description:
-    "Affordable bank statement conversion with balance checks. Turn PDF bank statements into clean CSV files for Excel, Google Sheets, bookkeeping, taxes, or budgeting. No ads. No bank login.",
+    "Affordable bank statement conversion with balance checks. Turn PDF bank statements into clean CSV files for Excel, Google Sheets, bookkeeping, taxes, or budgeting. No bank login.",
   alternates: {
     canonical: absoluteUrl("/"),
   },
@@ -86,7 +86,7 @@ export default function HomePage() {
           amounts, and balances, then lets you review the data before exporting.
         </p>
         <p className="font-medium text-slate-700">
-          No ads. No bank login. Balance checks. No stored statement data.
+          No bank login. Balance checks. No stored statement data.
         </p>
       </Hero>
 
@@ -215,7 +215,7 @@ DEPOSIT 2,000.00 3,240.10`}
           <PricingCards />
         </div>
         <p className="mx-auto mt-8 max-w-2xl text-center text-sm text-slate-500">
-          {pricingNote}
+          {pricingFooter}
         </p>
         <div className="mt-8 text-center">
           <ButtonLink href="/pricing" variant="secondary">

@@ -5,7 +5,7 @@ export const siteConfig = {
   // Core positioning: affordable conversion with balance checks.
   tagline: "Affordable bank statement conversion with balance checks.",
   description:
-    "Affordable bank statement conversion with balance checks. Turn PDF bank statements into clean CSV files for Excel, Google Sheets, bookkeeping, taxes, or budgeting. No ads. No bank login.",
+    "Affordable bank statement conversion with balance checks. Turn PDF bank statements into clean CSV files for Excel, Google Sheets, bookkeeping, taxes, or budgeting. No bank login.",
 };
 
 export type NavLink = {

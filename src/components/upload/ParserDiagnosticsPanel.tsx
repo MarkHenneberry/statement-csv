@@ -90,6 +90,71 @@ export function ParserDiagnosticsPanel({
         </div>
       ) : null}
 
+      {d.aiAssist ? (
+        <div className="mt-4">
+          <p className="text-xs font-medium text-slate-700">AI assist (development only)</p>
+          <dl className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+            <Metric label="AI status" value={d.aiAssist.status} />
+            <Metric label="Eligible" value={yesNo(d.aiAssist.eligible)} />
+            <Metric label="Configured" value={yesNo(d.aiAssist.configured)} />
+            <Metric label="Enabled" value={yesNo(d.aiAssist.enabled)} />
+            <Metric label="Attempted" value={yesNo(d.aiAssist.attempted)} />
+            <Metric label="Call made" value={yesNo(d.aiAssist.called)} />
+            <Metric label="Response received" value={yesNo(d.aiAssist.responseReceived)} />
+            <Metric label="Result applied" value={yesNo(d.aiAssist.applied)} />
+            <Metric label="Model" value={d.aiAssist.model ?? "—"} />
+            <Metric
+              label="Missing config"
+              value={d.aiAssist.missingConfig.length ? d.aiAssist.missingConfig.join(", ") : "—"}
+            />
+            <Metric
+              label="Error label"
+              value={d.aiAssist.errorLabel ?? "—"}
+            />
+            <Metric
+              label="Pre-AI difference"
+              value={d.aiAssist.preDifference === null ? "—" : d.aiAssist.preDifference.toFixed(2)}
+            />
+            <Metric
+              label="Post-AI difference"
+              value={d.aiAssist.postDifference === null ? "—" : d.aiAssist.postDifference.toFixed(2)}
+            />
+            <Metric
+              label="Improvement"
+              value={d.aiAssist.improvement === null ? "—" : d.aiAssist.improvement.toFixed(2)}
+            />
+            <Metric label="Adopted candidate" value={d.aiAssist.adoptedCandidateSource} />
+            <Metric label="Candidates compared" value={String(d.aiAssist.candidateComparisonCount)} />
+            <Metric label="AI independent candidate built" value={yesNo(d.aiAssist.aiIndependentCandidateBuilt)} />
+            <Metric label="AI repair-plan built" value={yesNo(d.aiAssist.aiRepairPlanBuilt)} />
+            <Metric
+              label="AI candidate difference"
+              value={d.aiAssist.aiCandidateDifference === null ? "—" : d.aiAssist.aiCandidateDifference.toFixed(2)}
+            />
+            <Metric
+              label="AI repair-plan difference"
+              value={d.aiAssist.aiRepairPlanDifference === null ? "—" : d.aiAssist.aiRepairPlanDifference.toFixed(2)}
+            />
+            <Metric
+              label="AI selected section"
+              value={d.aiAssist.aiSelectedSectionIndex === null ? "—" : String(d.aiAssist.aiSelectedSectionIndex)}
+            />
+            <Metric label="AI rejected reason" value={d.aiAssist.aiRejectedReason ?? "—"} />
+            <Metric label="Fallback type" value={d.aiAssist.aiFallbackType} />
+            <Metric label="AI call count" value={String(d.aiAssist.aiCallCount)} />
+            <Metric label="Vision used" value={yesNo(d.aiAssist.aiVisionUsed)} />
+            <Metric label="Rendered pages" value={String(d.aiAssist.aiRenderedPagesCount)} />
+            <Metric label="Image crops" value={String(d.aiAssist.aiImageCropsCount)} />
+            <Metric label="Full-page images" value={String(d.aiAssist.aiFullPageImagesCount)} />
+            <Metric
+              label="Total tokens"
+              value={d.aiAssist.aiTotalTokenCount === null ? "—" : String(d.aiAssist.aiTotalTokenCount)}
+            />
+            <Metric label="Provider response id" value={d.aiAssist.aiProviderResponseId ?? "—"} />
+          </dl>
+        </div>
+      ) : null}
+
       <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
         <Metric label="Source" value={d.source === "real-parser" ? "Real parser" : "Sample data"} />
         <Metric label="Statement kind" value={kindLabel[d.statementKind]} />
@@ -196,8 +261,11 @@ export function ParserDiagnosticsPanel({
                   .join(", ") || "—"
               }
             />
+            <Metric label="Relaxed-compat stitches" value={String(d.parseStats.coordHeaderProbe.stitchRelaxedCompatibilityUsed)} />
             <Metric label="Chosen candidate stitched" value={yesNo(d.parseStats.coordStitched)} />
             <Metric label="Chosen regions stitched" value={String(d.parseStats.coordRegionsStitched)} />
+            <Metric label="CC rows rejected as non-tx" value={String(d.parseStats.coordCcRowsRejectedAsNonTx)} />
+            <Metric label="CC optional columns ignored" value={String(d.parseStats.coordCcOptionalColumnsIgnored)} />
           </dl>
 
           {d.parseStats.candidateComparison.length > 0 ? (

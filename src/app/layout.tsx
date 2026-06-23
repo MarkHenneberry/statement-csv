@@ -16,7 +16,7 @@ const inter = Inter({
 export const metadata: Metadata = {
   metadataBase: new URL(siteConfig.url),
   title: {
-    default: "Bank Statement to CSV Converter | No Ads, No Bank Login",
+    default: "Bank Statement to CSV Converter | No Bank Login",
     template: `%s | ${siteConfig.name}`,
   },
   description: siteConfig.description,
@@ -24,13 +24,13 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     siteName: siteConfig.name,
-    title: "Bank Statement to CSV Converter | No Ads, No Bank Login",
+    title: "Bank Statement to CSV Converter | No Bank Login",
     description: siteConfig.description,
     url: siteConfig.url,
   },
   twitter: {
     card: "summary",
-    title: "Bank Statement to CSV Converter | No Ads, No Bank Login",
+    title: "Bank Statement to CSV Converter | No Bank Login",
     description: siteConfig.description,
   },
   robots: {

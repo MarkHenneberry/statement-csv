@@ -19,7 +19,7 @@ export function Footer() {
               </span>
             </div>
             <p className="mt-4 max-w-xs text-sm leading-relaxed text-slate-600">
-              {siteConfig.tagline} No ads. No bank login.
+              {siteConfig.tagline} No bank login.
             </p>
           </div>
 

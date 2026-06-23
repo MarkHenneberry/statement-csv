@@ -15,6 +15,7 @@ import type { TransactionRow } from "@/lib/upload";
 import {
   extractMoneyValues,
   normalizeDate,
+  findDate,
   detectBalanceLine,
   detectCreditCardBalances,
   detectBankSummary,
@@ -79,6 +80,10 @@ export type CoordTableDiagnostics = {
   stitched: boolean;
   /** Number of regions combined (1 for a single-region candidate). */
   regionsStitched: number;
+  /** Credit-card amount rows rejected as summary/metadata (no date context). */
+  ccRowsRejectedAsNonTx: number;
+  /** Optional columns (category/posting date) present and not used for amounts. */
+  ccOptionalColumnsIgnored: number;
 };
 
 export type CoordTableCandidate = {
@@ -385,6 +390,8 @@ export type CoordinateHeaderProbe = {
   stitchRejectedCount: number;
   /** Counts of stitch-reject reasons (labels only, no document text). */
   stitchRejectReasons: Record<string, number>;
+  /** Adjacencies joined via relaxed (optional-column) compatibility. */
+  stitchRelaxedCompatibilityUsed: number;
 };
 
 export const EMPTY_HEADER_PROBE: CoordinateHeaderProbe = {
@@ -403,6 +410,7 @@ export const EMPTY_HEADER_PROBE: CoordinateHeaderProbe = {
   stitchRegionsStitched: 0,
   stitchRejectedCount: 0,
   stitchRejectReasons: {},
+  stitchRelaxedCompatibilityUsed: 0,
 };
 
 /**
@@ -457,6 +465,7 @@ export function probeCoordinateHeaders(items: PdfTextItem[]): CoordinateHeaderPr
     stitchRegionsStitched: plan.regionsStitched,
     stitchRejectedCount: plan.rejectedCount,
     stitchRejectReasons: plan.rejectReasons,
+    stitchRelaxedCompatibilityUsed: plan.relaxedCompatibilityUsed,
   };
 }
 
@@ -613,11 +622,13 @@ function assignCells(line: VisualLine, cols: TableColumn[]): string[] {
 
 // Lines that validate totals or are page furniture — never transaction rows.
 const COORD_IGNORE_RE =
-  /credit limit|available credit|minimum payment|amount past due|payment due|payment slip|payment options|remittance|please pay|total payment enclosed|new balance|previous (?:account |statement )?balance|opening balance|closing balance|balance forward|beginning balance|ending balance|total (?:debits?|credits?|withdrawals?|deposits?|purchases?|charges?|payments?|fees?|interest)|amounts? (?:debited|credited)|number of items|no\.? of items|monthly (?:aver|min|average|minimum)|average (?:cr|dr|daily)?\.? ?bal|next statement|statement date|subtotal of monthly activity|total fees for this period|total interest for this period|interest charged|fees charged|page \d+ of \d+/i;
+  /credit limit|available credit|minimum payment|amount past due|payment due|payment slip|payment options|remittance|please pay|total payment enclosed|new balance|previous (?:account |statement )?balance|opening balance|closing balance|balance forward|beginning balance|ending balance|total (?:account )?balance|statement balance|total (?:debits?|credits?|withdrawals?|deposits?|purchases?|charges?|payments?|fees?|interest)|amounts? (?:debited|credited)|number of items|no\.? of items|monthly (?:aver|min|average|minimum)|average (?:cr|dr|daily)?\.? ?bal|next statement|statement date|subtotal of monthly activity|total fees for this period|total interest for this period|interest charged|fees charged|page \d+ of \d+/i;
 
 // Hard stop: legal/info/footer region — nothing after it on the page is a row.
+// "interest rate chart" / "time to pay" mark the end of the transaction table on
+// credit-card statements (the rate table / repayment estimator follow).
 const COORD_STOP_RE =
-  /important (?:information about your account|account information)|how to (?:reach|contact) us|trade ?-?marks?|closing notice|protecting your/i;
+  /important (?:information about your account|account information)|how to (?:reach|contact) us|trade ?-?marks?|closing notice|protecting your|interest rate chart|time to pay/i;
 
 // A barrier between two regions that must STOP stitching: legal/footer (above)
 // plus remittance/payment-slip/interest-rate sections. A continuation page never
@@ -637,6 +648,19 @@ function isFxDetail(text: string): boolean {
 function isReferenceText(text: string): boolean {
   const d = text.replace(/\s/g, "");
   return /^\d{8,}$/.test(d);
+}
+
+/**
+ * Resolve a date column cell to ISO. Uses findDate so a cell that holds more than
+ * one token (a combined transaction+posting date like "APR 22 APR 24", or a date
+ * with stray tokens) still yields the FIRST real date — the transaction date.
+ */
+function cellDate(raw: string, year: number | undefined): string | null {
+  if (!raw) return null;
+  const direct = normalizeDate(raw, year);
+  if (direct) return direct;
+  const d = findDate(raw);
+  return d ? normalizeDate(d.match, year) : null;
 }
 
 function cellMoney(cell: string): { value: number; negative: boolean } | null {
@@ -683,6 +707,8 @@ type Diag = {
   fxDetailLinesAttached: number;
   summaryRowsIgnored: number;
   footerLegalRowsIgnored: number;
+  /** Credit-card amount rows rejected for having no date context (summary/metadata). */
+  rowsRejectedAsNonTx: number;
 };
 
 /**
@@ -756,8 +782,9 @@ function buildRegionRows(
 
     const cells = assignCells(line, cols);
     const dateRaw = cell(cells, "date");
-    const dateVal = dateRaw ? normalizeDate(dateRaw, year) : null;
+    const dateVal = cellDate(dateRaw, year);
     const descCell = cell(cells, "description");
+    const isCcRegion = region.statementKind === "credit-card";
 
     // Collect the column-resolved money values.
     const debitInfo = ci.debit !== undefined ? cellMoney(cells[ci.debit]) : null;
@@ -783,9 +810,23 @@ function buildRegionRows(
     }
 
     if (hasAmount) {
+      // Over-capture guard (credit-card only): a real CC transaction always has
+      // its own transaction date, or completes a pending dated merchant. An amount
+      // with NO date context on a CC table is statement metadata / a summary box
+      // figure (e.g. "Total account balance", calculation rows) that aligned into
+      // the amount column — never a transaction. Bank tables legitimately carry
+      // forward a date across continuation rows, so this only applies to CC.
+      if (isCcRegion && !dateVal && pendingDate === null && pendingDesc.length === 0) {
+        diag.rowsRejectedAsNonTx += 1;
+        fxSeen = false;
+        continue;
+      }
+
       // A transaction row (its amount is on this visual line, in a money column).
       const row = newCoordRow();
-      const effDate = dateVal ?? pendingDate ?? carriedDate ?? "";
+      // Bank tables carry the date forward across continuation rows; CC tables do
+      // not (each transaction prints its own date or completes a pending merchant).
+      const effDate = dateVal ?? pendingDate ?? (isCcRegion ? "" : carriedDate ?? "");
       if (dateVal) carriedDate = dateVal;
       if (!dateVal && (descCell || pendingDesc.length)) diag.datelessRowsPromoted += 1;
       row.date = effDate;
@@ -881,11 +922,17 @@ function buildRegionCandidate(
   allowRunningClose: boolean,
   headerless: boolean,
 ): CoordTableCandidate | null {
+  const isCcRegion = region.statementKind === "credit-card";
   const winStart = Math.max(0, region.headerIndex - 10);
   const regionTexts = lines.slice(winStart, Math.max(winStart, end)).map((l) => l.text);
-  const ccBalances = detectCreditCardBalances(regionTexts);
+  // Credit-card previous/new balances are statement-global and unique, and may be
+  // printed after an end-of-table marker (interest-rate chart) outside the row
+  // window. Scan the whole document for them; bank balances stay region-scoped so
+  // multi-account statements keep per-account anchors.
+  const ccTexts = isCcRegion ? lines.map((l) => l.text) : regionTexts;
+  const ccBalances = detectCreditCardBalances(ccTexts);
   const bankOpenClose = regionBankBalances(lines, Math.max(0, region.headerIndex), end);
-  const ccSummary = detectCreditCardSummary(regionTexts);
+  const ccSummary = detectCreditCardSummary(ccTexts);
   const bankSummary = detectBankSummary(regionTexts);
   const diag: Diag = {
     rowsBuilt: 0,
@@ -894,6 +941,7 @@ function buildRegionCandidate(
     fxDetailLinesAttached: 0,
     summaryRowsIgnored: 0,
     footerLegalRowsIgnored: 0,
+    rowsRejectedAsNonTx: 0,
   };
   const isCc = region.statementKind === "credit-card";
   const seedBalance = isCc ? null : bankOpenClose.opening;
@@ -938,6 +986,8 @@ function buildRegionCandidate(
       finalBalanceDifference: null,
       stitched: false,
       regionsStitched: 1,
+      ccRowsRejectedAsNonTx: diag.rowsRejectedAsNonTx,
+      ccOptionalColumnsIgnored: region.columns.filter((c) => OPTIONAL_MEANINGS.has(c.meaning)).length,
     },
   };
 }
@@ -952,12 +1002,19 @@ export type StitchPlan = {
   regionsStitched: number;
   rejectedCount: number;
   rejectReasons: Record<string, number>;
+  /** Adjacencies joined via relaxed (optional-column) compatibility. */
+  relaxedCompatibilityUsed: number;
 };
 
 /** A stable, order-independent signature of a region's column meanings. */
 function meaningSet(cols: TableColumn[]): string {
   return [...new Set(cols.map((c) => c.meaning))].sort().join(",");
 }
+
+// Columns that carry the reconciliation-relevant meaning. Optional columns
+// (category / reference / postDate) may appear on one page but not another and
+// must NOT block stitching of an otherwise-identical table.
+const OPTIONAL_MEANINGS = new Set<ColumnMeaning>(["category", "postDate"]);
 
 /** Do shared columns sit at similar x-centers (same physical layout)? */
 function centersAlign(a: TableColumn[], b: TableColumn[], tol = 30): boolean {
@@ -969,35 +1026,83 @@ function centersAlign(a: TableColumn[], b: TableColumn[], tol = 30): boolean {
   return true;
 }
 
+/** Reconciliation-relevant value shape of a region's columns. */
+function valueShape(cols: TableColumn[]): "amount" | "debit-credit" | "none" {
+  const has = (m: ColumnMeaning) => cols.some((c) => c.meaning === m);
+  if (has("amount")) return "amount";
+  if (has("debit") || has("credit")) return "debit-credit";
+  return "none";
+}
+
+/** Do the STABLE anchor columns (date, description) align across regions? */
+function anchorCentersAlign(a: TableColumn[], b: TableColumn[], tol = 50): boolean {
+  for (const m of ["date", "description"] as const) {
+    const ca = a.find((c) => c.meaning === m)?.center;
+    const cb = b.find((c) => c.meaning === m)?.center;
+    if (ca === undefined || cb === undefined) continue;
+    if (Math.abs(ca - cb) > tol) return false;
+  }
+  return true;
+}
+
+type StitchDecision = { reason: string | null; relaxed: boolean };
+
 /**
- * Why two consecutive regions cannot be stitched, or null when compatible.
- * Conservative: same kind, same column meanings at aligned x, sequential pages,
- * no legal/remittance/footer barrier between them, and (for bank tables) no fresh
- * account opening between them — a balance-forward continuation is allowed.
+ * Decide whether two consecutive regions can be stitched. Compatible when the
+ * same kind, sequential pages, no legal/remittance/footer barrier between them,
+ * and (bank) no fresh account opening between them. Columns may match either
+ * STRICTLY (identical meanings at aligned x) or via RELAXED compatibility: the
+ * core value shape and date/description anchors match while an OPTIONAL column
+ * (category/reference/posting date) appears on only one page or shifts the
+ * amount x — per-region rows are built independently, so this is safe.
  */
-function stitchRejectReason(
+function stitchDecision(
   lines: VisualLine[],
   prev: TableRegion,
   prevEnd: number,
   next: TableRegion,
-): string | null {
-  if (prev.statementKind !== next.statementKind) return "kind-mismatch";
-  if (meaningSet(prev.columns) !== meaningSet(next.columns)) return "columns-mismatch";
-  if (!centersAlign(prev.columns, next.columns)) return "centers-misaligned";
-  if (next.page < prev.page || next.page - prev.page > 1) return "page-gap";
+): StitchDecision {
+  if (prev.statementKind !== next.statementKind) return { reason: "kind-mismatch", relaxed: false };
+
+  const strictSame =
+    meaningSet(prev.columns) === meaningSet(next.columns) &&
+    centersAlign(prev.columns, next.columns);
+  let relaxed = false;
+  if (!strictSame) {
+    const shape = valueShape(prev.columns);
+    const sameShape = shape !== "none" && shape === valueShape(next.columns);
+    const bothHaveDesc =
+      prev.columns.some((c) => c.meaning === "description") &&
+      next.columns.some((c) => c.meaning === "description");
+    const sameDatePresence =
+      prev.columns.some((c) => c.meaning === "date") ===
+      next.columns.some((c) => c.meaning === "date");
+    // Differences must be confined to optional columns only.
+    const prevCore = meaningSet(prev.columns.filter((c) => !OPTIONAL_MEANINGS.has(c.meaning)));
+    const nextCore = meaningSet(next.columns.filter((c) => !OPTIONAL_MEANINGS.has(c.meaning)));
+    if (!sameShape || !bothHaveDesc || !sameDatePresence || prevCore !== nextCore) {
+      return { reason: "columns-mismatch", relaxed: false };
+    }
+    if (!anchorCentersAlign(prev.columns, next.columns)) {
+      return { reason: "centers-misaligned", relaxed: false };
+    }
+    relaxed = true;
+  }
+
+  if (next.page < prev.page || next.page - prev.page > 1) return { reason: "page-gap", relaxed };
   for (let i = prevEnd; i < next.headerIndex && i < lines.length; i += 1) {
-    if (STITCH_BARRIER_RE.test(lines[i].text)) return "hard-stop";
+    if (STITCH_BARRIER_RE.test(lines[i].text)) return { reason: "hard-stop", relaxed };
   }
   if (prev.statementKind === "bank-account") {
     const scanEnd = Math.min(next.headerIndex + 4, lines.length);
     for (let i = prevEnd; i < scanEnd; i += 1) {
       const t = lines[i].text;
       if (/\b(opening|beginning) balance\b/i.test(t) && !/balance forward/i.test(t)) {
-        return "new-account";
+        return { reason: "new-account", relaxed };
       }
     }
   }
-  return null;
+  return { reason: null, relaxed };
 }
 
 /** Group consecutive compatible regions (sequential continuation/sections only). */
@@ -1009,17 +1114,26 @@ export function planStitch(
   const groups: number[][] = [];
   const rejectReasons: Record<string, number> = {};
   let rejectedCount = 0;
+  let relaxedCompatibilityUsed = 0;
   if (regions.length === 0) {
-    return { groups, stitchedCandidatesTried: 0, regionsStitched: 0, rejectedCount: 0, rejectReasons };
+    return {
+      groups,
+      stitchedCandidatesTried: 0,
+      regionsStitched: 0,
+      rejectedCount: 0,
+      rejectReasons,
+      relaxedCompatibilityUsed: 0,
+    };
   }
   let current = [0];
   for (let i = 1; i < regions.length; i += 1) {
-    const reason = stitchRejectReason(lines, regions[i - 1], ends[i - 1], regions[i]);
-    if (reason === null) {
+    const decision = stitchDecision(lines, regions[i - 1], ends[i - 1], regions[i]);
+    if (decision.reason === null) {
+      if (decision.relaxed) relaxedCompatibilityUsed += 1;
       current.push(i);
     } else {
       rejectedCount += 1;
-      rejectReasons[reason] = (rejectReasons[reason] ?? 0) + 1;
+      rejectReasons[decision.reason] = (rejectReasons[decision.reason] ?? 0) + 1;
       groups.push(current);
       current = [i];
     }
@@ -1032,6 +1146,7 @@ export function planStitch(
     regionsStitched: multi.reduce((a, g) => a + g.length, 0),
     rejectedCount,
     rejectReasons,
+    relaxedCompatibilityUsed,
   };
 }
 
@@ -1066,10 +1181,15 @@ function buildStitchedCandidate(
   let closing: number | null;
   let summary: { credits: number | null; debits: number | null };
   if (isCc) {
-    const b = detectCreditCardBalances(spanTexts);
+    // A credit-card statement's previous/new balance is a single statement-level
+    // figure printed once (often on a summary page outside any one region's
+    // span). Scan the whole document so a stitched multi-page CC candidate can
+    // recover them; they are unique labels, so widening is safe.
+    const allTexts = lines.map((l) => l.text);
+    const b = detectCreditCardBalances(allTexts);
     opening = b.opening;
     closing = b.closing;
-    summary = detectCreditCardSummary(spanTexts);
+    summary = detectCreditCardSummary(allTexts);
   } else {
     opening = regionBankBalances(lines, first.headerIndex, ends[firstIdx]).opening;
     const lastClose = regionBankBalances(lines, last.headerIndex, ends[lastIdx]).closing;
@@ -1106,6 +1226,11 @@ function buildStitchedCandidate(
       finalBalanceDifference: null,
       stitched: true,
       regionsStitched: group.length,
+      ccRowsRejectedAsNonTx: sum((d) => d.ccRowsRejectedAsNonTx),
+      ccOptionalColumnsIgnored: group.reduce(
+        (a, idx) => a + regions[idx].columns.filter((c) => OPTIONAL_MEANINGS.has(c.meaning)).length,
+        0,
+      ),
     },
   };
 }

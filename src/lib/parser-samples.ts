@@ -783,7 +783,7 @@ export const parserSamples: ParserSample[] = [
       // FX transaction: the foreign amount (175.00) appears on its own line
       // BEFORE the settled CAD amount (237.45). The CAD value must win; the row
       // must not be dropped (the real failure was a missing 237.45 debit).
-      "APR 12 APR 13 IHOMEFINDER SAN FRANCISCO CA",
+      "APR 12 APR 13 GLOBAL WEBSHOP USA",
       "Foreign Currency USD",
       "175.00",
       "Exchange rate 1.357143",
