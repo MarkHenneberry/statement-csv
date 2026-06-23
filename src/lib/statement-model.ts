@@ -202,15 +202,49 @@ function buildValidation(
     confidence -= 0.2;
   }
 
-  // Summary totals printed on the statement vs the parsed totals.
+  // Summary totals printed on the statement vs the parsed totals. The
+  // reconciliation identity (opening +/- credits/debits = closing) can be
+  // INTERNALLY true yet EXTERNALLY wrong when parsed activity is ~0 but the
+  // statement's own summary shows real activity (e.g. opening==closing==new
+  // balance with no parsed rows). That is a false pass — downgrade it.
   const sum = result.summary;
-  if (sum.credits !== null && Math.abs(toCents(check.totalCredits) - toCents(sum.credits)) > 1) {
-    issues.push("Parsed credits do not match the statement's summary total.");
-    confidence -= 0.15;
-  }
-  if (sum.debits !== null && Math.abs(toCents(check.totalDebits) - toCents(sum.debits)) > 1) {
-    issues.push("Parsed debits do not match the statement's summary total.");
-    confidence -= 0.15;
+  const meaningful = (v: number | null): v is number => typeof v === "number" && Math.abs(v) >= 0.01;
+  // A GROSS mismatch: parsed total is ~0 while the summary is meaningful, or the
+  // gap is both > $1 and > 25% of the summary total (tolerates detection noise so
+  // a fully-parsed statement whose totals match is unaffected).
+  const grossMismatch = (parsed: number, summaryV: number | null): boolean => {
+    if (!meaningful(summaryV)) return false;
+    const diff = Math.abs(parsed - summaryV);
+    return diff > 1 && (Math.abs(parsed) < 0.01 || diff > Math.abs(summaryV) * 0.25);
+  };
+  const credGross = grossMismatch(check.totalCredits, sum.credits);
+  const debGross = grossMismatch(check.totalDebits, sum.debits);
+  const summaryActivity = meaningful(sum.credits) || meaningful(sum.debits);
+  // Low-row guard: a single/zero row with NEAR-ZERO parsed activity cannot
+  // represent a statement whose summary shows real activity (the exact false-pass
+  // shape reported: a lone warning/legal line, no debits/credits). A genuine
+  // single-transaction statement whose row DOES carry the activity is left to the
+  // gross-mismatch check above, so it is not penalised here.
+  const parsedActivityNearZero =
+    Math.abs(check.totalCredits) < 0.01 && Math.abs(check.totalDebits) < 0.01;
+  const lowRowVsSummary = summaryActivity && rows.length <= 1 && parsedActivityNearZero;
+
+  if (credGross || debGross || lowRowVsSummary) {
+    // Hard downgrade: never report "passed" when the parse missed the activity
+    // the statement summary describes. Forces needs-review and AI fallback.
+    status = "needs-review";
+    issues.push("Parsed activity does not match the statement summary totals; transactions appear to be missing.");
+    confidence = Math.min(confidence, 0.4) - 0.1;
+  } else {
+    // Minor mismatch (both totals present and close-ish): confidence only.
+    if (meaningful(sum.credits) && Math.abs(toCents(check.totalCredits) - toCents(sum.credits)) > 1) {
+      issues.push("Parsed credits do not exactly match the statement's summary total.");
+      confidence -= 0.15;
+    }
+    if (meaningful(sum.debits) && Math.abs(toCents(check.totalDebits) - toCents(sum.debits)) > 1) {
+      issues.push("Parsed debits do not exactly match the statement's summary total.");
+      confidence -= 0.15;
+    }
   }
 
   // Row-level contamination: incomplete or low-confidence rows.

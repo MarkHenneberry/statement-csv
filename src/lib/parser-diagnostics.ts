@@ -97,11 +97,18 @@ export function buildParserDiagnostics(input: {
     (r) => r.debit === null && r.credit === null,
   ).length;
 
-  const balanceStatus: DiagnosticsBalanceStatus = !balanceCheck.available
-    ? "limited"
-    : balanceCheck.passed
-      ? "passed"
-      : "needs-review";
+  // Defer to the full validation engine: a needs-review validation (e.g. parsed
+  // totals not matching the statement summary) overrides a bare arithmetic pass.
+  const balanceStatus: DiagnosticsBalanceStatus =
+    validation?.status === "needs-review"
+      ? "needs-review"
+      : !balanceCheck.available
+        ? "limited"
+        : validation?.status === "limited"
+          ? "limited"
+          : balanceCheck.passed
+            ? "passed"
+            : "needs-review";
 
   const openingDetected = openingBalance !== null;
   const closingDetected = closingBalance !== null;

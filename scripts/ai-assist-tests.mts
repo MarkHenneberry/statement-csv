@@ -16,20 +16,24 @@ import {
   resolveAiAssist,
   buildAiEvidence,
   candidateBeatsParser,
+  repairCreditCardInterestFees,
   type AiAssistConfig,
   type ChatResult,
 } from "../src/lib/ai-assist.ts";
+import { detectCreditCardInterestFees } from "../src/lib/parser.ts";
 import {
   buildStatementFromRows,
   type ParsedStatement,
 } from "../src/lib/statement-model.ts";
 import type { TransactionRow } from "../src/lib/upload.ts";
+import { computeBalanceCheck, resolveBalanceStatus } from "../src/lib/upload.ts";
 import { selectReviewMessage } from "../src/lib/review-messages.ts";
 import { pricingPlans, pricingSubheadline, pricingFooter } from "../src/lib/pricing.ts";
 import { SCANNED_PDF_WARNING } from "../src/lib/parser.ts";
 import {
   selectVisionRegions,
   renderVisionEvidence,
+  analyzeVisionPages,
   EXCLUDED_REGION_KINDS,
   type VisionImage,
   type RegionRenderer,
@@ -63,6 +67,19 @@ function row(over: Partial<TransactionRow> = {}): TransactionRow {
 }
 function bank(rows: TransactionRow[], opening: number, closing: number): ParsedStatement {
   return buildStatementFromRows(rows, { statementKind: "bank-account", openingBalance: opening, closingBalance: closing });
+}
+function cc(
+  rows: TransactionRow[],
+  opening: number,
+  closing: number,
+  summary?: { credits: number | null; debits: number | null },
+): ParsedStatement {
+  return buildStatementFromRows(rows, {
+    statementKind: "credit-card",
+    openingBalance: opening,
+    closingBalance: closing,
+    summary,
+  });
 }
 
 const ON: AiAssistConfig = { enabled: true, model: "m", hasKey: true, missingConfig: [] };
@@ -261,6 +278,19 @@ check("footer says scanned/image not supported", /scanned or image-based stateme
   );
   const disabled = await renderVisionEvidence(bytes, regions, { enabled: false });
   check("no rendering when vision disabled", disabled.available === false && disabled.failureReason === "vision-disabled");
+
+  // Default renderer on invalid PDF bytes → a SPECIFIC reason, never "render-failed".
+  const badBytes = new Uint8Array([0, 1, 2, 3, 4, 5]);
+  const realFail = await renderVisionEvidence(badBytes, regions, { enabled: true });
+  check(
+    "default renderer reports a specific failure reason (not generic)",
+    realFail.available === false &&
+      ["page-render-error", "canvas-backend-unavailable", "pdf-renderer-unavailable"].includes(
+        realFail.failureReason ?? "",
+      ) &&
+      realFail.failureReason !== "render-failed",
+    realFail.failureReason ?? "(null)",
+  );
 }
 
 // renderFailedReason flows into the outcome (text-layout fallback diagnostics).
@@ -356,6 +386,271 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, crop: 
   });
   const serialized = JSON.stringify(r.outcome);
   check("AI outcome diagnostics contain no row/description content", !serialized.includes("SECRETMERCHANT") && !serialized.includes("base64"));
+}
+
+// ----- false-pass guard: summary totals vs near-zero parsed activity -----
+{
+  // The reported bug: a credit-card statement where the parser captured only a
+  // warning line, used New Balance as BOTH opening and closing (so opening==closing
+  // "reconciles"), and reported a false PASS while the summary shows real activity.
+  const warningRow = row({ description: "ON YOUR LAST STATEMENT. IF THE", debit: null, credit: null, balance: null });
+  const falsePass = cc([warningRow], 23058.3, 23058.3, { credits: 1519.68, debits: 22972.51 });
+  check(
+    "false-pass blocked: opening==closing + nonzero summary + 1 row → needs-review",
+    falsePass.validation.status === "needs-review",
+    `status=${falsePass.validation.status}`,
+  );
+  check(
+    "false-pass blocked: it is NOT reported as passed",
+    falsePass.validation.status !== "passed",
+  );
+  check(
+    "false-pass blocked: it remains AI-eligible",
+    isAiAssistEligible(falsePass) === true,
+  );
+
+  // A genuinely reconciled, fully-populated CC statement must STILL pass (no regression).
+  const realRows = [
+    row({ description: "Payment", credit: 1519.68, debit: null }),
+    row({ description: "Purchase A", debit: 22000, credit: null }),
+    row({ description: "Purchase B", debit: 972.51, credit: null }),
+  ];
+  const goodCc = cc(realRows, 1605.47, 23058.3, { credits: 1519.68, debits: 22972.51 });
+  check(
+    "reconciled CC with full rows + matching summary still passes",
+    goodCc.validation.status === "passed",
+    `status=${goodCc.validation.status} diff=${goodCc.validation.difference}`,
+  );
+}
+
+// A summary with NO activity (both totals zero/absent) must not trip the guard.
+{
+  const trivial = cc([row({ description: "Single", debit: 10, credit: null })], 100, 110, { credits: null, debits: 10 });
+  check("zero/absent summary credits does not force needs-review", trivial.validation.status === "passed", trivial.validation.status);
+}
+
+// ----- user-facing balance status reflects validation, not bare arithmetic -----
+{
+  // The reported bug: opening == closing with no real activity → arithmetic check
+  // "passes", but validation said needs-review. The UI must show Needs review.
+  const arithCheck = computeBalanceCheck(23058.3, 23058.3, [row({ description: "ON YOUR LAST STATEMENT", debit: null, credit: null })], "credit-card");
+  check("arithmetic-only check still reports passed (the trap)", arithCheck.passed === true);
+  check(
+    "resolveBalanceStatus downgrades to review when validation needs-review (diff 0)",
+    resolveBalanceStatus(arithCheck, "needs-review") === "review",
+  );
+  check(
+    "credit-card summary mismatch cannot render green Passed",
+    resolveBalanceStatus(arithCheck, "needs-review") !== "passed",
+  );
+  check("resolveBalanceStatus passes only when validation passed", resolveBalanceStatus(arithCheck, "passed") === "passed");
+  check("resolveBalanceStatus limited when balances unavailable", resolveBalanceStatus({ available: false, passed: false }, "passed") === "limited");
+  check("resolveBalanceStatus limited when validation limited", resolveBalanceStatus(arithCheck, "limited") === "limited");
+}
+
+// ----- AI near-zero candidate is rejected when summary totals are meaningful -----
+{
+  const ccBroken = cc([row({ description: "ON YOUR LAST STATEMENT. IF THE", debit: null, credit: null })], 23058.3, 23058.3, { credits: 1519.68, debits: 22972.51 });
+  check("broken CC parse is AI-eligible", isAiAssistEligible(ccBroken) === true);
+  // AI returns a one-row, near-zero candidate (the false-pass shape) → must be rejected.
+  const r = await runAiAssist(ccBroken, ON, {}, {
+    env: {} as NodeJS.ProcessEnv,
+    call: reply({ candidate: { statementKind: "credit-card", openingBalance: 23058.3, closingBalance: 23058.3, transactions: [{ description: "ON YOUR LAST STATEMENT", amount: 0 }] } }),
+  });
+  check(
+    "AI near-zero candidate rejected with a safe reason",
+    r.outcome.aiRejectedReason === "ai-returned-near-zero-rows",
+    `reason=${r.outcome.aiRejectedReason}`,
+  );
+  check("AI near-zero candidate not adopted", r.outcome.adoptedCandidateSource === "parser" && r.outcome.improved === false);
+
+  // evidence flag is raised for this shape.
+  const ev2 = buildAiEvidence(ccBroken);
+  check("evidence flags parserLikelyMissedTransactions", ev2.parserLikelyMissedTransactions === true);
+
+  // A real AI candidate that rebuilds the table and matches the summary is adopted.
+  // (Previous Balance 1605.47 is a deterministically-detected balance the AI may use.)
+  const good = await runAiAssist(ccBroken, ON, {}, {
+    env: {} as NodeJS.ProcessEnv,
+    evidence: { detectedBalances: [1605.47, 23058.3] },
+    call: reply({ candidate: { statementKind: "credit-card", openingBalance: 1605.47, closingBalance: 23058.3, summaryTotals: { totalCredits: 1519.68, totalDebits: 22972.51 }, transactions: [
+      { description: "Payment", credit: 1519.68, amount: 1519.68 },
+      { description: "Purchase A", debit: 22000, amount: -22000 },
+      { description: "Purchase B", debit: 972.51, amount: -972.51 },
+    ] } }),
+  });
+  check(
+    "AI candidate that rebuilds the table + matches summary is adopted",
+    good.outcome.improved === true && good.outcome.adoptedCandidateSource === "ai-candidate",
+    `status=${good.outcome.status} reason=${good.outcome.aiRejectedReason}`,
+  );
+}
+
+// ----- diagnostics distinguish "vision ran but AI failed" vs "vision did not run" -----
+{
+  const ccBroken = cc([row({ description: "warn", debit: null, credit: null })], 100, 100, { credits: 50, debits: 50 });
+  // Vision ran (images provided) but AI returns an empty table (no usable rows).
+  const visionRan = await runAiAssist(ccBroken, ON, {}, {
+    env: {} as NodeJS.ProcessEnv,
+    images: [img("table-body-p3-middle")],
+    call: reply({ candidate: { statementKind: "credit-card", transactions: [] } }),
+  });
+  check("vision-ran-but-failed: aiVisionUsed true + fallback vision", visionRan.outcome.aiVisionUsed === true && visionRan.outcome.aiFallbackType === "vision");
+  check("vision-ran-but-failed: no-usable-result + safe reason", visionRan.outcome.status === "no-usable-result" && visionRan.outcome.aiRejectedReason === "no-transaction-table-candidate");
+
+  // Vision did NOT run (no images) — text-layout fallback, render reason recorded.
+  const noVision = await runAiAssist(ccBroken, ON, {}, {
+    env: {} as NodeJS.ProcessEnv,
+    renderFailedReason: "canvas-backend-unavailable",
+    call: reply({ candidate: { statementKind: "credit-card", transactions: [] } }),
+  });
+  check("vision-did-not-run: aiVisionUsed false + reason surfaced", noVision.outcome.aiVisionUsed === false && noVision.outcome.aiRenderFailedReason === "canvas-backend-unavailable");
+}
+
+// ----- vision page classification (analyzeVisionPages) -----
+{
+  // Page layout: 1=summary, 2=legal disclosure, 3=TRANSACTIONS, 4=TRANSACTIONS continued, 5=rewards
+  const pages = [
+    "Previous Balance 1,605.47 New Balance 23,058.30 Minimum Payment 35.00",
+    "Important Information about your account. Cardholder agreement terms and conditions.",
+    "TRANSACTIONS\nTrans Date Posting Date Description Amount\nJan 2 Jan 3 Store 10.00",
+    "TRANSACTIONS Continued\nJan 5 Jan 6 Store 20.00",
+    "Rewards points summary. You earned points this period.",
+  ];
+  const a = analyzeVisionPages(pages);
+  check("analyze: transaction pages detected (3 & 4)", a.transactionHeaderPages.includes(3) && a.transactionHeaderPages.includes(4));
+  check("analyze: summary page detected (1)", a.summaryPages.includes(1));
+  check("analyze: legal page detected (2) and excluded", a.legalPages.includes(2));
+  check("analyze: rewards page flagged as warning/reward (5)", a.warningRewardPages.includes(5));
+  check("analyze: a transaction page is never also legal/warning", a.legalPages.every((p) => !a.transactionHeaderPages.includes(p)) && a.warningRewardPages.every((p) => !a.transactionHeaderPages.includes(p)));
+
+  // Selection PRIORITIZES the transaction pages and EXCLUDES the legal page.
+  const regions = selectVisionRegions({
+    pageCount: pages.length,
+    hasLowConfidence: true,
+    transactionHeaderPages: a.transactionHeaderPages,
+    summaryPages: a.summaryPages,
+    legalPages: a.legalPages,
+  });
+  check("selection includes a transaction page", regions.some((r) => a.transactionHeaderPages.includes(r.page)));
+  check("selection never targets the legal page", regions.every((r) => !a.legalPages.includes(r.page)));
+  check("selection includes table-header/body kinds for tx pages", regions.some((r) => r.kind === "table-header") && regions.some((r) => r.kind === "table-body"));
+}
+
+// visionSelection diagnostics thread through the outcome (and carry no text).
+{
+  const r = await runAiAssist(brokenStmt, ON, {}, {
+    env: {} as NodeJS.ProcessEnv,
+    visionSelection: {
+      selectedPageIndexes: [3, 4],
+      selectedRegionKinds: ["summary", "table-header", "table-body"],
+      selectedRegionCount: 5,
+      transactionHeaderPagesDetected: 2,
+      summaryPagesDetected: 1,
+      excludedLegalPagesCount: 1,
+      excludedWarningRewardPagesCount: 1,
+    },
+    call: reply({ candidate: null, repairPlan: null }),
+  });
+  check(
+    "visionSelection diagnostics surfaced on outcome",
+    r.outcome.visionSelection?.selectedRegionCount === 5 && r.outcome.visionSelection?.transactionHeaderPagesDetected === 2,
+  );
+}
+
+// ----- credit-card interest / fee detection -----
+{
+  const lines = [
+    "+Interest Charged $35.94",
+    "+Fees Charged $0.00",
+    "Total Debits $22,972.51",
+    "FEES",
+    "TOTAL FEES FOR THIS PERIOD $0.00",
+    "INTEREST",
+    "29/01 29/01 Interest Charge on Purchases $35.94",
+    "29/01 29/01 Interest Charge on Cash Advances $0.00",
+    "TOTAL INTEREST FOR THIS PERIOD $35.94",
+    "Total Interest Charged in 2025 $35.94",
+  ];
+  const d = detectCreditCardInterestFees(lines);
+  check("interest detect: current-period interest = 35.94", d.interestCharged === 35.94, String(d.interestCharged));
+  check("interest detect: current-period fees = 0", d.feesCharged === 0, String(d.feesCharged));
+  check("interest detect: one nonzero line item (purchases)", d.lineItems.length === 1 && Math.abs(d.lineItems[0].amount - 35.94) < 0.001);
+  check("interest detect: zero cash-advance line ignored", d.lineItems.every((li) => li.amount >= 0.01));
+  check("interest detect: year-to-date total not a line item", d.lineItems.every((li) => !/2025/.test(li.description)));
+}
+
+// ----- credit-card interest / fee repair -----
+{
+  const detected = { interestCharged: 35.94, feesCharged: 0, lineItems: [{ description: "Interest Charge on Purchases", amount: 35.94, date: "2025-01-29" }] };
+  // Purchases reconcile credits but debits are short by exactly the interest (35.94).
+  const short = cc(
+    [row({ debit: 22000, credit: null }), row({ debit: 936.57, credit: null }), row({ credit: 1519.68, debit: null })],
+    1605.47,
+    23058.3,
+    { credits: 1519.68, debits: 22972.51 },
+  );
+  check("repair precondition: candidate is short on debits", short.validation.status === "needs-review");
+  const rep = repairCreditCardInterestFees(short, detected);
+  check("interest repair applied", rep.applied === true && rep.rowsAdded === 1);
+  const repDebits = rep.statement.transactions.reduce((a, t) => a + (t.debit ?? 0), 0);
+  check("interest repair brings debits to summary total", Math.abs(repDebits - 22972.51) < 0.001, String(repDebits));
+  check("interest repair reconciles → passed", rep.statement.validation.status === "passed", rep.statement.validation.status);
+  check("interest repair row has a description + debit", rep.statement.transactions.some((t) => /interest/i.test(t.description) && (t.debit ?? 0) > 0));
+
+  // Idempotent: repairing the already-repaired statement is a no-op (no duplicate row).
+  const rep2 = repairCreditCardInterestFees(rep.statement, detected);
+  check("interest repair is idempotent (no duplicate)", rep2.applied === false && rep2.rowsAdded === 0);
+
+  // No-op when the interest row is already present.
+  const already = cc(
+    [row({ debit: 22936.57, credit: null }), row({ credit: 1519.68, debit: null }), row({ debit: 35.94, description: "Interest Charge on Purchases", credit: null })],
+    1605.47,
+    23058.3,
+    { credits: 1519.68, debits: 22972.51 },
+  );
+  const repAlready = repairCreditCardInterestFees(already, detected);
+  check("interest repair no-op when already present", repAlready.applied === false);
+
+  // Deterministic repair only uses detected evidence: a shortfall that does NOT
+  // match detected interest/fees is flagged, not invented.
+  const mismatched = cc(
+    [row({ debit: 22872.51, credit: null }), row({ credit: 1519.68, debit: null })],
+    1605.47,
+    23058.3,
+    { credits: 1519.68, debits: 22972.51 },
+  );
+  const repMis = repairCreditCardInterestFees(mismatched, detected); // short by 100, interest 35.94
+  check("interest repair flags missing-interest-or-fee-row on mismatch", repMis.applied === false && repMis.issue === "missing-interest-or-fee-row");
+
+  // Bank-account statements are never interest/fee-repaired.
+  const bankShort = bank([row({ credit: 10 })], 100, 200);
+  check("interest repair ignores bank-account statements", repairCreditCardInterestFees(bankShort, detected).applied === false);
+}
+
+// ----- AI candidate short by interest is repaired + adopted -----
+{
+  const broken = cc([row({ description: "warn", debit: null, credit: null })], 23058.3, 23058.3, { credits: 1519.68, debits: 22972.51 });
+  const r = await runAiAssist(broken, ON, {}, {
+    env: {} as NodeJS.ProcessEnv,
+    evidence: {
+      detectedBalances: [1605.47, 23058.3],
+      creditCardInterestFees: { interestCharged: 35.94, feesCharged: 0, lineItems: [{ description: "Interest Charge on Purchases", amount: 35.94, date: "2025-01-29" }] },
+    },
+    // AI rebuilds purchases (debits short by the interest) + the payment credit.
+    call: reply({ candidate: { statementKind: "credit-card", openingBalance: 1605.47, closingBalance: 23058.3, summaryTotals: { totalCredits: 1519.68, totalDebits: 22972.51 }, transactions: [
+      { description: "Purchase A", debit: 22000, amount: -22000 },
+      { description: "Purchase B", debit: 936.57, amount: -936.57 },
+      { description: "Payment", credit: 1519.68, amount: 1519.68 },
+    ] } }),
+  });
+  check(
+    "AI candidate short by interest is repaired and reconciles",
+    r.outcome.improved === true && r.outcome.interestFeeRepairApplied === true && r.outcome.status === "reconciled",
+    `status=${r.outcome.status} repair=${r.outcome.interestFeeRepairApplied}`,
+  );
+  check("repaired adopted statement has the interest row", (r.rows ?? []).some((row) => /interest/i.test(row.description) && (row.debit ?? 0) > 0));
+  check("AI call duration recorded", typeof r.outcome.aiCallDurationMs === "number");
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

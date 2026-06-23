@@ -152,6 +152,49 @@ export function ParserDiagnosticsPanel({
             />
             <Metric label="Provider response id" value={d.aiAssist.aiProviderResponseId ?? "—"} />
             <Metric label="Render failed reason" value={d.aiAssist.aiRenderFailedReason ?? "—"} />
+            <Metric
+              label="AI call duration"
+              value={d.aiAssist.aiCallDurationMs === null ? "—" : `${d.aiAssist.aiCallDurationMs} ms`}
+            />
+            <Metric label="Interest/fee repair" value={yesNo(d.aiAssist.interestFeeRepairApplied)} />
+            <Metric label="Interest/fee rows added" value={String(d.aiAssist.interestFeeRowsAdded)} />
+            {d.aiAssist.visionSelection ? (
+              <>
+                <Metric
+                  label="Vision pages selected"
+                  value={
+                    d.aiAssist.visionSelection.selectedPageIndexes.length > 0
+                      ? d.aiAssist.visionSelection.selectedPageIndexes.join(", ")
+                      : "—"
+                  }
+                />
+                <Metric
+                  label="Vision region kinds"
+                  value={
+                    d.aiAssist.visionSelection.selectedRegionKinds.length > 0
+                      ? d.aiAssist.visionSelection.selectedRegionKinds.join(", ")
+                      : "—"
+                  }
+                />
+                <Metric label="Vision regions" value={String(d.aiAssist.visionSelection.selectedRegionCount)} />
+                <Metric
+                  label="Tx-header pages detected"
+                  value={String(d.aiAssist.visionSelection.transactionHeaderPagesDetected)}
+                />
+                <Metric
+                  label="Summary pages detected"
+                  value={String(d.aiAssist.visionSelection.summaryPagesDetected)}
+                />
+                <Metric
+                  label="Excluded legal pages"
+                  value={String(d.aiAssist.visionSelection.excludedLegalPagesCount)}
+                />
+                <Metric
+                  label="Excluded warning/reward pages"
+                  value={String(d.aiAssist.visionSelection.excludedWarningRewardPagesCount)}
+                />
+              </>
+            ) : null}
           </dl>
         </div>
       ) : null}

@@ -7,6 +7,7 @@ import {
   PROCESSING_STEPS,
   blankRow,
   computeBalanceCheck,
+  resolveBalanceStatus,
   countFlaggedRows,
   countLowConfidence,
   createMockStatement,
@@ -228,17 +229,27 @@ export function UploadFlow() {
   if (status === "preview" && meta && check) {
     const flaggedCount = countFlaggedRows(rows);
     const lowConfidenceCount = countLowConfidence(rows);
-    const balanceStatus: BalanceStatus = !check.available
-      ? "limited"
-      : check.passed
-        ? "passed"
-        : "review";
+    // User-facing status reflects the FULL validation engine, not just the
+    // arithmetic identity — a coincidentally-balancing parse that missed the
+    // statement's summary activity must show "Needs review", never "Passed".
+    const validationStatus = meta.validation?.status;
+    const balanceStatus: BalanceStatus = resolveBalanceStatus(check, validationStatus);
 
     const reviewReasons: string[] = [...meta.parserWarnings];
     if (check.available && !check.passed) {
       reviewReasons.push(
         "The balance check did not match the statement's closing balance.",
       );
+    }
+    // Surface validation-engine issues (e.g. parsed totals not matching the
+    // statement's summary totals) even when the arithmetic difference is 0.
+    if (validationStatus === "needs-review") {
+      for (const issue of meta.validation?.issues ?? []) {
+        if (!reviewReasons.includes(issue)) reviewReasons.push(issue);
+      }
+      if ((meta.validation?.issues ?? []).length === 0) {
+        reviewReasons.push("The parsed transactions do not match the statement summary totals.");
+      }
     }
     if (lowConfidenceCount > 0) {
       reviewReasons.push(
@@ -328,7 +339,7 @@ export function UploadFlow() {
             />
           </div>
           <div className="lg:col-span-1">
-            <BalanceCheckPanel check={check} />
+            <BalanceCheckPanel check={check} validationStatus={validationStatus} />
           </div>
         </div>
 

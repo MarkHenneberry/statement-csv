@@ -1,4 +1,5 @@
-import { BalanceCheck, formatMoney } from "@/lib/upload";
+import { BalanceCheck, formatMoney, resolveBalanceStatus } from "@/lib/upload";
+import type { StatementValidationStatus } from "@/lib/statement-model";
 
 function Line({
   label,
@@ -25,10 +26,19 @@ function Line({
   );
 }
 
-export function BalanceCheckPanel({ check }: { check: BalanceCheck }) {
-  const { available, passed, difference } = check;
+export function BalanceCheckPanel({
+  check,
+  validationStatus,
+}: {
+  check: BalanceCheck;
+  /** The full validation status; overrides the bare arithmetic check when stronger. */
+  validationStatus?: StatementValidationStatus;
+}) {
+  const { difference } = check;
 
-  const status = !available ? "limited" : passed ? "passed" : "review";
+  // Use the validation-aware status so this badge never reads "Passed" when the
+  // engine determined the parse missed the statement's summary activity.
+  const status = resolveBalanceStatus(check, validationStatus);
   const badge = {
     passed: { label: "Passed", tone: "bg-emerald-50 text-emerald-700", dot: "bg-emerald-500" },
     review: { label: "Needs review", tone: "bg-amber-50 text-amber-700", dot: "bg-amber-500" },
@@ -69,7 +79,9 @@ export function BalanceCheckPanel({ check }: { check: BalanceCheck }) {
           ? " Opening or closing balance was not found, so this check is limited — review the rows carefully."
           : status === "passed"
             ? " The extracted totals match the statement's closing balance, but please still review the rows."
-            : " The totals do not match the statement's closing balance yet — review the rows for a missing or misread transaction."}
+            : difference !== null && difference !== 0
+              ? " The totals do not match the statement's closing balance yet — review the rows for a missing or misread transaction."
+              : " The parsed transactions do not match the statement's summary totals — the transaction table was likely missed. Review the rows before exporting."}
       </p>
     </div>
   );

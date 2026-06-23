@@ -103,6 +103,24 @@ export type AiAssistOutcome = {
   aiProviderResponseId: string | null;
   /** Why vision rendering produced no images (safe label), if applicable. */
   aiRenderFailedReason: string | null;
+  /** Safe aggregate vision page/region selection diagnostics. */
+  visionSelection: VisionSelectionDiag | null;
+  /** Wall-clock duration of the single AI call (ms), when measured. */
+  aiCallDurationMs: number | null;
+  /** A deterministic credit-card interest/fee repair was applied to the result. */
+  interestFeeRepairApplied: boolean;
+  /** Number of interest/fee rows added by the repair. */
+  interestFeeRowsAdded: number;
+};
+
+export type VisionSelectionDiag = {
+  selectedPageIndexes: number[];
+  selectedRegionKinds: string[];
+  selectedRegionCount: number;
+  transactionHeaderPagesDetected: number;
+  summaryPagesDetected: number;
+  excludedLegalPagesCount: number;
+  excludedWarningRewardPagesCount: number;
 };
 
 export type AiAssistRun = {
@@ -167,6 +185,18 @@ export type AiEvidence = {
   candidateSummaries: { name: string; rowCount: number; totalDebits: number; totalCredits: number; balanceStatus: string; difference: number | null }[];
   /** Compact transaction-region lines (NOT full document text). */
   regionLines: string[];
+  /**
+   * True when the parser captured ~no activity (near-zero totals or <=1 row) yet
+   * the statement's own summary totals are meaningful — a strong signal the parser
+   * MISSED the transaction table and the AI must rebuild rows from the images.
+   */
+  parserLikelyMissedTransactions: boolean;
+  /**
+   * Detected CURRENT-PERIOD credit-card interest/fee activity (part of Total
+   * Debits). Lets the model include — and a deterministic step repair — the
+   * interest/fee rows that a transaction-only pass tends to miss.
+   */
+  creditCardInterestFees: InterestFeeDetection | null;
   transactions: {
     transactionDate: string | null;
     postingDate: string | null;
@@ -176,6 +206,12 @@ export type AiEvidence = {
     amount: number;
     balance: number | null;
   }[];
+};
+
+export type InterestFeeDetection = {
+  interestCharged: number | null;
+  feesCharged: number | null;
+  lineItems: { description: string; amount: number; date: string | null }[];
 };
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -197,7 +233,37 @@ export function buildAiEvidence(
   add(statement.summaryTotals?.totalDebits ?? null);
   for (const v of supplement.detectedBalances ?? []) add(v);
 
+  // Credit-card opening (Previous Balance) is frequently mislabeled by text
+  // reconstruction when the summary is a horizontal totals row (the label sits in a
+  // header row, so label-adjacency grabs the wrong column). It is, however, fully
+  // implied by the AUTHORITATIVE detected values: previous = new - debits + credits.
+  // Deriving it lets the AI legitimately use the real opening without inventing a
+  // balance. Generic identity, not bank-specific.
+  if (statement.statementKind === "credit-card") {
+    const newBalance = statement.closingBalance;
+    const cr = statement.summaryTotals?.totalCredits ?? supplement.detectedSummaryTotals?.credits ?? null;
+    const db = statement.summaryTotals?.totalDebits ?? supplement.detectedSummaryTotals?.debits ?? null;
+    if (typeof newBalance === "number" && typeof cr === "number" && typeof db === "number") {
+      add(newBalance - db + cr);
+    }
+  }
+
+  // Signal the "parser missed the table" shape so the model rebuilds rows from
+  // the images instead of trusting the parser's near-empty result.
+  const pCredits = sumCredits(statement);
+  const pDebits = sumDebits(statement);
+  const sumCr = statement.summaryTotals?.totalCredits ?? supplement.detectedSummaryTotals?.credits ?? null;
+  const sumDb = statement.summaryTotals?.totalDebits ?? supplement.detectedSummaryTotals?.debits ?? null;
+  const summaryMeaningful =
+    (typeof sumCr === "number" && Math.abs(sumCr) >= 0.01) ||
+    (typeof sumDb === "number" && Math.abs(sumDb) >= 0.01);
+  const parserActivityNearZero = Math.abs(pCredits) < 0.01 && Math.abs(pDebits) < 0.01;
+  const parserLikelyMissedTransactions =
+    summaryMeaningful && (parserActivityNearZero || statement.transactions.length <= 1);
+
   return {
+    parserLikelyMissedTransactions,
+    creditCardInterestFees: supplement.creditCardInterestFees ?? null,
     parserSummary: {
       statementKind: statement.statementKind,
       openingBalance: statement.openingBalance ?? null,
@@ -328,7 +394,14 @@ export function buildIndependentCandidate(
 ): CandidateBuild {
   const sectionIndex = typeof raw.selectedSectionIndex === "number" ? raw.selectedSectionIndex : null;
   const txns = sanitizeTransactions(raw.transactions);
-  if (!txns) return { rejectedReason: "no-usable-rows", sectionIndex };
+  if (!txns) {
+    // AI returned no usable rows. If the parser already looks like it missed the
+    // table, label it precisely so diagnostics show the table was never recovered.
+    return {
+      rejectedReason: evidence.parserLikelyMissedTransactions ? "no-transaction-table-candidate" : "no-usable-rows",
+      sectionIndex,
+    };
+  }
 
   let rejectedReason: string | undefined;
   // A balance must be deterministically detected OR backed by a visual-evidence
@@ -364,6 +437,25 @@ export function buildIndependentCandidate(
     },
     meta,
   );
+
+  // Diagnostic labels (safe, no private data): the candidate is still returned so
+  // the comparator can reject it, but the label explains WHY it is unusable.
+  if (!rejectedReason) {
+    const candCr = rows.reduce((a, r) => a + (r.credit ?? 0), 0);
+    const candDb = rows.reduce((a, r) => a + (r.debit ?? 0), 0);
+    const sMeaningful =
+      (typeof summary.credits === "number" && Math.abs(summary.credits) >= 0.01) ||
+      (typeof summary.debits === "number" && Math.abs(summary.debits) >= 0.01);
+    const candNearZero = Math.abs(candCr) < 0.01 && Math.abs(candDb) < 0.01;
+    if (sMeaningful && (candNearZero || rows.length <= 1)) {
+      // The AI returned a near-empty result while the summary shows real activity:
+      // it ignored the transaction table (the exact false-pass shape).
+      rejectedReason = "ai-returned-near-zero-rows";
+    } else if (sMeaningful && opening !== null && closing !== null && opening === closing) {
+      // Reused one balance as both opening and closing to fake a reconciliation.
+      rejectedReason = "ai-ignored-summary-totals";
+    }
+  }
   return { statement, rejectedReason, sectionIndex };
 }
 
@@ -454,6 +546,101 @@ export function applyRepairPlan(
   return { statement, rejectedReason, sectionIndex };
 }
 
+// ----- Credit-card interest / fee repair -----
+
+export type InterestFeeRepair = {
+  statement: ParsedStatement;
+  applied: boolean;
+  rowsAdded: number;
+  /** Set when a debit shortfall looks like missing interest/fees but can't be repaired. */
+  issue: string | null;
+};
+
+let interestFeeRowSeq = 0;
+
+/**
+ * Close a credit-card debit shortfall caused by missing interest/fee rows. Total
+ * Debits includes interest + fees, but those lines frequently sit in a separate
+ * FEES / INTEREST section a transaction pass misses, leaving parsed debits short by
+ * exactly the detected current-period interest/fees. This adds those rows from the
+ * DETECTED evidence (never invented) ONLY when the credits already match and the
+ * debit shortfall equals the detected amount, then revalidates. Idempotent: once
+ * the rows are present the shortfall is ~0 and it no-ops, so it never duplicates.
+ */
+export function repairCreditCardInterestFees(
+  statement: ParsedStatement,
+  detected: InterestFeeDetection | null | undefined,
+  meta: BuildStatementMeta = {},
+): InterestFeeRepair {
+  const noop: InterestFeeRepair = { statement, applied: false, rowsAdded: 0, issue: null };
+  if (statement.statementKind !== "credit-card" || !detected) return noop;
+  const meaningful = (v: number | null | undefined): v is number =>
+    typeof v === "number" && Math.abs(v) >= 0.01;
+  const summaryDb = statement.summaryTotals?.totalDebits ?? null;
+  const summaryCr = statement.summaryTotals?.totalCredits ?? null;
+  if (!meaningful(summaryDb)) return noop;
+
+  const parsedDb = sumDebits(statement);
+  const parsedCr = sumCredits(statement);
+  // Only a DEBIT-side shortfall is an interest/fee gap; credits must already match.
+  if (meaningful(summaryCr) && Math.abs(parsedCr - summaryCr) > 0.02) return noop;
+  const short = round2(summaryDb - parsedDb);
+  if (short <= 0.01) return noop; // debits already reconcile
+
+  const TOL = 0.02;
+  const items = detected.lineItems.filter((li) => Math.abs(li.amount) >= 0.01);
+  const itemsTotal = round2(items.reduce((a, li) => a + Math.abs(li.amount), 0));
+  const summaryIF = round2((detected.interestCharged ?? 0) + (detected.feesCharged ?? 0));
+
+  let toAdd: { description: string; amount: number; date: string | null }[] = [];
+  if (items.length > 0 && Math.abs(itemsTotal - short) <= TOL) {
+    // Preferred: add the real, individually-detected interest/fee line items.
+    toAdd = items.map((li) => ({ ...li }));
+  } else if (summaryIF >= 0.01 && Math.abs(summaryIF - short) <= TOL) {
+    // Fallback: synthesize from the detected current-period totals.
+    if (meaningful(detected.interestCharged)) {
+      toAdd.push({ description: "Interest Charged", amount: detected.interestCharged, date: null });
+    }
+    if (meaningful(detected.feesCharged)) {
+      toAdd.push({ description: "Fees Charged", amount: detected.feesCharged, date: null });
+    }
+  } else {
+    // A shortfall exists and interest/fees were detected, but they don't explain it
+    // (or none were detected): flag rather than invent a row.
+    const detectedAny = items.length > 0 || summaryIF >= 0.01;
+    return { statement, applied: false, rowsAdded: 0, issue: detectedAny ? "missing-interest-or-fee-row" : null };
+  }
+  if (toAdd.length === 0) return noop;
+
+  const closingDate = meta.periodEnd ?? statement.periodEnd ?? "";
+  const rows = parsedStatementToRows(statement);
+  for (const li of toAdd) {
+    interestFeeRowSeq += 1;
+    rows.push({
+      id: `interest-fee-${interestFeeRowSeq}`,
+      date: li.date ?? closingDate ?? "",
+      description: li.description,
+      debit: round2(Math.abs(li.amount)),
+      credit: null,
+      balance: null,
+      category: "",
+      confidence: 0.85,
+    });
+  }
+  const repaired = buildStatementFromRows(
+    rows,
+    {
+      statementKind: statement.statementKind,
+      layoutFamily: statement.layoutFamily,
+      openingBalance: statement.openingBalance ?? null,
+      closingBalance: statement.closingBalance ?? null,
+      summary: { credits: summaryCr, debits: summaryDb },
+    },
+    meta,
+  );
+  return { statement: repaired, applied: true, rowsAdded: toAdd.length, issue: null };
+}
+
 // ----- Candidate comparison & adoption -----
 
 export type CandidateMetrics = {
@@ -475,12 +662,44 @@ export function candidateMetrics(s: ParsedStatement): CandidateMetrics {
   };
 }
 
+/**
+ * How far a statement's parsed credit/debit totals are from its OWN printed summary
+ * totals (sum of |credit gap| + |debit gap|). This is the key signal for the
+ * "parser missed the table" case: a near-empty parser can reconcile its balances
+ * coincidentally (difference ~0) yet be wildly off the statement's own totals, while
+ * a candidate that rebuilt the table matches those totals closely. Null when the
+ * statement has no meaningful summary totals to compare against.
+ */
+function summaryTotalsMismatch(s: ParsedStatement): number | null {
+  const st = s.summaryTotals;
+  const cr = st?.totalCredits ?? null;
+  const db = st?.totalDebits ?? null;
+  const meaningful = (v: number | null): v is number => typeof v === "number" && Math.abs(v) >= 0.01;
+  if (!meaningful(cr) && !meaningful(db)) return null;
+  let mismatch = 0;
+  if (meaningful(cr)) mismatch += Math.abs(sumCredits(s) - cr);
+  if (meaningful(db)) mismatch += Math.abs(sumDebits(s) - db);
+  return mismatch;
+}
+
 /** Does `cand` reconcile, or materially improve over `parser` without new issues? */
 export function candidateBeatsParser(parser: ParsedStatement, cand: ParsedStatement): boolean {
   const p = candidateMetrics(parser);
   const c = candidateMetrics(cand);
   if (c.status === "passed" && p.status !== "passed") return true;
   if (c.status === "passed" && p.status === "passed") return c.confidence > p.confidence + 1e-9;
+
+  // The parser missed the transaction table when its parsed totals are wildly off the
+  // statement's own summary totals. In that case its near-zero balance "difference"
+  // is meaningless. A candidate that rebuilt the table and matches those summary
+  // totals far better (and has materially more rows) is strictly better — adopt it
+  // so the real transactions surface (still validated → needs-review if not exact).
+  const pMis = summaryTotalsMismatch(parser);
+  const cMis = summaryTotalsMismatch(cand);
+  if (pMis !== null && cMis !== null && c.rowCount > p.rowCount && cMis < pMis - 0.5 && cMis < pMis * 0.5) {
+    return true;
+  }
+
   if (p.difference !== null && c.difference !== null) {
     if (c.difference < p.difference - 0.005 && c.issueCount <= p.issueCount) return true;
   }
@@ -488,7 +707,7 @@ export function candidateBeatsParser(parser: ParsedStatement, cand: ParsedStatem
   return false;
 }
 
-type Labeled = { source: AdoptedCandidateSource; statement: ParsedStatement };
+type Labeled = { source: AdoptedCandidateSource; statement: ParsedStatement; interestFeeRowsAdded?: number };
 /** Rank AI candidates: reconciled first, then smallest difference, then confidence. */
 function rankAi(list: Labeled[]): Labeled | undefined {
   return [...list].sort((a, b) => {
@@ -543,7 +762,32 @@ const SYSTEM_PROMPT =
   "image's id; otherwise do not use it. Do NOT invent balances. Add rows ONLY if " +
   "supported by the provided region lines or images. Goal: bank opening + credits " +
   "- debits = closing; credit card previous + debits - credits = closing. Use null " +
-  "for unknown fields.";
+  "for unknown fields. " +
+  "IMPORTANT — missing transactions: if evidence.parserLikelyMissedTransactions is " +
+  "true (or the parser's totalDebits/totalCredits are near zero, or rowCount is 0 or " +
+  "1, while the detected summary totals are clearly non-zero), the parser almost " +
+  "certainly MISSED the real transaction table. In that case treat the parser result " +
+  "as INVALID: do NOT accept the parser's rows, do NOT return a one-row candidate, and " +
+  "do NOT report a balance check as passing. In this case you MUST return an independent " +
+  '"candidate" containing the COMPLETE transactions array rebuilt from the TRANSACTIONS ' +
+  "image crops — do NOT return only a repairPlan (a repair plan cannot recover a table " +
+  "the parser never saw). Map Previous Balance to openingBalance and New Balance to " +
+  "closingBalance (never the same value for both). Aim for the parsed credits/debits to " +
+  "match the detected summary totals. " +
+  "Extract the real transactions from the TRANSACTIONS pages/images (including any " +
+  "'TRANSACTIONS Continued' sections that follow summary or legal pages). " +
+  "Credit-card Total Debits also INCLUDES current-period Fees and Interest, so also " +
+  "extract NONZERO current-period fee/interest line items (e.g. 'FEES', 'INTEREST', " +
+  "'Interest Charge on Purchases', 'Interest Charge on Cash Advances', 'TOTAL FEES/" +
+  "INTEREST FOR THIS PERIOD') as debit rows — do NOT drop them, or Total Debits will " +
+  "be short by that amount. Ignore ZERO fee/interest lines and YEAR-TO-DATE / prior-" +
+  "year totals (e.g. 'Total Interest Charged in 2025', 'year-to-date'). IGNORE " +
+  "legal/disclosure text, payment/remittance slips, rewards/points pages, and " +
+  "warning/notice lines such as balance-protection or 'on your last statement' " +
+  "notices — these are NEVER transactions. NEVER use the new/closing balance as both " +
+  "the opening and closing balance to fabricate a passing reconciliation. If you " +
+  "cannot recover the real transactions from the provided evidence, return a candidate " +
+  'with issues describing what is missing (no fake balance) rather than a false pass.';
 
 export async function callOpenAiChat(
   messages: ChatMessage[],
@@ -622,6 +866,8 @@ export type AiAssistOptions = {
   images?: VisionImage[];
   /** Why vision rendering produced no images (surfaced in diagnostics). */
   renderFailedReason?: string | null;
+  /** Safe aggregate vision page/region selection diagnostics. */
+  visionSelection?: VisionSelectionDiag | null;
   call?: ChatCaller;
   env?: NodeJS.ProcessEnv;
 };
@@ -663,6 +909,10 @@ function baseOutcome(statement: ParsedStatement, config: AiAssistConfig): AiAssi
     aiTotalTokenCount: null,
     aiProviderResponseId: null,
     aiRenderFailedReason: null,
+    visionSelection: null,
+    aiCallDurationMs: null,
+    interestFeeRepairApplied: false,
+    interestFeeRowsAdded: 0,
   };
 }
 
@@ -681,6 +931,7 @@ export async function runAiAssist(
   const env = opts.env ?? process.env;
   const out = baseOutcome(statement, config);
   out.aiRenderFailedReason = opts.renderFailedReason ?? null;
+  out.visionSelection = opts.visionSelection ?? null;
 
   if (!out.eligible) return { outcome: out };
   if (!config.enabled) {
@@ -700,7 +951,9 @@ export async function runAiAssist(
   out.aiRenderedPagesCount = new Set(images.map((i) => i.page)).size;
 
   const call = opts.call ?? defaultCaller;
+  const callStart = Date.now();
   const res = await call({ evidence, images }, config);
+  out.aiCallDurationMs = Date.now() - callStart;
   out.attempted = true;
   out.called = true;
   out.aiCallCount = 1;
@@ -723,13 +976,22 @@ export async function runAiAssist(
     return { outcome: out };
   }
 
+  // Apply the deterministic interest/fee repair to a built candidate (closes a
+  // credit-card debit shortfall that is exactly the detected current-period
+  // interest/fees) so the comparison sees the reconciling version.
+  const withInterestFeeRepair = (built: ParsedStatement): { statement: ParsedStatement; rowsAdded: number } => {
+    const rep = repairCreditCardInterestFees(built, evidence.creditCardInterestFees, meta);
+    return rep.applied ? { statement: rep.statement, rowsAdded: rep.rowsAdded } : { statement: built, rowsAdded: 0 };
+  };
+
   const candidates: Labeled[] = [];
   if (parsed.candidate) {
     const built = buildIndependentCandidate(statement, evidence, parsed.candidate, meta, allowedVisualRefs);
     out.aiIndependentCandidateBuilt = Boolean(built.statement);
     if (built.statement) {
-      out.aiCandidateDifference = candidateMetrics(built.statement).difference;
-      candidates.push({ source: "ai-candidate", statement: built.statement });
+      const fixed = withInterestFeeRepair(built.statement);
+      out.aiCandidateDifference = candidateMetrics(fixed.statement).difference;
+      candidates.push({ source: "ai-candidate", statement: fixed.statement, interestFeeRowsAdded: fixed.rowsAdded });
     }
     if (built.rejectedReason) out.aiRejectedReason = built.rejectedReason;
     if (built.sectionIndex !== null) out.aiSelectedSectionIndex = built.sectionIndex;
@@ -738,8 +1000,9 @@ export async function runAiAssist(
     const built = applyRepairPlan(statement, evidence, parsed.repairPlan, meta, allowedVisualRefs);
     out.aiRepairPlanBuilt = Boolean(built.statement);
     if (built.statement) {
-      out.aiRepairPlanDifference = candidateMetrics(built.statement).difference;
-      candidates.push({ source: "ai-repair-plan", statement: built.statement });
+      const fixed = withInterestFeeRepair(built.statement);
+      out.aiRepairPlanDifference = candidateMetrics(fixed.statement).difference;
+      candidates.push({ source: "ai-repair-plan", statement: fixed.statement, interestFeeRowsAdded: fixed.rowsAdded });
     }
     if (built.rejectedReason && !out.aiRejectedReason) out.aiRejectedReason = built.rejectedReason;
     if (built.sectionIndex !== null && out.aiSelectedSectionIndex === null) {
@@ -750,6 +1013,12 @@ export async function runAiAssist(
   out.candidateComparisonCount = 1 + candidates.length;
   if (candidates.length === 0) {
     out.status = "no-usable-result";
+    // When the parser itself missed the table and AI produced nothing usable, say so.
+    if (!out.aiRejectedReason) {
+      out.aiRejectedReason = evidence.parserLikelyMissedTransactions
+        ? "no-transaction-table-candidate"
+        : "no-usable-rows";
+    }
     return { outcome: out };
   }
 
@@ -758,13 +1027,23 @@ export async function runAiAssist(
   if (!adopt) {
     out.applied = true; // a usable candidate was built and validated, just not better
     out.status = "no-improvement";
+    // Prefer a specific reason already set by the builder; otherwise the candidate
+    // simply did not beat the parser under the same validation engine.
+    if (!out.aiRejectedReason) out.aiRejectedReason = "candidate-worse-than-parser";
     return { outcome: out };
   }
 
   const bm = candidateMetrics(best.statement);
   out.applied = true;
   out.improved = true;
+  // A candidate was adopted; any rejection reason recorded for the OTHER (unused)
+  // candidate is no longer the outcome and would be misleading in diagnostics.
+  out.aiRejectedReason = null;
   out.adoptedCandidateSource = best.source;
+  if (best.interestFeeRowsAdded && best.interestFeeRowsAdded > 0) {
+    out.interestFeeRepairApplied = true;
+    out.interestFeeRowsAdded = best.interestFeeRowsAdded;
+  }
   out.postDifference = bm.difference;
   out.improvement =
     out.preDifference !== null && bm.difference !== null ? out.preDifference - bm.difference : null;
@@ -812,6 +1091,10 @@ export function notAttemptedOutcome(
     aiTotalTokenCount: null,
     aiProviderResponseId: null,
     aiRenderFailedReason: null,
+    visionSelection: null,
+    aiCallDurationMs: null,
+    interestFeeRepairApplied: false,
+    interestFeeRowsAdded: 0,
   };
 }
 

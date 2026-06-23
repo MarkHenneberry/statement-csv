@@ -65,40 +65,111 @@ export type SelectRegionsInput = {
   hasLowConfidence: boolean;
   /** Page hints related to the validation failure (1-based), if known. */
   failurePages?: number[];
+  /** Pages where a transaction-table header was detected (1-based). PRIORITIZED. */
+  transactionHeaderPages?: number[];
+  /** Pages that look like account-summary pages (opening/closing/totals). */
+  summaryPages?: number[];
+  /** Pages that are legal/info/disclosure (never targeted). */
+  legalPages?: number[];
   maxRegions?: number;
 };
 
 /**
- * Choose the minimal set of regions to render for the vision fallback. Targets
- * the summary/opening-closing area, the table header + body, the final rows, and
- * the totals/closing area; adds a low-confidence region only when present. Never
- * targets footer/legal/blank/ads/contact regions. Pure + deterministic.
+ * Choose the regions to render for the vision fallback. When transaction-table
+ * header pages are known they are PRIORITIZED (the real tables may appear after
+ * one or more summary/legal pages), and legal pages are never targeted. Falls back
+ * to page-1/last-page heuristics when no header pages are detected. Always includes
+ * a summary region for opening/closing. Pure + deterministic; never targets
+ * footer/legal/blank/ads/contact regions.
  */
 export function selectVisionRegions(input: SelectRegionsInput): VisionRegion[] {
   const pages = Math.max(1, input.pageCount || 1);
   const last = pages;
-  const max = input.maxRegions ?? 6;
+  const legal = new Set(input.legalPages ?? []);
+  const txPages = (input.transactionHeaderPages ?? []).filter((p) => p >= 1 && p <= pages && !legal.has(p));
+  const summaryPages = (input.summaryPages ?? []).filter((p) => p >= 1 && p <= pages);
+  const max = input.maxRegions ?? (txPages.length > 0 ? 8 : 6);
   const regions: VisionRegion[] = [];
   const add = (kind: VisionRegionKind, page: number, band: VisionBand) => {
-    if (page < 1 || page > pages) return;
+    if (page < 1 || page > pages || legal.has(page)) return;
     regions.push({ id: `${kind}-p${page}-${band}`, kind, page, band });
   };
 
-  // Page 1 holds the account summary + the start of the transaction table.
-  add("summary", 1, "top");
-  add("table-header", 1, "middle");
-  add("table-body", 1, "middle");
-  // The closing balance + final rows are on the last page.
-  add("final-rows", last, "bottom");
-  add("totals", last, "bottom");
-  // Any page implicated in the reconciliation failure (middle band of that page).
+  // Opening/closing summary: a detected summary page, else page 1.
+  add("summary", summaryPages[0] ?? 1, "top");
+
+  if (txPages.length > 0) {
+    // Transaction tables fill the whole page, so render the FULL transaction pages
+    // (band "full") rather than a vertical slice — band-cropping silently drops the
+    // top/bottom rows of a dense table, which makes the rebuilt totals miss
+    // transactions and never reconcile. A header crop on the first table page still
+    // captures the column labels explicitly.
+    add("table-header", txPages[0], "top");
+    for (const p of txPages.slice(0, 4)) {
+      add("table-body", p, "full");
+    }
+    // Closing/totals usually on the summary page (or last page).
+    add("totals", summaryPages[summaryPages.length - 1] ?? last, "bottom");
+  } else {
+    // No header pages detected: page-1 + last-page heuristic.
+    add("table-header", 1, "middle");
+    add("table-body", 1, "middle");
+    add("final-rows", last, "bottom");
+    add("totals", last, "bottom");
+  }
+
   for (const p of input.failurePages ?? []) add("table-body", p, "middle");
-  if (input.hasLowConfidence) add("low-confidence", 1, "middle");
+  if (input.hasLowConfidence) add("low-confidence", txPages[0] ?? 1, "middle");
 
   // De-dupe by id and cap (token control: targeted, not the whole document).
   const seen = new Set<string>();
   const unique = regions.filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)));
   return unique.slice(0, max);
+}
+
+export type VisionPageAnalysis = {
+  transactionHeaderPages: number[];
+  summaryPages: number[];
+  legalPages: number[];
+  warningRewardPages: number[];
+};
+
+// Generic (not bank-specific) page-classification cues.
+const TX_HEADER_RE =
+  /\btransactions?\b|(?:\btran(?:s|saction)?\.?\s*date\b[\s\S]{0,40}\bpost(?:ing)?\.?\s*date\b)|(?:description[\s\S]{0,40}amount)|reference (?:number|no)/i;
+const SUMMARY_PAGE_RE =
+  /previous (?:account |statement )?balance|new balance|total (?:credits?|debits?|payments?|purchases?)|minimum payment|payment due/i;
+const LEGAL_PAGE_RE =
+  /important (?:information|account information)|how to (?:reach|contact)|trade ?-?marks?|disclosure|cardholder agreement|terms and conditions|protecting your/i;
+const WARNING_REWARD_RE =
+  /rewards?|points|interest rate chart|annual interest rate|message cent(?:re|er)/i;
+
+/**
+ * Classify each preview page (1-based) by its textual cues so vision selection can
+ * PRIORITIZE transaction-table pages and EXCLUDE legal/warning pages. Operates on
+ * already-extracted page text; returns indexes only (no text is retained/returned).
+ */
+export function analyzeVisionPages(perPageText: string[]): VisionPageAnalysis {
+  const transactionHeaderPages: number[] = [];
+  const summaryPages: number[] = [];
+  const legalPages: number[] = [];
+  const warningRewardPages: number[] = [];
+  perPageText.forEach((text, i) => {
+    const page = i + 1;
+    const hasTx = TX_HEADER_RE.test(text);
+    const hasSummary = SUMMARY_PAGE_RE.test(text);
+    const hasLegal = LEGAL_PAGE_RE.test(text);
+    const hasWarn = WARNING_REWARD_RE.test(text);
+    if (hasTx) transactionHeaderPages.push(page);
+    if (hasSummary) summaryPages.push(page);
+    // A page is "legal/warning" (excludable) ONLY when it carries neither a
+    // transaction table NOR summary balances. Summary pages often also contain
+    // legal/marketing/rewards text, but we still need their opening/closing/totals
+    // region — so they must never be excluded.
+    if (!hasTx && !hasSummary && hasLegal) legalPages.push(page);
+    if (!hasTx && !hasSummary && hasWarn) warningRewardPages.push(page);
+  });
+  return { transactionHeaderPages, summaryPages, legalPages, warningRewardPages };
 }
 
 /** A renderer for one region. Returns null when it cannot render that region. */
@@ -150,28 +221,55 @@ export async function probeRenderBackend(): Promise<{
   }
 }
 
+type DefaultRenderer = { render: RegionRenderer; reason: () => string | null };
+
 /**
  * Real default renderer: renders each PDF page once (unpdf + @napi-rs/canvas),
  * caches it, then crops the region's vertical band (napi-canvas). Falls back to
  * the full relevant page if cropping fails, and returns null if the page cannot be
- * rendered at all (no backend) so the caller degrades to text-layout evidence.
- * Native deps are imported dynamically (server-only) so they never reach a client
- * bundle. `scaleWidth` bounds the rendered width for token/size control.
+ * rendered. It records a SPECIFIC failure reason so the caller can report exactly
+ * why vision degraded — canvas-backend-unavailable / pdf-renderer-unavailable /
+ * page-render-error — never a generic label. Native deps are imported dynamically
+ * (server-only) so they never reach a client bundle. `scaleWidth` bounds width.
  */
-export function createDefaultRegionRenderer(scaleWidth = 1100): RegionRenderer {
+function makeDefaultRenderer(scaleWidth = 1100): DefaultRenderer {
   const pageCache = new Map<number, { png: Uint8Array; height: number } | null>();
-  return async (bytes, region) => {
+  let firstReason: string | null = null;
+  const setReason = (r: string) => {
+    if (!firstReason) firstReason = r;
+  };
+  const render: RegionRenderer = async (bytes, region) => {
     let page = pageCache.get(region.page);
     if (page === undefined) {
       try {
-        const { renderPageAsImage } = await import("unpdf");
-        const out = await renderPageAsImage(bytes, region.page, {
+        const canvasMod = await import("@napi-rs/canvas").catch(() => null);
+        if (!canvasMod || typeof canvasMod.createCanvas !== "function") {
+          setReason("canvas-backend-unavailable");
+          pageCache.set(region.page, null);
+          return null;
+        }
+        const unpdf = await import("unpdf");
+        if (typeof unpdf.renderPageAsImage !== "function") {
+          setReason("pdf-renderer-unavailable");
+          pageCache.set(region.page, null);
+          return null;
+        }
+        // IMPORTANT: pass a FRESH copy of the bytes on every call. unpdf transfers
+        // (detaches) the underlying ArrayBuffer to the pdf.js worker on the first
+        // render; a second call with the same buffer throws "DataCloneError: Cannot
+        // transfer object of unsupported type", which previously made every page
+        // after the first fail — so the vision fallback never saw the transaction
+        // pages. A per-call copy lets all selected pages render.
+        const fresh = new Uint8Array(bytes.byteLength);
+        fresh.set(bytes);
+        const out = await unpdf.renderPageAsImage(fresh, region.page, {
           canvasImport: () => import("@napi-rs/canvas"),
           width: scaleWidth,
         });
         const u8 = out instanceof Uint8Array ? out : new Uint8Array(out);
         page = { png: u8, height: pngDimensions(u8).height };
       } catch {
+        setReason("page-render-error");
         page = null;
       }
       pageCache.set(region.page, page);
@@ -191,13 +289,20 @@ export function createDefaultRegionRenderer(scaleWidth = 1100): RegionRenderer {
       return { dataUrl: toDataUrl(page.png), crop: false }; // page rendered, crop failed
     }
   };
+  return { render, reason: () => firstReason };
+}
+
+/** Back-compat: a default region renderer (without the captured-reason accessor). */
+export function createDefaultRegionRenderer(scaleWidth = 1100): RegionRenderer {
+  return makeDefaultRenderer(scaleWidth).render;
 }
 
 /**
- * Render the selected regions to images (best-effort). Prefers crops; uses a full
- * relevant page only when cropping is unavailable. Caps image count for token
- * control. Returns available=false with a safe failureReason when no images are
- * produced — the caller then runs the AI fallback on text-layout evidence only.
+ * Render the selected regions to images. Vision is PREFERRED: when enabled and a
+ * backend is present, image crops are produced and used. Returns available=false
+ * with a SPECIFIC failureReason ONLY when vision is disabled or rendering genuinely
+ * failed (backend missing / page render error) — the caller then makes a single
+ * text-layout call. Never a generic "render-failed".
  */
 export async function renderVisionEvidence(
   bytes: Uint8Array,
@@ -211,7 +316,8 @@ export async function renderVisionEvidence(
     return { available: false, images: [], renderedPages: 0, crops: 0, fullPages: 0, failureReason: "no-regions" };
   }
   const usingDefault = !opts.renderer;
-  const renderer = opts.renderer ?? createDefaultRegionRenderer();
+  const def = usingDefault ? makeDefaultRenderer() : null;
+  const renderer = opts.renderer ?? def!.render;
   const max = opts.maxImages ?? 6;
 
   const images: VisionImage[] = [];
@@ -230,7 +336,9 @@ export async function renderVisionEvidence(
     });
   }
   if (images.length === 0) {
-    const reason = usingDefault ? (await probeRenderBackend()).reason ?? "render-failed" : "render-failed";
+    // Specific reason from the actual render attempt (default), or for an injected
+    // renderer that produced nothing, "injected-renderer-no-output".
+    const reason = usingDefault ? def!.reason() ?? "page-render-error" : "injected-renderer-no-output";
     return { available: false, images: [], renderedPages: 0, crops: 0, fullPages: 0, failureReason: reason };
   }
   return {

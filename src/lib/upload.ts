@@ -231,6 +231,30 @@ export function computeBalanceCheck(
   };
 }
 
+/** User-facing balance-check states (mirrors the summary card badge). */
+export type EffectiveBalanceStatus = "passed" | "review" | "limited";
+
+/**
+ * The user-facing balance status MUST reflect the full validation engine, not
+ * just the arithmetic identity. The arithmetic check can be trivially "passed"
+ * (e.g. opening == closing with zero parsed activity) while the validation engine
+ * has already determined the parse missed the statement's summary activity. In
+ * that case the user must see "Needs review", never "Passed". The stronger signal
+ * always wins: validation "needs-review" downgrades a passed arithmetic check;
+ * validation "limited" or a missing balance shows "Limited".
+ */
+export function resolveBalanceStatus(
+  check: Pick<BalanceCheck, "available" | "passed">,
+  validationStatus?: "passed" | "needs-review" | "limited",
+): EffectiveBalanceStatus {
+  // The validation engine is the source of truth. If it says the parse needs
+  // review, that overrides a coincidentally-balancing arithmetic identity.
+  if (validationStatus === "needs-review") return "review";
+  if (!check.available) return "limited";
+  if (validationStatus === "limited") return "limited";
+  return check.passed ? "passed" : "review";
+}
+
 function csvCell(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }

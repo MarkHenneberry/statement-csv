@@ -4,6 +4,7 @@ import { extractPdfText } from "@/lib/pdf-extract";
 import {
   SCANNED_PDF_WARNING,
   detectBalanceLine,
+  detectCreditCardInterestFees,
   extractMoneyValues,
   findDate,
   type ParseStatementResponse,
@@ -13,10 +14,20 @@ import {
   aiAssistConfig,
   isAiAssistEligible,
   resolveAiAssist,
+  repairCreditCardInterestFees,
   notAttemptedOutcome,
   type AiEvidence,
+  type VisionSelectionDiag,
+  type InterestFeeDetection,
 } from "@/lib/ai-assist";
-import { selectVisionRegions, renderVisionEvidence, type VisionImage } from "@/lib/pdf-render";
+import { parsedStatementToRows } from "@/lib/statement-model";
+import {
+  selectVisionRegions,
+  renderVisionEvidence,
+  analyzeVisionPages,
+  type VisionImage,
+  type VisionRegion,
+} from "@/lib/pdf-render";
 import {
   FREE_PREVIEW_MAX_PAGES,
   FREE_PREVIEW_TRUNCATION_NOTICE,
@@ -33,6 +44,41 @@ const MIN_TEXT_LENGTH = 24;
 
 function moneyString(value: number | null): string | null {
   return value === null ? null : value.toFixed(2);
+}
+
+// Optional local-only debug aid (AI_VISION_DEBUG_SAVE_CROPS=true): persist the
+// rendered vision crops so a developer can confirm the RIGHT regions were sent.
+// PRIVACY: filenames carry only region kind/page/band + pixel dimensions — never
+// statement text, balances, names, or account data. Folder is gitignored.
+async function saveVisionCropsForDebug(images: VisionImage[], regions: VisionRegion[]): Promise<void> {
+  if (images.length === 0) return;
+  try {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const dir = "private-debug/vision-crops";
+    await mkdir(dir, { recursive: true });
+    const pngDims = (buf: Buffer): string => {
+      // PNG IHDR width/height live at byte offsets 16 and 20 (big-endian uint32).
+      if (buf.length < 24) return "unknown";
+      return `${buf.readUInt32BE(16)}x${buf.readUInt32BE(20)}`;
+    };
+    const stamp = Date.now();
+    for (const img of images) {
+      const b64 = img.dataUrl.split(",")[1] ?? "";
+      if (!b64) continue;
+      const buf = Buffer.from(b64, "base64");
+      const safeId = img.id.replace(/[^a-z0-9-]/gi, "_");
+      const tag = img.crop ? "crop" : "fullpage";
+      await writeFile(`${dir}/${stamp}-${safeId}-${tag}-${pngDims(buf)}.png`, buf);
+    }
+    if (IS_DEV) {
+      console.log("[parse-statement] saved vision crops (debug)", {
+        savedCount: images.length,
+        regionCount: regions.length,
+      });
+    }
+  } catch {
+    // Debug aid only — never affect the response if saving fails.
+  }
 }
 
 function errorResponse(fileName: string, warning: string, status = 400) {
@@ -57,6 +103,7 @@ function errorResponse(fileName: string, warning: string, status = 400) {
 // TODO(launch-blocker): finalize a production logging policy (structured logs,
 // no PII, request ids only) and confirm the host does not retain request bodies.
 export async function POST(request: Request): Promise<NextResponse> {
+  const routeStart = Date.now();
   let form: FormData;
   try {
     form = await request.formData();
@@ -78,8 +125,14 @@ export async function POST(request: Request): Promise<NextResponse> {
   let extracted;
   let pdfBytes: Uint8Array | null = null;
   try {
-    pdfBytes = new Uint8Array(await file.arrayBuffer());
-    extracted = await extractPdfText(pdfBytes);
+    const raw = new Uint8Array(await file.arrayBuffer());
+    // Keep a pristine copy for the vision renderer BEFORE extraction: the PDF
+    // extractor transfers (detaches) the underlying ArrayBuffer to the pdf.js
+    // worker, after which the same bytes can no longer be rendered. Without this
+    // snapshot the vision fallback always failed with a render error and never saw
+    // the transaction pages.
+    pdfBytes = raw.slice();
+    extracted = await extractPdfText(raw);
     // `pdfBytes` and `extracted` go out of scope when the request ends; nothing is
     // written to disk or a database. No caching of the file or its text.
   } catch {
@@ -160,6 +213,10 @@ export async function POST(request: Request): Promise<NextResponse> {
       return moneys.length >= 2 || (moneys.length >= 1 && findDate(line) !== null);
     })
     .slice(0, 400);
+  // Detect current-period credit-card interest/fees so the model includes them and
+  // a deterministic step can close a debit shortfall that is exactly that amount.
+  const creditCardInterestFees: InterestFeeDetection | null =
+    statement.statementKind === "credit-card" ? detectCreditCardInterestFees(previewLines) : null;
   const candidateSummaries: AiEvidence["candidateSummaries"] = (
     result.parseStats?.candidateComparison ?? []
   ).map((c) => ({
@@ -178,6 +235,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   // best-effort and degrades to text-layout evidence with a safe failure reason.
   let visionImages: VisionImage[] = [];
   let renderFailedReason: string | null = null;
+  let visionSelection: VisionSelectionDiag | null = null;
+  let renderDurationMs: number | null = null;
   if (pdfBytes && aiConfig.enabled && isAiAssistEligible(statement)) {
     const visionRequested = process.env.ENABLE_AI_VISION_FALLBACK !== "false";
     if (visionRequested && !aiConfig.visionModel) {
@@ -187,10 +246,35 @@ export async function POST(request: Request): Promise<NextResponse> {
         const hasLowConfidence =
           statement.validation.confidence < 0.7 ||
           statement.transactions.some((t) => t.confidence < 0.7);
-        const regions = selectVisionRegions({ pageCount: previewPages.length, hasLowConfidence });
-        const rendered = await renderVisionEvidence(pdfBytes, regions, { enabled: true });
+        // Classify preview pages so we PRIORITIZE TRANSACTIONS pages (which can
+        // follow summary/legal pages) and EXCLUDE legal/warning/reward pages.
+        const pageAnalysis = analyzeVisionPages(previewPages);
+        const regions = selectVisionRegions({
+          pageCount: previewPages.length,
+          hasLowConfidence,
+          transactionHeaderPages: pageAnalysis.transactionHeaderPages,
+          summaryPages: pageAnalysis.summaryPages,
+          legalPages: pageAnalysis.legalPages,
+          // Allow enough regions to cover summary + several full transaction pages.
+          maxRegions: 10,
+        });
+        visionSelection = {
+          selectedPageIndexes: [...new Set(regions.map((r) => r.page))].sort((a, b) => a - b),
+          selectedRegionKinds: [...new Set(regions.map((r) => r.kind))],
+          selectedRegionCount: regions.length,
+          transactionHeaderPagesDetected: pageAnalysis.transactionHeaderPages.length,
+          summaryPagesDetected: pageAnalysis.summaryPages.length,
+          excludedLegalPagesCount: pageAnalysis.legalPages.length,
+          excludedWarningRewardPagesCount: pageAnalysis.warningRewardPages.length,
+        };
+        const renderStart = Date.now();
+        const rendered = await renderVisionEvidence(pdfBytes, regions, { enabled: true, maxImages: 10 });
+        renderDurationMs = Date.now() - renderStart;
         visionImages = rendered.images;
         if (!rendered.available) renderFailedReason = rendered.failureReason;
+        if (process.env.AI_VISION_DEBUG_SAVE_CROPS === "true") {
+          await saveVisionCropsForDebug(rendered.images, regions);
+        }
       } catch {
         // Never fail the conversion because rendering failed; degrade to text-layout.
         visionImages = [];
@@ -199,21 +283,39 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
   }
 
-  const {
-    statement: finalStatement,
-    rows: finalRows,
-    outcome: aiOutcome,
-  } = await resolveAiAssist(
+  const resolved = await resolveAiAssist(
     statement,
     rows,
     aiConfig,
     { fileName, pageCount: extracted.pageCount ?? undefined },
     {
-      evidence: { detectedBalances, regionLines, candidateSummaries },
+      evidence: { detectedBalances, regionLines, candidateSummaries, creditCardInterestFees },
       images: visionImages,
       renderFailedReason,
+      visionSelection,
     },
   );
+  let finalStatement = resolved.statement;
+  let finalRows = resolved.rows;
+  const aiOutcome = resolved.outcome;
+
+  // Deterministic interest/fee repair for the non-AI path: when AI did not replace
+  // the statement (disabled/not adopted) but the parser captured the table and is
+  // short only by the detected current-period interest/fees, close that gap from
+  // real evidence and revalidate. Idempotent — a no-op when already reconciled.
+  if (aiOutcome.adoptedCandidateSource === "parser" && creditCardInterestFees) {
+    const rep = repairCreditCardInterestFees(
+      finalStatement,
+      creditCardInterestFees,
+      { fileName, pageCount: extracted.pageCount ?? undefined },
+    );
+    if (rep.applied) {
+      finalStatement = rep.statement;
+      finalRows = parsedStatementToRows(rep.statement);
+      aiOutcome.interestFeeRepairApplied = true;
+      aiOutcome.interestFeeRowsAdded = rep.rowsAdded;
+    }
+  }
 
   // Safe dev-only trace of the decision path (no statement text/rows/key/prompt).
   if (IS_DEV) {
@@ -247,6 +349,16 @@ export async function POST(request: Request): Promise<NextResponse> {
       aiTotalTokenCount: aiOutcome.aiTotalTokenCount,
       aiProviderResponseId: aiOutcome.aiProviderResponseId,
       aiRenderFailedReason: aiOutcome.aiRenderFailedReason,
+      visionSelection: aiOutcome.visionSelection,
+      interestFeeRepairApplied: aiOutcome.interestFeeRepairApplied,
+      interestFeeRowsAdded: aiOutcome.interestFeeRowsAdded,
+      // Performance diagnostics (safe; no content).
+      renderDurationMs,
+      aiCallDurationMs: aiOutcome.aiCallDurationMs,
+      imageCount: visionImages.length,
+      fullPageImageCount: aiOutcome.aiFullPageImagesCount,
+      tokenCount: aiOutcome.aiTotalTokenCount,
+      routeDurationMs: Date.now() - routeStart,
     });
   }
 

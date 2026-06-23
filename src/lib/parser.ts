@@ -1181,6 +1181,76 @@ export function parseCreditCardTransactions(
   return { rows, stats };
 }
 
+/** A statement line is a year-to-date / prior-year total (never a current-period item). */
+const YEAR_TO_DATE_RE = /year[\s-]?to[\s-]?date|\bytd\b|\bin 20\d\d\b|20\d\d totals|totals? year/i;
+
+/** Find a labelled amount, skipping year-to-date / prior-year total lines. */
+function findCurrentPeriodLabeledAmount(lines: string[], labelRe: RegExp): number | null {
+  const currentOnly = lines.filter((l) => !YEAR_TO_DATE_RE.test(l));
+  return findLabeledAmount(currentOnly, labelRe);
+}
+
+export type CreditCardInterestFeeLine = {
+  description: string;
+  amount: number;
+  date: string | null;
+};
+
+/**
+ * Detect credit-card CURRENT-PERIOD interest and fee activity. Total Debits on a
+ * credit-card statement includes purchases + cash advances + fees charged +
+ * interest charged, but the interest/fee lines often sit in their own FEES /
+ * INTEREST section that a transaction-row parser (or a vision pass) can miss,
+ * leaving debits short by exactly that amount. This returns the current-period
+ * totals plus the individual NONZERO interest/fee line items so the shortfall can
+ * be repaired from real evidence. Year-to-date / prior-year totals are excluded,
+ * and zero lines (e.g. "Interest Charge on Cash Advances $0.00") are ignored.
+ */
+export function detectCreditCardInterestFees(
+  lines: string[],
+  fallbackYear?: number,
+): {
+  interestCharged: number | null;
+  feesCharged: number | null;
+  lineItems: CreditCardInterestFeeLine[];
+} {
+  // Current-period totals: prefer the explicit "for this period" label, then the
+  // summary-box "Interest Charged" / "Fees Charged" (still excluding YTD lines).
+  const interestCharged =
+    findCurrentPeriodLabeledAmount(lines, /total interest for this period/i) ??
+    findCurrentPeriodLabeledAmount(lines, /\binterest charged\b/i);
+  const feesCharged =
+    findCurrentPeriodLabeledAmount(lines, /total fees for this period/i) ??
+    findCurrentPeriodLabeledAmount(lines, /\bfees? charged\b/i);
+
+  const lineItems: CreditCardInterestFeeLine[] = [];
+  const ITEM_RE =
+    /interest charge(?:d)? on |finance charge|service charge|annual fee|over[\s-]?limit fee|cash advance fee|late (?:payment )?fee|\bfee\b/i;
+  for (const raw of lines) {
+    if (YEAR_TO_DATE_RE.test(raw)) continue;
+    // Totals/section headers are not individual line items.
+    if (/total (?:fees|interest) (?:for this period|charged)/i.test(raw)) continue;
+    if (!ITEM_RE.test(raw)) continue;
+    // Rate disclosure lines carry a percentage, not a posted amount.
+    if (/%/.test(raw)) continue;
+    const money = extractMoneyValues(raw);
+    if (money.length === 0) continue;
+    const amount = Math.abs(money[money.length - 1].value);
+    if (amount < 0.01) continue; // ignore zero lines (e.g. cash advances 0.00)
+    const d = findDate(raw);
+    const date = d ? normalizeDate(d.match, fallbackYear) : null;
+    // Description: strip leading date tokens and any money amounts.
+    const description = raw
+      .replace(/\$?\(?-?\d{1,3}(?:,\d{3})*(?:\.\d{2})?\)?-?/g, " ")
+      .replace(/\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!description) continue;
+    lineItems.push({ description, amount, date });
+  }
+  return { interestCharged, feesCharged, lineItems };
+}
+
 /** Find the amount on (or just after) a labelled balance line. */
 function findLabeledAmount(lines: string[], labelRe: RegExp): number | null {
   for (let i = 0; i < lines.length; i += 1) {
@@ -1229,11 +1299,19 @@ export function detectCreditCardSummary(lines: string[]): {
   const payments = findLabeledAmount(lines, /your payments|payments? (?:&|and) credits/i);
   const purchases = findLabeledAmount(lines, /your new charges|new charges (?:&|and) credits|purchases (?:&|and) debits/i);
   const interest = findLabeledAmount(lines, /your interest|interest charged/i);
-  const credits = payments;
-  const debits =
+  // Generic statement-summary labels used by many issuers (e.g. a summary box with
+  // "Total Credits" / "Total Debits" / "Total Payments" / "Total Purchases").
+  // An explicit "Total Debits/Credits" is the AUTHORITATIVE total, so prefer it
+  // over summing component lines (which can be partial). Not bank-specific.
+  const totalCreditsLabel =
+    findLabeledAmount(lines, /total credits/i) ?? findLabeledAmount(lines, /total payments/i);
+  const totalDebitsLabel = findLabeledAmount(lines, /total debits/i);
+  const credits = totalCreditsLabel ?? payments;
+  const componentDebits =
     purchases !== null || interest !== null
-      ? (purchases ?? 0) + (interest ?? 0)
+      ? (purchases ?? 0) + (interest ?? 0) + (findLabeledAmount(lines, /total purchases/i) ?? 0)
       : null;
+  const debits = totalDebitsLabel ?? componentDebits;
   return { credits, debits };
 }
 
