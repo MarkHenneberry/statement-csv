@@ -17,12 +17,15 @@ import {
   normalizeDate,
   findDate,
   parseDayMonthDate,
+  resolveDayMonthDate,
+  detectStatementDateContext,
   detectBalanceLine,
   detectCreditCardBalances,
   detectBankSummary,
   detectCreditCardSummary,
   cleanDescription,
   type StatementKind,
+  type StatementDateContext,
 } from "./parser.ts";
 
 // ----- Structured PDF text items (the coordinate-aware input) -----
@@ -671,17 +674,51 @@ function isReferenceText(text: string): boolean {
  * one token (a combined transaction+posting date like "APR 22 APR 24", or a date
  * with stray tokens) still yields the FIRST real date — the transaction date.
  */
-function cellDate(raw: string, year: number | undefined): string | null {
+function cellDate(
+  raw: string,
+  year: number | undefined,
+  ctx?: StatementDateContext | null,
+  dayFirst?: boolean,
+): string | null {
   if (!raw) return null;
   const direct = normalizeDate(raw, year);
   if (direct) return direct;
   const d = findDate(raw);
   if (d) return normalizeDate(d.match, year);
   // Last resort: a bare day/month date (e.g. "23/01" or a "23/01 24/01" pair) that
-  // findDate does not recognize. The cell is already known to be the date column,
-  // so parsing DD/MM here is safe. Take the FIRST day/month token (transaction date).
+  // findDate does not recognize. The cell is already known to be the date column.
+  // Use the statement period context to pick the day/month order AND the correct
+  // year (which can differ across a December→January boundary). Take the FIRST
+  // day/month token (the transaction date) when a posting date is also present.
   const dm = raw.match(/\b\d{1,2}[/-]\d{1,2}\b/);
-  return dm ? parseDayMonthDate(dm[0], year) : null;
+  if (!dm) return null;
+  // With a known order/period, resolve precisely; else fall back to the legacy
+  // MM/DD-default parser with the single fallback year.
+  if (ctx || dayFirst !== undefined) {
+    return resolveDayMonthDate(dm[0], ctx ?? null, dayFirst ?? ctx?.dayFirst ?? false, year);
+  }
+  return parseDayMonthDate(dm[0], year);
+}
+
+// Day-first (DD/MM) inference from the date-like tokens in a set of texts: any
+// first component > 12 proves day-first; any second component > 12 proves
+// month-first. Returns null when ambiguous (no >12 component seen).
+function detectDayFirstFromTexts(texts: string[]): boolean | null {
+  let firstGt12 = 0;
+  let secondGt12 = 0;
+  for (const t of texts) {
+    const re = /\b(\d{1,2})[/-](\d{1,2})\b/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(t)) !== null) {
+      const a = Number(m[1]);
+      const b = Number(m[2]);
+      if (a > 12 && b <= 12) firstGt12 += 1;
+      else if (b > 12 && a <= 12) secondGt12 += 1;
+    }
+  }
+  if (firstGt12 > 0 && secondGt12 === 0) return true;
+  if (secondGt12 > 0 && firstGt12 === 0) return false;
+  return null;
 }
 
 function cellMoney(cell: string): { value: number; negative: boolean } | null {
@@ -779,6 +816,8 @@ function buildRegionRows(
   year: number | undefined,
   diag: Diag,
   seedBalance: number | null,
+  dateCtx: StatementDateContext | null,
+  dayFirst: boolean,
 ): TransactionRow[] {
   const cols = region.columns;
   const ci = buildColIndex(cols);
@@ -845,7 +884,7 @@ function buildRegionRows(
 
     const cells = assignCells(line, cols);
     const dateRaw = cell(cells, "date");
-    const dateVal = cellDate(dateRaw, year);
+    const dateVal = cellDate(dateRaw, year, dateCtx, dayFirst);
     const descCell = cell(cells, "description");
     const isCcRegion = region.statementKind === "credit-card";
 
@@ -997,6 +1036,7 @@ function buildRegionCandidate(
   tableCandidatesFound: number,
   allowRunningClose: boolean,
   headerless: boolean,
+  dateCtx: StatementDateContext | null = null,
 ): CoordTableCandidate | null {
   const isCcRegion = region.statementKind === "credit-card";
   const winStart = Math.max(0, region.headerIndex - 10);
@@ -1022,7 +1062,10 @@ function buildRegionCandidate(
   };
   const isCc = region.statementKind === "credit-card";
   const seedBalance = isCc ? null : bankOpenClose.opening;
-  const rows = buildRegionRows(lines, region, end, year, diag, seedBalance);
+  // Day/month order: prefer the period context, else infer from the region's own
+  // date tokens (a component > 12), else default to month-first (legacy behavior).
+  const dayFirst = dateCtx?.dayFirst ?? detectDayFirstFromTexts(regionTexts) ?? false;
+  const rows = buildRegionRows(lines, region, end, year, diag, seedBalance, dateCtx, dayFirst);
   if (rows.length === 0) return null;
 
   const summary = isCc
@@ -1324,19 +1367,24 @@ export function parseCoordinateTables(
   if (lines.length === 0) return [];
   const regions = detectTableRegions(lines);
 
+  // Detect the statement period context once (real years + day/month order) so bare
+  // day/month transaction dates resolve to correct YYYY-MM-DD, including across a
+  // December→January year boundary.
+  const dateCtx = detectStatementDateContext(lines.map((l) => l.text).join("\n"));
+
   // No header anywhere: try ONE conservative headerless x-clustering candidate.
   // It still competes via reconciliation, so a wrong guess loses to the text
   // fallback. Header-based detection is always preferred when present.
   if (regions.length === 0) {
     const headerless = detectHeaderlessRegion(lines);
     if (!headerless) return [];
-    const cand = buildRegionCandidate(lines, headerless.region, headerless.end, year, 1, true, true);
+    const cand = buildRegionCandidate(lines, headerless.region, headerless.end, year, 1, true, true, dateCtx);
     return cand ? [cand] : [];
   }
 
   const ends = regions.map((_, r) => regionEnd(lines, regions, r));
   const regionCandidates = regions.map((region, r) =>
-    buildRegionCandidate(lines, region, ends[r], year, regions.length, regions.length === 1, false),
+    buildRegionCandidate(lines, region, ends[r], year, regions.length, regions.length === 1, false, dateCtx),
   );
 
   // Per-region candidates are kept (useful as diagnostics + they still compete).

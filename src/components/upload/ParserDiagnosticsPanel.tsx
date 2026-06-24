@@ -433,6 +433,10 @@ export function ParserDiagnosticsPanel({
             <Metric label="Chosen regions stitched" value={String(d.parseStats.coordRegionsStitched)} />
             <Metric label="CC rows rejected as non-tx" value={String(d.parseStats.coordCcRowsRejectedAsNonTx)} />
             <Metric label="CC zero-amount rows ignored" value={String(d.parseStats.coordCcZeroAmountRowsIgnored)} />
+            <Metric label="Statement period detected" value={yesNo(d.parseStats.statementPeriodDetected)} />
+            <Metric label="Date year source" value={d.parseStats.inferredDateYearSource} />
+            <Metric label="Rows missing date" value={String(d.parseStats.rowsMissingDateAfterNormalization)} />
+            <Metric label="Malformed dates" value={String(d.parseStats.malformedDatesAfterNormalization)} />
             <Metric label="CC optional columns ignored" value={String(d.parseStats.coordCcOptionalColumnsIgnored)} />
           </dl>
 

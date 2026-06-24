@@ -32,7 +32,7 @@ import type { TransactionRow } from "../src/lib/upload.ts";
 import { computeBalanceCheck, resolveBalanceStatus, getRowWarnings, deriveAmount, countRowWarningSeverity } from "../src/lib/upload.ts";
 import { conversionPresentation, resolveConversionState, type ConversionInputs } from "../src/lib/conversion-state.ts";
 import { evaluateAiEligibility } from "../src/lib/ai-assist.ts";
-import { recoverDescriptionFromLine, parseDayMonthDate } from "../src/lib/parser.ts";
+import { recoverDescriptionFromLine, parseDayMonthDate, detectStatementDateContext, resolveDayMonthDate } from "../src/lib/parser.ts";
 import { resolveCreditCardOpenClose } from "../src/lib/coordinate-table.ts";
 import { detectMeaningfulPages, analyzePreviewLimit } from "../src/lib/free-preview.ts";
 import { shouldShowDiagnostics, buildSafeParseSummary } from "../src/lib/parser-diagnostics.ts";
@@ -1200,6 +1200,44 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   const reconciled = cc(many, 1605.47, 8121.73, { credits: 1519.68, debits: 8035.94 });
   check("reconciled itemized CC parse verifies", reconciled.validation.status === "passed");
   check("verified parse with 1 missing-date row still skips AI", isAiAssistEligible(reconciled) === false);
+}
+
+// ----- statement date context + DD/MM year inference -----
+{
+  const ISO = /^\d{4}-\d{2}-\d{2}$/;
+  // Numeric DD/MM/YYYY period that crosses a year boundary.
+  const ctx = detectStatementDateContext("Statement Period 30/12/2024 - 29/01/2025");
+  check("numeric period detected", ctx !== null);
+  check("period infers day-first (30 > 12)", ctx!.dayFirst === true);
+  check("period years parsed (2024 → 2025)", ctx!.startYear === 2024 && ctx!.endYear === 2025 && ctx!.crossesYear === true);
+  check("period months parsed (Dec → Jan)", ctx!.startMonth === 12 && ctx!.endMonth === 1);
+
+  // DD/MM rows resolve to the correct full ISO date with the right year.
+  check("29/01 → 2025-01-29 (day-first, end year)", resolveDayMonthDate("29/01", ctx, true) === "2025-01-29");
+  check("02/01 → 2025-01-02 (Jan 2, NOT Feb 1)", resolveDayMonthDate("02/01", ctx, true) === "2025-01-02");
+  check("10/01 → 2025-01-10", resolveDayMonthDate("10/01", ctx, true) === "2025-01-10");
+  check("30/12 → 2024-12-30 (year boundary picks start year)", resolveDayMonthDate("30/12", ctx, true) === "2024-12-30");
+  check("all resolved dates are valid ISO", [resolveDayMonthDate("29/01", ctx, true), resolveDayMonthDate("02/01", ctx, true), resolveDayMonthDate("30/12", ctx, true)].every((d) => d !== null && ISO.test(d)));
+
+  // Impossible dates are rejected (null), never malformed.
+  check("impossible day/month rejected", resolveDayMonthDate("45/99", ctx, true) === null);
+  check("non day/month token rejected", resolveDayMonthDate("Interest", ctx, true) === null);
+
+  // No malformed partial dates like YYYY-MM-D.
+  const bad = /^\d{4}-\d{1}-|^\d{4}-\d{2}-\d{1}$|-\d$/;
+  check("no malformed single-digit components", !bad.test(resolveDayMonthDate("02/01", ctx, true) ?? ""));
+
+  // Month-name period (single trailing year), and a year-crossing month-name period.
+  const named = detectStatementDateContext("January 10 to February 9, 2026");
+  check("month-name period parsed", named !== null && named.startYear === 2026 && named.endYear === 2026 && named.crossesYear === false);
+  const crossNamed = detectStatementDateContext("December 15 to January 14, 2026");
+  check("year-crossing month-name period picks prior start year", crossNamed !== null && crossNamed.startYear === 2025 && crossNamed.endYear === 2026 && crossNamed.crossesYear === true);
+
+  // Fallback year applies when no full period context is available.
+  check("fallback year used without context", resolveDayMonthDate("23/01", null, true, 2025) === "2025-01-23");
+
+  // parseDayMonthDate (legacy MM/DD default) still works for callers without order.
+  check("legacy parseDayMonthDate pads + applies year", parseDayMonthDate("3/5", 2025) === "2025-03-05");
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

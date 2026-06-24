@@ -106,6 +106,14 @@ export type LayoutParseStats = {
   detectedProfile: string;
   /** Safe aggregate telemetry explaining coordinate header detection (no text). */
   coordHeaderProbe: CoordinateHeaderProbe;
+  /** True when a statement period (with years) was detected for date inference. */
+  statementPeriodDetected: boolean;
+  /** Where the row year came from: statement period, a fallback year, or none. */
+  inferredDateYearSource: "statement-period" | "fallback-year" | "none";
+  /** Rows that still have no date after normalization (review signal). */
+  rowsMissingDateAfterNormalization: number;
+  /** Rows whose date is non-empty but not valid YYYY-MM-DD (should be 0). */
+  malformedDatesAfterNormalization: number;
 };
 
 /** Per-candidate aggregate comparison (dev diagnostics only; no row content). */
@@ -456,6 +464,110 @@ export function parseDayMonthDate(raw: string, fallbackYear?: number): string | 
   }
   if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
   return fallbackYear ? `${fallbackYear}-${pad2(mo)}-${pad2(d)}` : `${pad2(mo)}-${pad2(d)}`;
+}
+
+/**
+ * Full statement date context used to turn bare day/month transaction dates into
+ * correct YYYY-MM-DD values. Carries the period's start/end (with real years) and
+ * whether the statement writes dates day-first (DD/MM, common on Canadian
+ * statements). All fields are inferred from the document, never assumed.
+ */
+export type StatementDateContext = {
+  startYear: number;
+  startMonth: number;
+  endYear: number;
+  endMonth: number;
+  crossesYear: boolean;
+  /** True when the statement uses day-first (DD/MM) numeric dates. */
+  dayFirst: boolean;
+};
+
+/**
+ * Detect the statement date context from a period line. Handles a NUMERIC range
+ * like "30/12/2024 - 29/01/2025" (day-first inferred when a component > 12) and a
+ * month-name range like "January 10 to February 9, 2026". Returns null when no
+ * period with usable years is found, so callers can fall back safely.
+ */
+export function detectStatementDateContext(text: string): StatementDateContext | null {
+  // Numeric DD/MM/YYYY (or MM/DD/YYYY) range.
+  const num = text.match(
+    /\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b\s*(?:to|through|-|–|—|−)\s*\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b/i,
+  );
+  if (num) {
+    const a1 = Number(num[1]);
+    const b1 = Number(num[2]);
+    const y1 = Number(num[3]);
+    const a2 = Number(num[4]);
+    const b2 = Number(num[5]);
+    const y2 = Number(num[6]);
+    // Day-first when any first component cannot be a month, month-first when any
+    // second component cannot be a day's month slot. Default to day-first only when
+    // a clear signal says so; otherwise month-first (North American numeric).
+    const dayFirst = a1 > 12 || a2 > 12 ? true : b1 > 12 || b2 > 12 ? false : false;
+    const startMonth = dayFirst ? b1 : a1;
+    const endMonth = dayFirst ? b2 : a2;
+    if (startMonth < 1 || startMonth > 12 || endMonth < 1 || endMonth > 12) return null;
+    return { startYear: y1, startMonth, endYear: y2, endMonth, crossesYear: y1 !== y2 || startMonth > endMonth, dayFirst };
+  }
+  // Month-name range with a single trailing year (e.g. "... February 9, 2026").
+  const named = text.match(
+    /([A-Za-z]{3,9})\.?\s+\d{1,2}\s*(?:to|through|-|–|—|−)\s*([A-Za-z]{3,9})\.?\s+\d{1,2}(?:,)?\s*(20\d{2})/i,
+  );
+  if (named) {
+    const sm = MONTHS[named[1].slice(0, 3).toLowerCase()];
+    const em = MONTHS[named[2].slice(0, 3).toLowerCase()];
+    const endYear = Number(named[3]);
+    if (!sm || !em) return null;
+    const crosses = sm > em;
+    return {
+      startYear: crosses ? endYear - 1 : endYear,
+      startMonth: sm,
+      endYear,
+      endMonth: em,
+      crossesYear: crosses,
+      dayFirst: false,
+    };
+  }
+  return null;
+}
+
+/**
+ * Resolve a bare day/month token (e.g. "29/01") to YYYY-MM-DD using the statement
+ * date context: day/month order from `dayFirst`/impossibility, and the YEAR chosen
+ * so the month falls inside the statement period (handles a December→January
+ * year boundary). Returns null when no valid date can be formed (so the caller can
+ * flag the row for review rather than emit a malformed date).
+ */
+export function resolveDayMonthDate(
+  raw: string,
+  ctx: StatementDateContext | null,
+  dayFirst: boolean,
+  fallbackYear?: number,
+): string | null {
+  const m = raw.trim().match(/^(\d{1,2})[/-](\d{1,2})$/);
+  if (!m) return null;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  let day = dayFirst ? a : b;
+  let month = dayFirst ? b : a;
+  // Fix an impossible assignment (the other order is forced).
+  if (month < 1 || month > 12) {
+    const t = day;
+    day = month;
+    month = t;
+  }
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  let year: number | undefined = fallbackYear;
+  if (ctx) {
+    if (ctx.crossesYear) {
+      // A month at/after the start month belongs to the start year; otherwise the
+      // end year (e.g. Dec → start year 2024, Jan → end year 2025).
+      year = month >= ctx.startMonth ? ctx.startYear : ctx.endYear;
+    } else {
+      year = ctx.startYear;
+    }
+  }
+  return year ? `${year}-${pad2(month)}-${pad2(day)}` : `${pad2(month)}-${pad2(day)}`;
 }
 
 const DATE_PATTERNS: RegExp[] = [
@@ -2311,6 +2423,17 @@ export function parseStatementText(text: string, items?: PdfTextItem[]): ParseRe
     chosenCandidateSource: chosen.source,
     detectedProfile: profile.name,
     coordHeaderProbe: probeCoordinateHeaders(items ?? []),
+    // Safe date-normalization diagnostics (counts/labels only).
+    statementPeriodDetected: detectStatementDateContext(text) !== null,
+    inferredDateYearSource: detectStatementDateContext(text) !== null
+      ? "statement-period"
+      : year !== undefined
+        ? "fallback-year"
+        : "none",
+    rowsMissingDateAfterNormalization: rows.filter((r) => !r.date.trim()).length,
+    malformedDatesAfterNormalization: rows.filter(
+      (r) => r.date.trim() !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(r.date),
+    ).length,
   };
 
   const warnings: string[] = [];
