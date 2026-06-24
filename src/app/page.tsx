@@ -24,9 +24,9 @@ import {
 const homeFaqs = generalFaqs.slice(0, 6);
 
 export const metadata: Metadata = {
-  title: "Bank Statement to CSV Converter | No Bank Login",
+  title: "Canadian Bank Statement to CSV and Excel Converter",
   description:
-    "Affordable bank statement conversion with balance checks. Turn PDF bank statements into clean CSV files for Excel, Google Sheets, bookkeeping, taxes, or budgeting. No bank login.",
+    "Convert Canadian bank and credit card statements to clean CSV and Excel. Built for statements from RBC, TD, BMO, CIBC, Scotiabank, credit unions, and more, with parser-first extraction, guided AI verification, and balance checks. No bank login.",
   alternates: {
     canonical: absoluteUrl("/"),
   },
@@ -54,15 +54,15 @@ const csvIncludes = [
 const supportedTypes = [
   {
     title: "Chequing & savings",
-    body: "Everyday account statements with dated debits, credits, and balances.",
+    body: "Everyday Canadian account statements with dated debits, credits, Interac e-Transfers, fees, and running balances.",
   },
   {
     title: "Credit card statements",
-    body: "Monthly card statements with purchases, payments, and fees.",
+    body: "Monthly Canadian card statements with purchases, payments, fees, and interest.",
   },
   {
     title: "Bank-specific guides",
-    body: "Step-by-step pages for popular banks, with more on the way.",
+    body: "Step-by-step pages for popular Canadian banks, with more on the way.",
   },
 ];
 
@@ -73,28 +73,29 @@ export default function HomePage() {
       <JsonLd data={faqPageJsonLd(homeFaqs)} />
 
       <Hero
-        title="Convert Bank Statements to Clean CSV Files"
-        secondaryCta={{ label: "See Pricing", href: "/pricing" }}
+        title="Convert Canadian bank statements to clean CSV and Excel"
+        secondaryCta={{ label: "See pricing", href: "/pricing" }}
       >
         <p>
-          Upload a PDF bank statement and turn it into a clean spreadsheet file for Excel,
-          Google Sheets, bookkeeping, taxes, budgeting, or accounting software.
+          Upload statements from RBC, TD, BMO, CIBC, Scotiabank, credit unions, and more.
+          StatementCSV uses parser-first extraction, guided AI verification when needed,
+          and balance checks to help create spreadsheet-ready files faster.
         </p>
         <p>
-          StatementCSV is built specifically for bank statements — not generic PDFs. It
-          extracts transaction rows, organizes dates, descriptions, debits, credits,
-          amounts, and balances, then lets you review the data before exporting.
+          Built for Canadian statements first. It handles common patterns like Interac
+          e-Transfers, credits, debits, fees, and credit-card payments, then lets you
+          review the rows before you export.
         </p>
         <p className="font-medium text-slate-700">
-          No bank login. Balance checks. No stored statement data.
+          No bank login. Balance checks before export. No stored statement data.
         </p>
       </Hero>
 
       <Section>
         <SectionHeading
           eyebrow="What it does"
-          title="Convert bank statement PDFs into clean transaction data"
-          description="Upload a PDF bank statement and turn it into a clean table of transactions. The converter extracts dates, descriptions, debits, credits, balances, and amounts, then exports the result as CSV or Excel. It is built for bank statements, not generic PDFs, so it focuses on transaction rows and common statement formatting issues."
+          title="Turn Canadian statements into clean transaction data"
+          description="Upload a Canadian bank or credit card statement and turn it into a clean table of transactions. The converter extracts dates, descriptions, debits, credits, balances, and amounts, then exports the result as CSV or Excel. It is built for bank statements, not generic PDFs, so it focuses on transaction rows and common Canadian statement patterns like Interac e-Transfers."
         />
         <div className="mx-auto mt-10 max-w-4xl">
           <OutputColumnsExample
@@ -121,25 +122,25 @@ export default function HomePage() {
             described here as how the product works, but the parser and validation
             pipeline do not exist yet. Both must be built and verified before launch. */}
         <SectionHeading
-          eyebrow="Reliable conversion"
-          title="Built to catch errors, not create them"
-          description="AI-assisted extraction helps handle messy statement layouts, while balance checks help catch missing or misread transactions before you export."
+          eyebrow="How the conversion works"
+          title="Parser-first extraction, with guided AI verification when needed"
+          description="A dedicated statement parser does the extraction first. When a statement is harder to read, guided AI verification helps fill the gaps, and balance checks compare the result against the statement totals before you export."
           centered
         />
         <div className="mt-12">
           <FeatureCards
             items={[
               {
-                title: "AI-assisted extraction",
-                body: "Helps interpret inconsistent layouts and multi-line entries so transactions land in the right columns.",
+                title: "Parser-first extraction",
+                body: "A statement-specific parser reads the layout and pulls transactions into clean columns before any AI is involved.",
               },
               {
-                title: "Balance checks",
-                body: "Compare extracted transactions against the statement's opening and closing balances to flag anything that does not add up.",
+                title: "Guided AI verification",
+                body: "When the parser needs help, AI is guided with limited, relevant statement evidence rather than the full document, and the result is re-checked.",
               },
               {
-                title: "You review before export",
-                body: "Check the extracted transactions yourself before downloading. We do not claim perfect accuracy.",
+                title: "Balance checks before export",
+                body: "We compare the extracted totals against the statement's opening and closing balances and flag anything that does not line up.",
               },
             ]}
             columns={3}
@@ -227,8 +228,8 @@ DEPOSIT 2,000.00 3,240.10`}
       <Section>
         <SectionHeading
           eyebrow="Supported statement types"
-          title="Designed for common bank statements"
-          description="Designed for digital, text-based PDF statements downloaded from your bank. It works best when the transaction text is selectable in the PDF."
+          title="Built for Canadian statements first"
+          description="Designed for RBC, TD, BMO, CIBC, Scotiabank, credit unions, and more. It supports common Canadian bank and credit-card statement patterns and works best with digital, text-based PDFs where the transaction text is selectable. When a statement needs review, we show it clearly before export."
         />
         <div className="mt-12">
           <FeatureCards items={supportedTypes} columns={3} />

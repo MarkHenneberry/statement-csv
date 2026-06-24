@@ -23,6 +23,9 @@ const config: Config = {
       },
       maxWidth: {
         content: "72rem",
+        // Wider container for the conversion/review flow so the transaction table
+        // can span most of a normal desktop without horizontal scrolling.
+        wide: "90rem",
       },
     },
   },

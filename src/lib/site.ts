@@ -2,10 +2,13 @@ export const siteConfig = {
   name: "StatementCSV",
   // Update this to the real production domain before launch.
   url: "https://statementcsv.com",
-  // Core positioning: affordable conversion with balance checks.
-  tagline: "Affordable bank statement conversion with balance checks.",
+  // Core positioning: Canadian-first, parser-first extraction with balance checks.
+  tagline: "Convert Canadian bank statements to clean CSV and Excel.",
   description:
-    "Affordable bank statement conversion with balance checks. Turn PDF bank statements into clean CSV files for Excel, Google Sheets, bookkeeping, taxes, or budgeting. No bank login.",
+    "Convert Canadian bank and credit card statements into clean CSV and Excel files. " +
+    "StatementCSV uses parser-first extraction, guided AI verification when needed, and " +
+    "balance checks before export. Built for Canadian statements first, including " +
+    "Interac e-Transfers, credits, debits, fees, and card payments. No bank login.",
 };
 
 export type NavLink = {

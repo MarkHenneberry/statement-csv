@@ -1,13 +1,12 @@
 import type { Metadata } from "next";
-import { Section } from "@/components/Section";
 import { Container } from "@/components/Container";
 import { UploadFlow } from "@/components/upload/UploadFlow";
 
 export const metadata: Metadata = {
-  title: "Convert a Statement",
+  title: "Convert a statement",
   description:
-    "Upload a digital PDF bank statement to preview the conversion to CSV, review the extracted transactions, run balance checks, and download a spreadsheet-ready file. We do not keep your bank statement data.",
-  // Tool page, not a content page — keep it out of search results until the
+    "Upload a digital PDF Canadian bank or credit card statement to preview the conversion, review the extracted transactions, run balance checks, and download a CSV or Excel file. We do not keep your bank statement data.",
+  // Tool page, not a content page. Keep it out of search results until the
   // parser and payment flow are production-ready.
   robots: { index: false, follow: true },
 };
@@ -20,17 +19,19 @@ export const metadata: Metadata = {
 // extracted rows.
 export default function UploadPage() {
   return (
-    <Section>
+    // Wider, denser container than the marketing pages so the review table can use
+    // most of the screen width on desktop.
+    <Container size="wide" className="py-8 sm:py-10">
       <UploadFlow />
-      <Container className="mt-12">
-        <p className="mx-auto max-w-2xl text-center text-sm text-slate-500">
-          <span className="font-semibold text-slate-700">
-            No bank login. No stored statement data.
-          </span>{" "}
-          StatementCSV is designed so your bank statement is used only to create your
-          spreadsheet file. We do not keep your bank statement data.
-        </p>
-      </Container>
-    </Section>
+      <p className="mx-auto mt-10 max-w-2xl text-center text-sm text-slate-500">
+        <span className="font-semibold text-slate-700">
+          No bank login. No stored statement data.
+        </span>{" "}
+        StatementCSV is parser-first. Your original PDF is never handed directly to AI.
+        When guided AI verification is needed, it receives limited, relevant statement
+        evidence instead of the full document, and your statement is used only to create
+        your spreadsheet file.
+      </p>
+    </Container>
   );
 }

@@ -34,7 +34,16 @@ import { detectMeaningfulPages, analyzePreviewLimit } from "../src/lib/free-prev
 import { shouldShowDiagnostics, buildSafeParseSummary } from "../src/lib/parser-diagnostics.ts";
 import { estimateAiCost, formatUsd, AI_MODEL_PRICING } from "../src/lib/ai-cost.ts";
 import { selectReviewMessage } from "../src/lib/review-messages.ts";
-import { pricingPlans, pricingSubheadline, pricingFooter } from "../src/lib/pricing.ts";
+import {
+  pricingPlans,
+  pricingSubheadline,
+  pricingFooter,
+  pricingHeadline,
+  categoryFeatureHeadline,
+  categoryFeatureSubtext,
+} from "../src/lib/pricing.ts";
+import { siteConfig } from "../src/lib/site.ts";
+import { generalFaqs } from "../src/lib/faq.ts";
 import { SCANNED_PDF_WARNING } from "../src/lib/parser.ts";
 import {
   selectVisionRegions,
@@ -252,7 +261,7 @@ check("scanned message says digital PDFs only", SCANNED_PDF_WARNING.includes("di
 check("scanned message does not claim OCR", !/OCR/i.test(SCANNED_PDF_WARNING));
 check("every tier includes CSV + Excel", pricingPlans.every((p) => p.features.some((f) => /csv \+ excel/i.test(f))));
 check("no tier mentions 'No ads'", pricingPlans.every((p) => p.features.every((f) => !/no ads/i.test(f))));
-check("subheadline can say AI-assisted (marketing)", /ai-assisted repair/i.test(pricingSubheadline));
+check("subheadline mentions guided AI verification", /guided ai verification/i.test(pricingSubheadline));
 check("footer says scanned/image not supported", /scanned or image-based statements are not currently supported/i.test(pricingFooter));
 
 // ----- vision fallback: region/crop selection -----
@@ -883,6 +892,69 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, crop: 
   check("safe summary reports renderer backend", summary.rendererBackendAvailable === true && summary.rendererBackendName === "@napi-rs/canvas");
   // It must NOT carry any content-bearing field (counts like aiImageCropsCount are fine).
   check("safe summary has no content fields", !keys.some((k) => /description|prompt|response|merchant|account|rawtext/i.test(k)));
+}
+
+// ----- positioning / copy pass (Canadian, parser-first, privacy, categories) -----
+{
+  const EM_DASH = "—";
+  // No em dashes in the major positioning/pricing/trust copy.
+  const copyStrings = [
+    siteConfig.tagline,
+    siteConfig.description,
+    pricingHeadline,
+    pricingSubheadline,
+    pricingFooter,
+    categoryFeatureHeadline,
+    categoryFeatureSubtext,
+    ...pricingPlans.flatMap((p) => [p.name, p.description, ...p.features]),
+    ...generalFaqs.flatMap((f) => [f.question, f.answer]),
+  ];
+  check("no em dashes in positioning/pricing/trust copy", copyStrings.every((s) => !s.includes(EM_DASH)));
+
+  // Canadian-first positioning.
+  check("tagline is Canadian-focused", /canadian/i.test(siteConfig.tagline));
+  check("description mentions parser-first + guided AI verification + balance checks",
+    /parser-first/i.test(siteConfig.description) && /guided ai verification/i.test(siteConfig.description) && /balance check/i.test(siteConfig.description));
+  check("description mentions e-Transfer", /e-?transfer/i.test(siteConfig.description));
+  check("positioning is not generic 'AI PDF to CSV'", !/\bai pdf to csv\b/i.test(siteConfig.description));
+
+  // Honest support language: no overpromising.
+  const allCopy = copyStrings.join(" \n ");
+  check("no '100% accurate' claim", !/100%\s*accurate/i.test(allCopy));
+  check("no 'works with every' bank claim", !/works with every/i.test(allCopy));
+  check("no 'AI never sees' claim", !/ai never sees|ai never comes in contact/i.test(allCopy));
+
+  // Categories: optional, editable, Plus/Pro, separate from balance verification.
+  check("category copy says optional + AI-assisted", /optional/i.test(categoryFeatureHeadline) && /ai/i.test(categoryFeatureHeadline));
+  check("category copy says editable + separate from balance verification",
+    /edit/i.test(categoryFeatureSubtext) && /separate from balance/i.test(categoryFeatureSubtext));
+  check("only Plus/Pro list AI category suggestions", (() => {
+    const byName = Object.fromEntries(pricingPlans.map((p) => [p.name, p.features.join(" ")]));
+    const hasCat = (n: string) => /category|categories/i.test(byName[n] ?? "");
+    return !hasCat("Free Preview") && !hasCat("Starter") && hasCat("Plus") && hasCat("Pro");
+  })());
+
+  // AI is available on every tier (not paid-only).
+  check("every tier mentions guided AI verification", pricingPlans.every((p) => p.features.some((f) => /guided ai verification/i.test(f))));
+
+  // Privacy wording: never claim AI sees nothing; do claim PDF not handed directly.
+  const aiFaq = generalFaqs.find((f) => /how does ai fit/i.test(f.question));
+  check("AI FAQ exists and is parser-first", Boolean(aiFaq) && /parser-first/i.test(aiFaq!.answer));
+  check("AI FAQ says original PDF not handed directly to AI", Boolean(aiFaq) && /never handed directly to ai/i.test(aiFaq!.answer));
+  check("AI FAQ mentions limited relevant evidence", Boolean(aiFaq) && /limited, relevant/i.test(aiFaq!.answer));
+}
+
+// ----- conversion-state copy honesty (verified vs needs-review) -----
+{
+  const baseInputs = { confidence: 0.95, rowCount: 50, materialWarningCount: 0, minorWarningCount: 0, summaryMatched: null, previewLimited: false, unsupported: false } as const;
+  const verified = conversionPresentation({ ...baseInputs, balanceStatus: "passed" });
+  check("verified export note is concise 'export is ready'", /export is ready/i.test(verified.exportNote) && !verified.exportNote.includes("—"));
+  const needs = conversionPresentation({ ...baseInputs, balanceStatus: "review", materialWarningCount: 10, rowCount: 50 });
+  check("needs-review still says could not fully verify", /could not fully verify/i.test(needs.bannerBody));
+  check("review-recommended does not say 'could not fully verify'", (() => {
+    const rr = conversionPresentation({ ...baseInputs, balanceStatus: "passed", materialWarningCount: 1, rowCount: 65 });
+    return rr.state === "review-recommended" && /totals matched/i.test(rr.bannerBody) && !/could not fully verify/i.test(rr.bannerBody);
+  })());
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

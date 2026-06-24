@@ -8,15 +8,27 @@ import { primaryNav, siteConfig } from "@/lib/site";
 
 export function Header() {
   const [open, setOpen] = useState(false);
+  // Show the logo image when present; fall back to the lettermark if it fails.
+  const [logoOk, setLogoOk] = useState(true);
 
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur">
       <Container>
         <div className="flex h-16 items-center justify-between">
           <Link href="/" className="flex items-center gap-2" aria-label={siteConfig.name}>
-            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-brand-600 text-sm font-bold text-white">
-              C
-            </span>
+            {logoOk ? (
+              // eslint-disable-next-line @next/next/no-img-element -- small static logo; onError fallback needs a plain img
+              <img
+                src="/images/statementcsv-logo.png"
+                alt={siteConfig.name}
+                className="h-8 w-auto"
+                onError={() => setLogoOk(false)}
+              />
+            ) : (
+              <span className="flex h-8 w-8 items-center justify-center rounded-md bg-brand-600 text-sm font-bold text-white">
+                C
+              </span>
+            )}
             <span className="text-lg font-semibold tracking-tight text-slate-900">
               {siteConfig.name}
             </span>

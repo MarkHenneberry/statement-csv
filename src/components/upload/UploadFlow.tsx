@@ -293,17 +293,17 @@ export function UploadFlow() {
       reviewReasons.push(
         `${lowConfidenceCount} low-confidence ${
           lowConfidenceCount === 1 ? "row was" : "rows were"
-        } found — check the highlighted rows.`,
+        } found. Check the highlighted rows.`,
       );
     }
 
     return (
-      <div className="space-y-6">
+      <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+          <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
             Review your conversion
           </h1>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
             {meta.source === "real-parser" ? (
               <button
                 type="button"
@@ -316,9 +316,9 @@ export function UploadFlow() {
             <button
               type="button"
               onClick={resetAll}
-              className="text-sm font-medium text-slate-600 transition hover:text-slate-900"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
             >
-              &larr; Convert another statement
+              <span aria-hidden="true">&larr;</span> Convert another statement
             </button>
           </div>
         </div>
@@ -395,11 +395,11 @@ export function UploadFlow() {
             tone === "safe" ? "Ready to export" : tone === "neutral" ? "Download preview" : "Review before export";
           return (
             <div
-              className={`flex flex-col gap-4 rounded-2xl border p-6 sm:flex-row sm:items-center sm:justify-between ${container}`}
+              className={`flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between ${container}`}
             >
-              <div className="max-w-md">
+              <div className="max-w-xl">
                 <p className={`text-sm font-semibold ${titleColor}`}>{heading}</p>
-                <p className={`mt-1 text-sm ${noteColor}`}>{presentation.exportNote}</p>
+                <p className={`mt-0.5 text-sm ${noteColor}`}>{presentation.exportNote}</p>
               </div>
               <TransactionExportButtons
                 rows={rows}
@@ -410,13 +410,16 @@ export function UploadFlow() {
           );
         })()}
 
-        <div className="grid gap-6 lg:grid-cols-3">
-          <div className="lg:col-span-2">
+        {/* Table gets priority width; the balance panel is a compact sidebar that
+            stacks below on smaller screens. */}
+        <div className="grid gap-4 lg:grid-cols-4">
+          <div className="lg:col-span-3">
             <TransactionPreviewTable
               rows={rows}
               onUpdate={updateRow}
               onDelete={deleteRow}
               onAdd={addRow}
+              showCategory={false}
             />
           </div>
           <div className="lg:col-span-1">
@@ -431,8 +434,8 @@ export function UploadFlow() {
           deposits, payments, or refunds.
         </p>
 
-        <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-6 sm:flex-row sm:items-center sm:justify-between">
-          <p className="max-w-md text-sm text-slate-600">
+        <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="max-w-xl text-sm text-slate-600">
             Export the reviewed rows as a CSV or Excel file for spreadsheets, bookkeeping,
             or accounting software. Nothing is uploaded or stored.
           </p>

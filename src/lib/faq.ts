@@ -35,9 +35,9 @@ export const generalFaqs: FaqItem[] = [
       "Yes. CSV is a universal spreadsheet format. The file opens directly in Excel, Google Sheets, Numbers, and bookkeeping tools such as QuickBooks, Xero, and Wave.",
   },
   {
-    question: "Which banks are supported?",
+    question: "Which Canadian banks are supported?",
     answer:
-      "The converter is designed to work with statements from major banks, and we publish dedicated guides for banks like RBC and TD. If your statement is a standard text-based PDF, it will generally convert even if your bank is not listed yet.",
+      "StatementCSV is built for Canadian statements first and is designed for RBC, TD, BMO, CIBC, Scotiabank, credit unions, and more. It supports common Canadian bank and credit-card statement patterns, including Interac e-Transfers, credits, debits, fees, and card payments. We do not guarantee every bank or every format yet, so when a statement needs review we show it clearly before export. Standard text-based PDFs generally convert even if your bank is not listed.",
   },
   {
     question: "Is this free?",
@@ -55,9 +55,9 @@ export const generalFaqs: FaqItem[] = [
       "A balance check compares the transactions we extract against the opening and closing balances printed on your statement. When the running total does not line up, we flag it so you can spot a missing or misread transaction before you export. It is a sanity check to help catch errors, not a guarantee of perfect accuracy or any kind of financial advice.",
   },
   {
-    question: "Does AI read my bank statement?",
+    question: "How does AI fit into the conversion?",
     answer:
-      "AI-assisted extraction may be used to help interpret messy or inconsistent statement layouts so transactions land in the right columns. If it is used, it is only to help structure the statement into rows for your conversion — not to train models or to target ads. You always review the extracted transactions before downloading. Any AI use must be clearly disclosed and verified before launch.",
+      "StatementCSV is parser-first. A statement-specific parser does the extraction, and guided AI verification is used only when a statement is harder to read. Your original PDF is never handed directly to AI. When AI assistance is needed, it is guided with limited, relevant statement evidence instead of the full document, and the result is re-checked with balance validation. AI is used to help structure your conversion, not to train models or target ads, and you always review the rows before downloading.",
   },
   {
     question: "Are scanned statements supported?",
@@ -82,7 +82,7 @@ export const generalFaqs: FaqItem[] = [
   {
     question: "Is this different from a normal PDF to Excel converter?",
     answer:
-      "Yes. A generic PDF-to-Excel tool tries to pull tables out of any document. StatementCSV is built specifically for bank statements, so it focuses on transaction rows, debit and credit columns, running balances, repeated page headers across multi-page statements, and review warnings — with balance checks to help catch missing or misread transactions.",
+      "Yes. A generic PDF-to-Excel tool tries to pull tables out of any document. StatementCSV is built specifically for Canadian bank statements, so it focuses on transaction rows, debit and credit columns, running balances, repeated page headers across multi-page statements, and review warnings, with balance checks to help catch missing or misread transactions.",
   },
   {
     question: "Can I use the file for bookkeeping?",
@@ -92,12 +92,12 @@ export const generalFaqs: FaqItem[] = [
   {
     question: "Can I import the CSV into QuickBooks or Xero?",
     answer:
-      "The CSV is designed to be a clean, spreadsheet-ready file you can prepare for import into tools like QuickBooks, Xero, or Wave. StatementCSV is not an official integration or partner — it produces a standard CSV that you map to your accounting tool's import format.",
+      "The CSV is designed to be a clean, spreadsheet-ready file you can prepare for import into tools like QuickBooks, Xero, or Wave. StatementCSV is not an official integration or partner. It produces a standard CSV that you map to your accounting tool's import format.",
   },
   {
     question: "Is this safe for bank statements?",
     answer:
-      "StatementCSV is designed for handling sensitive financial documents: there is no bank login, no ads, and no selling of transaction data. Your statement is used only to create your spreadsheet file. The deletion and logging behavior of the production pipeline must be verified before launch — see the security page for details.",
+      "StatementCSV is designed for handling sensitive financial documents: there is no bank login, no ads, and no selling of transaction data. Your statement is used only to create your spreadsheet file. The deletion and logging behavior of the production pipeline must be verified before launch. See the security page for details.",
   },
   {
     question: "Do you keep my bank statement data?",
@@ -107,6 +107,6 @@ export const generalFaqs: FaqItem[] = [
   {
     question: "Do you use my statement data for ads or training?",
     answer:
-      "No. StatementCSV does not use your transaction data for ads. If AI-assisted extraction is used, it should only be used to help structure the statement into rows for your conversion. This must be clearly disclosed and verified before launch.",
+      "No. StatementCSV does not use your transaction data for ads or model training. Your original PDF is never handed directly to AI. When guided AI verification is needed, it receives limited, relevant statement evidence to help structure your conversion, not the full document. This handling must be clearly disclosed and verified before launch.",
   },
 ];

@@ -6,12 +6,18 @@ import { FAQSection } from "@/components/FAQSection";
 import { CTASection } from "@/components/CTASection";
 import { absoluteUrl } from "@/lib/site";
 import { generalFaqs } from "@/lib/faq";
-import { pricingHeadline, pricingSubheadline, pricingFooter } from "@/lib/pricing";
+import {
+  pricingHeadline,
+  pricingSubheadline,
+  pricingFooter,
+  categoryFeatureHeadline,
+  categoryFeatureSubtext,
+} from "@/lib/pricing";
 
 export const metadata: Metadata = {
   title: "Pricing",
   description:
-    "Affordable, page-based pricing for converting bank statements to CSV with balance checks. Free preview, then Starter at $5/month, Plus at $10/month, or Pro at $20/month.",
+    "Page-based pricing for converting Canadian bank and credit card statements to CSV and Excel, with parser-first extraction, guided AI verification, and balance checks. Free preview, then Starter at $5/month, Plus at $10/month, or Pro at $20/month.",
   alternates: {
     canonical: absoluteUrl("/pricing"),
   },
@@ -44,6 +50,15 @@ export default function PricingPage() {
         <p className="mx-auto mt-8 max-w-2xl text-center text-sm text-slate-500">
           {pricingFooter}
         </p>
+
+        <div className="mx-auto mt-10 max-w-2xl rounded-2xl border border-slate-200 bg-slate-50 p-6 text-center">
+          <h3 className="text-base font-semibold text-slate-900">{categoryFeatureHeadline}</h3>
+          <p className="mt-2 text-sm leading-relaxed text-slate-600">{categoryFeatureSubtext}</p>
+          <p className="mt-2 text-xs text-slate-500">
+            Categories are optional, available on Plus and Pro, and never used to decide whether a
+            conversion is verified.
+          </p>
+        </div>
       </Section>
 
       <Section muted>

@@ -13,24 +13,40 @@ const inter = Inter({
   display: "swap",
 });
 
+const defaultTitle = "Canadian Bank Statement to CSV and Excel Converter";
+
 export const metadata: Metadata = {
   metadataBase: new URL(siteConfig.url),
   title: {
-    default: "Bank Statement to CSV Converter | No Bank Login",
+    default: defaultTitle,
     template: `%s | ${siteConfig.name}`,
   },
   description: siteConfig.description,
   applicationName: siteConfig.name,
+  keywords: [
+    "Canadian bank statement converter",
+    "Canadian bank statement to CSV",
+    "Canadian bank statement to Excel",
+    "RBC statement to CSV",
+    "TD statement to Excel",
+    "BMO statement converter",
+    "CIBC statement converter",
+    "Scotiabank statement converter",
+    "credit union statement converter",
+    "Interac e-Transfer statement CSV",
+    "Canadian credit card statement to CSV",
+    "bookkeeping CSV export Canada",
+  ],
   openGraph: {
     type: "website",
     siteName: siteConfig.name,
-    title: "Bank Statement to CSV Converter | No Bank Login",
+    title: defaultTitle,
     description: siteConfig.description,
     url: siteConfig.url,
   },
   twitter: {
     card: "summary",
-    title: "Bank Statement to CSV Converter | No Bank Login",
+    title: defaultTitle,
     description: siteConfig.description,
   },
   robots: {

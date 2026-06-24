@@ -115,7 +115,7 @@ export function conversionPresentation(input: ConversionInputs): ConversionPrese
         secondaryCopy: "Spot-checking is optional but recommended for important records.",
         showTopExport: hasRows,
         exportTone: "safe",
-        exportNote: "Balance check passed — your export is ready.",
+        exportNote: "Totals matched. Export is ready.",
         exportLabelPrefix: null,
       };
     case "review-recommended":
@@ -133,7 +133,7 @@ export function conversionPresentation(input: ConversionInputs): ConversionPrese
         secondaryCopy: null,
         showTopExport: hasRows,
         exportTone: "review",
-        exportNote: "Totals matched — please review the highlighted rows before export.",
+        exportNote: "Totals matched. Please review the highlighted rows before export.",
         exportLabelPrefix: null,
       };
     case "preview-limited":
@@ -182,7 +182,7 @@ export function conversionPresentation(input: ConversionInputs): ConversionPrese
         secondaryCopy: null,
         showTopExport: hasRows,
         exportTone: "review",
-        exportNote: "Review the highlighted rows first — this conversion is not verified.",
+        exportNote: "Review the highlighted rows first. This conversion is not verified.",
         exportLabelPrefix: null,
       };
   }

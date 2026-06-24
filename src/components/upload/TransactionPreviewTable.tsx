@@ -23,7 +23,7 @@ function confidenceTone(confidence: number): string {
 }
 
 const cellInput =
-  "w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm text-slate-800 focus:border-brand-300 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-200";
+  "w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm text-slate-800 focus:border-brand-300 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-200";
 
 function TextCell({
   value,
@@ -81,17 +81,21 @@ export function TransactionPreviewTable({
   onUpdate,
   onDelete,
   onAdd,
+  showCategory = false,
 }: {
   rows: TransactionRow[];
   onUpdate: (id: string, patch: RowPatch) => void;
   onDelete: (id: string) => void;
   onAdd: () => void;
+  // Category is optional (a Plus/Pro feature). Hidden by default so the default
+  // review table stays compact and does not force horizontal scrolling.
+  showCategory?: boolean;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white">
-      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+    <div className="rounded-xl border border-slate-200 bg-white">
+      <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
         <div>
-          <h3 className="text-base font-semibold text-slate-900">
+          <h3 className="text-sm font-semibold text-slate-900">
             Extracted transactions
           </h3>
           <p className="text-xs text-slate-500">
@@ -101,7 +105,7 @@ export function TransactionPreviewTable({
         <button
           type="button"
           onClick={onAdd}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
         >
           <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
             <path d="M10 4a.75.75 0 0 1 .75.75v4.5h4.5a.75.75 0 0 1 0 1.5h-4.5v4.5a.75.75 0 0 1-1.5 0v-4.5h-4.5a.75.75 0 0 1 0-1.5h4.5v-4.5A.75.75 0 0 1 10 4Z" />
@@ -119,28 +123,28 @@ export function TransactionPreviewTable({
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1040px] table-fixed border-collapse text-sm">
+          <table className={`w-full ${showCategory ? "min-w-[920px]" : "min-w-[760px]"} table-fixed border-collapse text-sm`}>
             <colgroup>
-              <col className="w-8" />
-              <col className="w-[120px]" />
+              <col className="w-7" />
+              <col className="w-[104px]" />
               {/* Description has no fixed width, so it absorbs the extra space. */}
               <col />
+              <col className="w-[92px]" />
+              <col className="w-[92px]" />
               <col className="w-[96px]" />
-              <col className="w-[96px]" />
-              <col className="w-[104px]" />
-              <col className="w-[96px]" />
-              <col className="w-[112px]" />
-              <col className="w-[72px]" />
-              <col className="w-10" />
+              <col className="w-[92px]" />
+              {showCategory ? <col className="w-[112px]" /> : null}
+              <col className="w-[56px]" />
+              <col className="w-9" />
             </colgroup>
             <thead>
               <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
-                <th className="px-2 py-2" aria-label="Status" />
-                <th className="px-2 py-2 font-medium">Date</th>
-                <th className="px-2 py-2 font-medium">Description</th>
-                <th className="px-2 py-2 text-right font-medium">Debit</th>
-                <th className="px-2 py-2 text-right font-medium">Credit</th>
-                <th className="px-2 py-2 text-right font-medium">
+                <th className="px-1.5 py-1.5" aria-label="Status" />
+                <th className="px-1.5 py-1.5 font-medium">Date</th>
+                <th className="px-1.5 py-1.5 font-medium">Description</th>
+                <th className="px-1.5 py-1.5 text-right font-medium">Debit</th>
+                <th className="px-1.5 py-1.5 text-right font-medium">Credit</th>
+                <th className="px-1.5 py-1.5 text-right font-medium">
                   <span
                     className="inline-flex cursor-help items-center gap-1"
                     title="Calculated from debit/credit"
@@ -151,10 +155,10 @@ export function TransactionPreviewTable({
                     </svg>
                   </span>
                 </th>
-                <th className="px-2 py-2 text-right font-medium">Balance</th>
-                <th className="px-2 py-2 font-medium">Category</th>
-                <th className="px-2 py-2 font-medium">Confidence</th>
-                <th className="px-2 py-2" aria-label="Actions" />
+                <th className="px-1.5 py-1.5 text-right font-medium">Balance</th>
+                {showCategory ? <th className="px-1.5 py-1.5 font-medium">Category</th> : null}
+                <th className="px-1.5 py-1.5 text-right font-medium">Conf.</th>
+                <th className="px-1.5 py-1.5" aria-label="Actions" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -168,7 +172,7 @@ export function TransactionPreviewTable({
                     key={row.id}
                     className={flagged ? "bg-amber-50/60" : "hover:bg-slate-50/60"}
                   >
-                    <td className="px-2 py-1 align-top">
+                    <td className="px-1.5 py-1 align-top">
                       {flagged ? (
                         <span
                           className="inline-flex h-5 w-5 items-center justify-center text-amber-500"
@@ -204,13 +208,10 @@ export function TransactionPreviewTable({
                         onChange={(v) => onUpdate(row.id, { description: v })}
                       />
                       {warnings.length > 0 ? (
-                        <ul className="space-y-0.5 px-2 pt-1">
-                          {warnings.map((w) => (
-                            <li key={w} className="text-xs text-amber-700">
-                              {w}
-                            </li>
-                          ))}
-                        </ul>
+                        // One compact line keeps flagged rows from growing tall.
+                        <p className="px-2 pt-0.5 text-xs leading-snug text-amber-700">
+                          {warnings.join(" · ")}
+                        </p>
                       ) : null}
                     </td>
                     <td className="px-1 py-1 align-top">
@@ -233,9 +234,9 @@ export function TransactionPreviewTable({
                         }
                       />
                     </td>
-                    <td className="px-2 py-1 align-top">
+                    <td className="px-1.5 py-1 align-top">
                       <div
-                        className="flex items-center justify-end gap-1 rounded-md bg-slate-50 px-2 py-1.5 text-sm tabular-nums text-slate-500"
+                        className="flex items-center justify-end gap-1 rounded-md bg-slate-50 px-2 py-1 text-sm tabular-nums text-slate-500"
                         title="Calculated from debit/credit"
                         aria-label={`Amount, calculated from debit and credit: ${formatMoney(amount)}`}
                       >
@@ -252,17 +253,19 @@ export function TransactionPreviewTable({
                         onChange={(v) => onUpdate(row.id, { balance: v })}
                       />
                     </td>
-                    <td className="px-1 py-1 align-top">
-                      <TextCell
-                        ariaLabel="Category"
-                        value={row.category}
-                        placeholder="Category"
-                        onChange={(v) => onUpdate(row.id, { category: v })}
-                      />
-                    </td>
-                    <td className="px-2 py-1 align-top">
+                    {showCategory ? (
+                      <td className="px-1 py-1 align-top">
+                        <TextCell
+                          ariaLabel="Category"
+                          value={row.category}
+                          placeholder="Category"
+                          onChange={(v) => onUpdate(row.id, { category: v })}
+                        />
+                      </td>
+                    ) : null}
+                    <td className="px-1.5 py-1 text-right align-top">
                       <span
-                        className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${confidenceTone(
+                        className={`inline-flex rounded-full px-1.5 py-0.5 text-xs font-medium ${confidenceTone(
                           row.confidence,
                         )}`}
                         title={lowConfidence ? "Low confidence" : undefined}
@@ -270,7 +273,7 @@ export function TransactionPreviewTable({
                         {Math.round(row.confidence * 100)}%
                       </span>
                     </td>
-                    <td className="px-2 py-1 text-right align-top">
+                    <td className="px-1.5 py-1 text-right align-top">
                       <button
                         type="button"
                         onClick={() => onDelete(row.id)}
