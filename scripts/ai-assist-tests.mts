@@ -17,6 +17,8 @@ import {
   buildAiEvidence,
   candidateBeatsParser,
   repairCreditCardInterestFees,
+  evaluateCandidateQuality,
+  SYSTEM_PROMPT,
   type AiAssistConfig,
   type ChatResult,
 } from "../src/lib/ai-assist.ts";
@@ -955,6 +957,128 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, crop: 
     const rr = conversionPresentation({ ...baseInputs, balanceStatus: "passed", materialWarningCount: 1, rowCount: 65 });
     return rr.state === "review-recommended" && /totals matched/i.test(rr.bannerBody) && !/could not fully verify/i.test(rr.bannerBody);
   })());
+}
+
+// ----- anti fake-reconciliation: prompt guardrails -----
+{
+  check("prompt forbids aggregate/placeholder rows", /aggregate, summary, or placeholder rows/i.test(SYSTEM_PROMPT));
+  check("prompt names the unspecified/other-charges patterns", /unspecified purchases\/charges/i.test(SYSTEM_PROMPT) && /other charges/i.test(SYSTEM_PROMPT));
+  check("prompt requires itemized rows only", /itemized rows only|actual itemized line/i.test(SYSTEM_PROMPT));
+  check("prompt forbids a row equal to a summary total", /amount equals a printed summary total/i.test(SYSTEM_PROMPT));
+  check("prompt instructs needs-review instead of fake reconciliation", /return needs-review issues instead of a balanced-but-fake candidate/i.test(SYSTEM_PROMPT));
+}
+
+// ----- anti fake-reconciliation: candidate quality evaluator -----
+{
+  // Reconciles arithmetically but uses a placeholder/aggregate plug row.
+  const fake = cc(
+    [
+      row({ debit: 35.94, credit: null, date: "2025-01-29", description: "Interest Charge on Purchases" }),
+      row({ credit: 1519.68, debit: null, date: "2025-01-05", description: "Payment" }),
+      row({ debit: 22936.57, credit: null, date: "2025-01-15", description: "Unspecified purchases/charges for summary total" }),
+    ],
+    1605.47,
+    23058.3,
+    { credits: 1519.68, debits: 22972.51 },
+  );
+  const q = evaluateCandidateQuality(fake, { hasVisionEvidence: true });
+  check("quality: placeholder candidate is rejected", q.status === "rejected");
+  check("quality: flags aggregate/placeholder row", q.reasons.includes("ai-aggregate-placeholder-row"));
+  check("quality: counts the placeholder row", q.placeholderRows >= 1 || q.aggregateRows >= 1);
+  check("quality: largest-row share is high", q.largestRowShareOfDebits >= 0.9);
+  check("arithmetic pass alone is not enough (fake reconciles but rejected)", fake.validation.status === "passed" && q.status === "rejected");
+
+  // One huge debit row that equals the summary purchases total.
+  const onePlug = cc(
+    [
+      row({ debit: 22972.51, credit: null, date: "2025-01-15", description: "Card purchases" }),
+      row({ credit: 1519.68, debit: null, date: "2025-01-05", description: "Payment" }),
+    ],
+    1605.47,
+    23058.3,
+    { credits: 1519.68, debits: 22972.51 },
+  );
+  const q2 = evaluateCandidateQuality(onePlug, { hasVisionEvidence: true });
+  check("quality: single summary-total debit row is rejected", q2.status === "rejected" && (q2.reasons.includes("ai-summary-row-as-transaction") || q2.reasons.includes("ai-fake-reconciliation-risk")));
+
+  // High missing-date rate is recorded.
+  const noDates = cc(
+    [
+      row({ debit: 10, credit: null, date: "", description: "Store A" }),
+      row({ debit: 20, credit: null, date: "", description: "Store B" }),
+      row({ debit: 30, credit: null, date: "2025-01-03", description: "Store C" }),
+    ],
+    0,
+    60,
+    { credits: 0, debits: 60 },
+  );
+  const q3 = evaluateCandidateQuality(noDates, { hasVisionEvidence: true });
+  check("quality: high missing-date rate is recorded", q3.missingDateRate >= 0.5 && q3.reasons.includes("ai-high-missing-date-rate"));
+
+  // A genuinely itemized candidate passes quality.
+  const itemized = cc(
+    [
+      row({ debit: 65.96, credit: null, date: "2025-01-10", description: "Magnacharge Battery" }),
+      row({ debit: 120.0, credit: null, date: "2025-01-11", description: "Grocery Store" }),
+      row({ debit: 22786.55, credit: null, date: "2025-01-12", description: "Equipment Supplier" }),
+      row({ debit: 35.94, credit: null, date: "2025-01-29", description: "Interest Charge on Purchases" }),
+      row({ credit: 1519.68, debit: null, date: "2025-01-05", description: "Payment" }),
+    ],
+    1605.47,
+    23058.3,
+    { credits: 1519.68, debits: 22972.51 },
+  );
+  const q4 = evaluateCandidateQuality(itemized, { hasVisionEvidence: true });
+  check("quality: itemized candidate passes", q4.status === "ok" && q4.aggregateRows === 0 && q4.placeholderRows === 0);
+}
+
+// ----- anti fake-reconciliation: adoption is blocked + diagnostics safe -----
+{
+  const broken = cc([row({ description: "warn", debit: null, credit: null })], 23058.3, 23058.3, { credits: 1519.68, debits: 22972.51 });
+  let calls = 0;
+  const r = await runAiAssist(broken, ON, {}, {
+    env: {} as NodeJS.ProcessEnv,
+    images: [img("table-body-p3-middle")],
+    evidence: { detectedBalances: [1605.47, 23058.3] },
+    call: async () => {
+      calls += 1;
+      return { ok: true, content: JSON.stringify({ candidate: { statementKind: "credit-card", openingBalance: 1605.47, closingBalance: 23058.3, summaryTotals: { totalCredits: 1519.68, totalDebits: 22972.51 }, transactions: [
+        { transactionDate: "2025-01-29", description: "Interest Charge on Purchases", debit: 35.94, amount: -35.94 },
+        { transactionDate: "2025-01-05", description: "Payment", credit: 1519.68, amount: 1519.68 },
+        { transactionDate: "2025-01-15", description: "Unspecified purchases/charges for summary total", debit: 22936.57, amount: -22936.57 },
+      ] } }), errorLabel: null };
+    },
+  });
+  check("fake candidate is NOT adopted", r.outcome.adoptedCandidateSource === "parser" && r.outcome.improved === false);
+  check("fake candidate flagged rejected-for-quality", r.outcome.aiCandidateRejectedForQuality === true);
+  check("fake candidate rejection reason is safe label", /^ai-(aggregate|summary|fake|too)/.test(r.outcome.aiRejectedReason ?? ""));
+  check("still exactly one AI call (no extra calls)", calls === 1 && r.outcome.aiCallCount === 1);
+  check("quality diagnostics recorded", r.outcome.aiAggregateRowsDetected + r.outcome.aiPlaceholderRowsDetected >= 1 && r.outcome.aiItemizedRowCount !== null);
+  const serialized = JSON.stringify(r.outcome);
+  check("quality diagnostics contain no private content", !/unspecified purchases|payment|interest charge|base64|merchant/i.test(serialized));
+
+  // A valid itemized candidate is still adopted (no over-rejection).
+  const good = await runAiAssist(broken, ON, {}, {
+    env: {} as NodeJS.ProcessEnv,
+    images: [img("table-body-p3-middle")],
+    evidence: { detectedBalances: [1605.47, 23058.3] },
+    call: reply({ candidate: { statementKind: "credit-card", openingBalance: 1605.47, closingBalance: 23058.3, summaryTotals: { totalCredits: 1519.68, totalDebits: 22972.51 }, transactions: [
+      { transactionDate: "2025-01-10", description: "Equipment Supplier", debit: 21416.89, amount: -21416.89 },
+      { transactionDate: "2025-01-11", description: "Magnacharge Battery", debit: 1519.68, amount: -1519.68 },
+      { transactionDate: "2025-01-12", description: "Office Supplies", debit: 35.94, amount: -35.94 },
+      { transactionDate: "2025-01-29", description: "Interest Charge on Purchases", debit: 0, amount: 0 },
+      { transactionDate: "2025-01-05", description: "Payment", credit: 1519.68, amount: 1519.68 },
+    ] } }),
+  });
+  check("valid itemized candidate still adopted", good.outcome.adoptedCandidateSource === "ai-candidate" && good.outcome.aiCandidateRejectedForQuality === false);
+}
+
+// ----- needs-review wording when balance math matched but rows are bad -----
+{
+  const base = { confidence: 0.73, rowCount: 3, materialWarningCount: 2, minorWarningCount: 1, summaryMatched: null, previewLimited: false, unsupported: false } as const;
+  const mathOkRowsBad = conversionPresentation({ ...base, balanceStatus: "passed" });
+  check("needs-review distinguishes math vs rows", mathOkRowsBad.state === "needs-review" && /balance math matches/i.test(mathOkRowsBad.bannerBody) && /incomplete or low-confidence/i.test(mathOkRowsBad.bannerBody));
+  check("needs-review (math ok) is not verified and not safe export", mathOkRowsBad.badgeTone !== "green" && mathOkRowsBad.exportTone !== "safe");
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

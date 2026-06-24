@@ -163,6 +163,30 @@ export function ParserDiagnosticsPanel({
               label="AI repair-plan difference"
               value={d.aiAssist.aiRepairPlanDifference === null ? "—" : d.aiAssist.aiRepairPlanDifference.toFixed(2)}
             />
+            <Metric label="Candidate quality" value={d.aiAssist.aiCandidateQualityStatus} />
+            <Metric label="Rejected for quality" value={yesNo(d.aiAssist.aiCandidateRejectedForQuality)} />
+            <Metric
+              label="Quality reasons"
+              value={d.aiAssist.aiCandidateQualityReasons.length ? d.aiAssist.aiCandidateQualityReasons.join(", ") : "—"}
+            />
+            <Metric label="Aggregate rows" value={String(d.aiAssist.aiAggregateRowsDetected)} />
+            <Metric label="Placeholder rows" value={String(d.aiAssist.aiPlaceholderRowsDetected)} />
+            <Metric
+              label="Itemized rows"
+              value={d.aiAssist.aiItemizedRowCount === null ? "—" : String(d.aiAssist.aiItemizedRowCount)}
+            />
+            <Metric
+              label="Missing-date rate"
+              value={d.aiAssist.aiMissingDateRate === null ? "—" : d.aiAssist.aiMissingDateRate.toFixed(2)}
+            />
+            <Metric
+              label="Low-confidence row rate"
+              value={d.aiAssist.aiLowConfidenceRowRate === null ? "—" : d.aiAssist.aiLowConfidenceRowRate.toFixed(2)}
+            />
+            <Metric
+              label="Largest row share of debits"
+              value={d.aiAssist.aiLargestRowShareOfDebits === null ? "—" : d.aiAssist.aiLargestRowShareOfDebits.toFixed(2)}
+            />
             <Metric
               label="AI selected section"
               value={d.aiAssist.aiSelectedSectionIndex === null ? "—" : String(d.aiAssist.aiSelectedSectionIndex)}

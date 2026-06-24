@@ -125,6 +125,16 @@ export type AiAssistOutcome = {
   rendererBackendName: string | null;
   /** Safe label for why the renderer backend was unavailable, if probed. */
   rendererProbeReason: string | null;
+  // --- AI candidate quality (anti fake-reconciliation) diagnostics ---
+  aiAggregateRowsDetected: number;
+  aiPlaceholderRowsDetected: number;
+  aiCandidateQualityStatus: CandidateQualityStatus;
+  aiCandidateQualityReasons: string[];
+  aiCandidateRejectedForQuality: boolean;
+  aiMissingDateRate: number | null;
+  aiLowConfidenceRowRate: number | null;
+  aiItemizedRowCount: number | null;
+  aiLargestRowShareOfDebits: number | null;
 };
 
 export type VisionSelectionDiag = {
@@ -700,6 +710,118 @@ export function repairCreditCardInterestFees(
   return { statement: repaired, applied: true, rowsAdded: toAdd.length, issue: null };
 }
 
+// ----- Candidate quality (anti "fake reconciliation") -----
+
+// Descriptions that name a SUMMARY/TOTAL rather than an itemized transaction.
+const AGGREGATE_DESC_RE =
+  /\bsummary\b|sub-?total|total (?:debits?|credits?|purchases?|payments?|charges?|fees?|interest)\b|aggregate|net (?:purchases|charges)|balance summary|remaining (?:balance|charges|purchases)|purchases?\s*(?:&|and|\/|\\)?\s*charges|charges?\s*(?:&|and|\/|\\)?\s*purchases/i;
+// Descriptions that are PLACEHOLDERS standing in for unextracted rows.
+const PLACEHOLDER_DESC_RE =
+  /\bunspecified\b|missing transactions?|placeholder|other charges|\bvarious\b|miscellaneous|to be determined|\btbd\b|\bn\/a\b|reconcil/i;
+
+export type CandidateQualityStatus = "ok" | "rejected" | "not-evaluated";
+
+export type CandidateQuality = {
+  status: CandidateQualityStatus;
+  /** Safe labels describing any quality problems. No statement content. */
+  reasons: string[];
+  aggregateRows: number;
+  placeholderRows: number;
+  itemizedRows: number;
+  missingDateRate: number;
+  lowConfidenceRowRate: number;
+  largestRowShareOfDebits: number;
+};
+
+const rate2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Detect "fake reconciliation": an AI candidate that balances arithmetically but
+ * is built from aggregate/summary/placeholder rows instead of actual itemized
+ * transactions. Arithmetic reconciliation is necessary but NOT sufficient — a
+ * candidate must be made of real itemized rows. Returns safe aggregate signals
+ * and a status of "rejected" when a hard problem is found. No statement content.
+ */
+export function evaluateCandidateQuality(
+  s: ParsedStatement,
+  opts: { hasVisionEvidence?: boolean } = {},
+): CandidateQuality {
+  const txns = s.transactions;
+  const n = txns.length;
+  const reasons: string[] = [];
+
+  const aggregateRows = txns.filter((t) => AGGREGATE_DESC_RE.test(t.description ?? "")).length;
+  const placeholderRows = txns.filter((t) => PLACEHOLDER_DESC_RE.test(t.description ?? "")).length;
+  const nonItemized = txns.filter(
+    (t) => AGGREGATE_DESC_RE.test(t.description ?? "") || PLACEHOLDER_DESC_RE.test(t.description ?? ""),
+  ).length;
+  const itemizedRows = n - nonItemized;
+
+  const missingDate = txns.filter((t) => !t.transactionDate || !String(t.transactionDate).trim()).length;
+  const lowConf = txns.filter((t) => t.confidence < LOW_CONFIDENCE_THRESHOLD).length;
+  const missingDateRate = n > 0 ? missingDate / n : 0;
+  const lowConfidenceRowRate = n > 0 ? lowConf / n : 0;
+
+  const debitOf = (t: Transaction) => Math.abs(t.debit ?? 0);
+  const totalDebits = txns.reduce((a, t) => a + debitOf(t), 0);
+  const largestDebit = txns.reduce((m, t) => Math.max(m, debitOf(t)), 0);
+  const largestRowShareOfDebits = totalDebits > 0.005 ? largestDebit / totalDebits : 0;
+
+  const meaningful = (v: number | null | undefined): v is number =>
+    typeof v === "number" && Math.abs(v) >= 0.01;
+  const meaningfulSummaryDebits = meaningful(s.summaryTotals?.totalDebits ?? null);
+
+  // HARD signals: the candidate is not a real itemized extraction.
+  if (aggregateRows + placeholderRows > 0) reasons.push("ai-aggregate-placeholder-row");
+
+  // A SOLE debit row whose amount equals the total debits/purchases is a "plug"
+  // standing in for the whole table, not a transaction. (Note: a single legitimate
+  // payment can equal total payments, so credit-side matches are NOT flagged, and
+  // we require the debit row to account for ALL debits, not just be the largest.)
+  const debitSummaryValues = [s.summaryTotals?.totalDebits, s.summaryTotals?.totalPurchases].filter(
+    (v): v is number => meaningful(v),
+  );
+  const soleDebitEqualsTotal =
+    n >= 2 &&
+    meaningfulSummaryDebits &&
+    txns.some((t) => {
+      const d = debitOf(t);
+      if (d < 0.01) return false;
+      const otherDebits = totalDebits - d;
+      return otherDebits < 0.01 && debitSummaryValues.some((v) => Math.abs(d - v) <= 0.01);
+    });
+  if (soleDebitEqualsTotal) reasons.push("ai-summary-row-as-transaction");
+
+  // Too few itemized rows when the (vision) evidence implies a real multi-row table
+  // exists but almost all the debit value sits in one or two rows.
+  if (opts.hasVisionEvidence && meaningfulSummaryDebits && itemizedRows < 3 && largestRowShareOfDebits >= 0.85) {
+    reasons.push("ai-too-few-itemized-rows");
+  }
+
+  // SOFT signals (recorded; do not by themselves reject a fully itemized set).
+  if (n > 0 && missingDateRate > 0.5) reasons.push("ai-high-missing-date-rate");
+  if (n > 0 && lowConfidenceRowRate > 0.5) reasons.push("ai-too-many-low-confidence-rows");
+
+  const HARD = new Set([
+    "ai-aggregate-placeholder-row",
+    "ai-summary-row-as-transaction",
+    "ai-fake-reconciliation-risk",
+    "ai-too-few-itemized-rows",
+  ]);
+  const status: CandidateQualityStatus = reasons.some((r) => HARD.has(r)) ? "rejected" : "ok";
+
+  return {
+    status,
+    reasons,
+    aggregateRows,
+    placeholderRows,
+    itemizedRows,
+    missingDateRate: rate2(missingDateRate),
+    lowConfidenceRowRate: rate2(lowConfidenceRowRate),
+    largestRowShareOfDebits: rate2(largestRowShareOfDebits),
+  };
+}
+
 // ----- Candidate comparison & adoption -----
 
 export type CandidateMetrics = {
@@ -803,7 +925,7 @@ export type ChatContentPart =
   | { type: "image_url"; image_url: { url: string } };
 export type ChatMessage = { role: "system" | "user"; content: string | ChatContentPart[] };
 
-const SYSTEM_PROMPT =
+export const SYSTEM_PROMPT =
   "You correct bank/credit-card statement extraction. You are given the parser's " +
   "current rows, its opening/closing/summary, the validation difference, the list " +
   "of opening/closing balance values DETECTED in the statement, any account-section " +
@@ -846,7 +968,22 @@ const SYSTEM_PROMPT =
   "notices — these are NEVER transactions. NEVER use the new/closing balance as both " +
   "the opening and closing balance to fabricate a passing reconciliation. If you " +
   "cannot recover the real transactions from the provided evidence, return a candidate " +
-  'with issues describing what is missing (no fake balance) rather than a false pass.';
+  "with issues describing what is missing (no fake balance) rather than a false pass. " +
+  "CRITICAL — itemized rows only, no fake reconciliation: every transaction row MUST be " +
+  "an actual itemized line you can see in the transaction table (or a clearly itemized " +
+  "fee/interest line in an allowed region). Do NOT create aggregate, summary, or " +
+  "placeholder rows to force the totals to balance. Specifically, NEVER output rows " +
+  "like 'Unspecified purchases/charges', 'Other charges', 'Purchases and charges', " +
+  "'Summary', 'Total purchases', 'Total debits', 'Total credits', 'Missing " +
+  "transactions', 'Various', 'Miscellaneous', a remaining/plug amount, or a single row " +
+  "whose amount equals a printed summary total. Do NOT use payment-summary, remittance, " +
+  "rewards, warning, legal, year-to-date, totals, or balance-summary sections as " +
+  "transaction rows. Do NOT invent dates, descriptions, or amounts; a missing date is " +
+  "only acceptable when the row is clearly a continuation of a visible dated row, and " +
+  "should be rare. It is BETTER to return a candidate with issues (needs review) than a " +
+  "reconciled candidate built from aggregate or placeholder rows: if the visual " +
+  "evidence is insufficient to extract the itemized rows, return needs-review issues " +
+  "instead of a balanced-but-fake candidate.";
 
 export async function callOpenAiChat(
   messages: ChatMessage[],
@@ -980,6 +1117,15 @@ function baseOutcome(statement: ParsedStatement, config: AiAssistConfig): AiAssi
     rendererBackendAvailable: null,
     rendererBackendName: null,
     rendererProbeReason: null,
+    aiAggregateRowsDetected: 0,
+    aiPlaceholderRowsDetected: 0,
+    aiCandidateQualityStatus: "not-evaluated",
+    aiCandidateQualityReasons: [],
+    aiCandidateRejectedForQuality: false,
+    aiMissingDateRate: null,
+    aiLowConfidenceRowRate: null,
+    aiItemizedRowCount: null,
+    aiLargestRowShareOfDebits: null,
   };
 }
 
@@ -1051,6 +1197,33 @@ export async function runAiAssist(
     return rep.applied ? { statement: rep.statement, rowsAdded: rep.rowsAdded } : { statement: built, rowsAdded: 0 };
   };
 
+  const hasVisionEvidence = images.length > 0;
+  // Record safe candidate-quality diagnostics on the outcome (last-evaluated wins,
+  // but a "rejected" status is never overwritten by a later "ok").
+  const recordQuality = (q: CandidateQuality) => {
+    if (out.aiCandidateQualityStatus === "rejected" && q.status !== "rejected") return;
+    out.aiAggregateRowsDetected = q.aggregateRows;
+    out.aiPlaceholderRowsDetected = q.placeholderRows;
+    out.aiCandidateQualityStatus = q.status;
+    out.aiCandidateQualityReasons = q.reasons;
+    out.aiItemizedRowCount = q.itemizedRows;
+    out.aiMissingDateRate = q.missingDateRate;
+    out.aiLowConfidenceRowRate = q.lowConfidenceRowRate;
+    out.aiLargestRowShareOfDebits = q.largestRowShareOfDebits;
+  };
+  // A candidate must be made of itemized rows. Reject "fake reconciliation"
+  // (aggregate/placeholder/summary rows) so it can never be adopted as reconciled.
+  const acceptQuality = (s: ParsedStatement): boolean => {
+    const q = evaluateCandidateQuality(s, { hasVisionEvidence });
+    recordQuality(q);
+    if (q.status === "rejected") {
+      out.aiCandidateRejectedForQuality = true;
+      if (!out.aiRejectedReason) out.aiRejectedReason = q.reasons[0] ?? "ai-fake-reconciliation-risk";
+      return false;
+    }
+    return true;
+  };
+
   const candidates: Labeled[] = [];
   if (parsed.candidate) {
     const built = buildIndependentCandidate(statement, evidence, parsed.candidate, meta, allowedVisualRefs);
@@ -1058,9 +1231,12 @@ export async function runAiAssist(
     if (built.statement) {
       const fixed = withInterestFeeRepair(built.statement);
       out.aiCandidateDifference = candidateMetrics(fixed.statement).difference;
-      candidates.push({ source: "ai-candidate", statement: fixed.statement, interestFeeRowsAdded: fixed.rowsAdded });
+      // Only an itemized, non-fake candidate is eligible for adoption.
+      if (acceptQuality(fixed.statement)) {
+        candidates.push({ source: "ai-candidate", statement: fixed.statement, interestFeeRowsAdded: fixed.rowsAdded });
+      }
     }
-    if (built.rejectedReason) out.aiRejectedReason = built.rejectedReason;
+    if (built.rejectedReason && !out.aiRejectedReason) out.aiRejectedReason = built.rejectedReason;
     if (built.sectionIndex !== null) out.aiSelectedSectionIndex = built.sectionIndex;
   }
   if (parsed.repairPlan) {
@@ -1069,7 +1245,9 @@ export async function runAiAssist(
     if (built.statement) {
       const fixed = withInterestFeeRepair(built.statement);
       out.aiRepairPlanDifference = candidateMetrics(fixed.statement).difference;
-      candidates.push({ source: "ai-repair-plan", statement: fixed.statement, interestFeeRowsAdded: fixed.rowsAdded });
+      if (acceptQuality(fixed.statement)) {
+        candidates.push({ source: "ai-repair-plan", statement: fixed.statement, interestFeeRowsAdded: fixed.rowsAdded });
+      }
     }
     if (built.rejectedReason && !out.aiRejectedReason) out.aiRejectedReason = built.rejectedReason;
     if (built.sectionIndex !== null && out.aiSelectedSectionIndex === null) {
@@ -1169,6 +1347,15 @@ export function notAttemptedOutcome(
     rendererBackendAvailable: null,
     rendererBackendName: null,
     rendererProbeReason: null,
+    aiAggregateRowsDetected: 0,
+    aiPlaceholderRowsDetected: 0,
+    aiCandidateQualityStatus: "not-evaluated",
+    aiCandidateQualityReasons: [],
+    aiCandidateRejectedForQuality: false,
+    aiMissingDateRate: null,
+    aiLowConfidenceRowRate: null,
+    aiItemizedRowCount: null,
+    aiLargestRowShareOfDebits: null,
   };
 }
 

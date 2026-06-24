@@ -170,20 +170,26 @@ export function conversionPresentation(input: ConversionInputs): ConversionPrese
         exportLabelPrefix: null,
       };
     case "needs-review":
-    default:
+    default: {
+      // When the arithmetic matched but the ROWS are the problem (incomplete or
+      // low-confidence / aggregate), say so plainly instead of implying the math
+      // failed. The conversion is still not verified, so export stays non-safe.
+      const mathMatched = input.balanceStatus === "passed" && input.rowCount > 0;
       return {
         state: "needs-review",
         badgeLabel: "Needs review",
         badgeTone: "amber",
         bannerVariant: "warning",
         bannerTitle: "Needs review",
-        bannerBody:
-          "We could not fully verify this conversion. Review the highlighted rows before export.",
+        bannerBody: mathMatched
+          ? "The balance math matches, but the transaction rows are incomplete or low-confidence. Review the highlighted rows before export."
+          : "We could not fully verify this conversion. Review the highlighted rows before export.",
         secondaryCopy: null,
         showTopExport: hasRows,
         exportTone: "review",
         exportNote: "Review the highlighted rows first. This conversion is not verified.",
         exportLabelPrefix: null,
       };
+    }
   }
 }
