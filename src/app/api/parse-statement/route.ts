@@ -21,10 +21,12 @@ import {
   type InterestFeeDetection,
 } from "@/lib/ai-assist";
 import { parsedStatementToRows } from "@/lib/statement-model";
+import { buildSafeParseSummary } from "@/lib/parser-diagnostics";
 import {
   selectVisionRegions,
   renderVisionEvidence,
   analyzeVisionPages,
+  probeRenderBackend,
   type VisionImage,
   type VisionRegion,
 } from "@/lib/pdf-render";
@@ -165,6 +167,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       warnings: [SCANNED_PDF_WARNING],
       previewLimited: false,
       pagesProcessed: 0,
+      runtimeEnv: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "unknown",
       // Always include aiAssist so the client/diagnostics can rely on it.
       aiAssist: notAttemptedOutcome(aiAssistConfig(), "not-eligible"),
     };
@@ -246,12 +249,23 @@ export async function POST(request: Request): Promise<NextResponse> {
   let renderFailedReason: string | null = null;
   let visionSelection: VisionSelectionDiag | null = null;
   let renderDurationMs: number | null = null;
+  let rendererBackendAvailable: boolean | null = null;
+  let rendererBackendName: string | null = null;
+  let rendererProbeReason: string | null = null;
   if (pdfBytes && aiConfig.enabled && isAiAssistEligible(statement)) {
     const visionRequested = process.env.ENABLE_AI_VISION_FALLBACK !== "false";
     if (visionRequested && !aiConfig.visionModel) {
       renderFailedReason = "vision-model-not-configured";
     } else if (aiConfig.visionEnabled) {
       try {
+        // Probe the native image-render backend so production can SEE whether
+        // @napi-rs/canvas + the PDF renderer are available in this runtime (the
+        // most likely reason vision silently degrades to a text-layout call on a
+        // serverless host). Safe labels only — no stack traces.
+        const probe = await probeRenderBackend();
+        rendererBackendAvailable = probe.available;
+        rendererBackendName = probe.backend;
+        rendererProbeReason = probe.reason;
         const hasLowConfidence =
           statement.validation.confidence < 0.7 ||
           statement.transactions.some((t) => t.confidence < 0.7);
@@ -329,6 +343,26 @@ export async function POST(request: Request): Promise<NextResponse> {
   // Surface safe performance diagnostics on the outcome (dev panel reads these).
   aiOutcome.renderDurationMs = renderDurationMs;
   aiOutcome.routeDurationMs = Date.now() - routeStart;
+  aiOutcome.rendererBackendAvailable = rendererBackendAvailable;
+  aiOutcome.rendererBackendName = rendererBackendName;
+  aiOutcome.rendererProbeReason = rendererProbeReason;
+
+  // PRODUCTION-SAFE one-line summary (gated by SERVER_SAFE_PARSE_TRACE) so Vercel
+  // logs can reveal the vision path without exposing any statement content. This
+  // works in production, unlike the IS_DEV trace. SAFE AGGREGATES ONLY.
+  if (process.env.SERVER_SAFE_PARSE_TRACE === "true") {
+    console.log(
+      "[parse-statement-safe-summary]",
+      JSON.stringify(
+        buildSafeParseSummary({
+          validationStatus: finalStatement.validation.status,
+          confidence: finalStatement.validation.confidence,
+          previewLimited: truncated,
+          outcome: aiOutcome,
+        }),
+      ),
+    );
+  }
 
   // Safe dev-only trace of the decision path (no statement text/rows/key/prompt).
   if (IS_DEV) {
@@ -401,6 +435,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     meaningfulPagesDetected: previewAnalysis.meaningfulPagesDetected,
     skippedMeaningfulPagesCount: previewAnalysis.skippedMeaningfulPagesCount,
     previewLimitedReason: previewAnalysis.previewLimitedReason,
+    runtimeEnv: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "unknown",
     creditCardStats: result.creditCardStats,
     parseStats: result.parseStats,
     validation: finalStatement.validation,

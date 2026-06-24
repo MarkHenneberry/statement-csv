@@ -178,6 +178,8 @@ export type ParseStatementResponse = {
   skippedMeaningfulPagesCount?: number;
   /** Safe label for the preview-limit decision. */
   previewLimitedReason?: "no-truncation" | "skipped-meaningful-pages" | "skipped-pages-not-meaningful";
+  /** Safe deployment/runtime label (e.g. "production", "development"). No secrets. */
+  runtimeEnv?: string;
   /** Safe aggregate parsing counters (dev diagnostics). No raw content. */
   creditCardStats?: CreditCardParseStats;
   parseStats?: LayoutParseStats;

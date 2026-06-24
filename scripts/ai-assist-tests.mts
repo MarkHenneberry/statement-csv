@@ -31,6 +31,7 @@ import { conversionPresentation, resolveConversionState, type ConversionInputs }
 import { evaluateAiEligibility } from "../src/lib/ai-assist.ts";
 import { recoverDescriptionFromLine } from "../src/lib/parser.ts";
 import { detectMeaningfulPages, analyzePreviewLimit } from "../src/lib/free-preview.ts";
+import { shouldShowDiagnostics, buildSafeParseSummary } from "../src/lib/parser-diagnostics.ts";
 import { estimateAiCost, formatUsd, AI_MODEL_PRICING } from "../src/lib/ai-cost.ts";
 import { selectReviewMessage } from "../src/lib/review-messages.ts";
 import { pricingPlans, pricingSubheadline, pricingFooter } from "../src/lib/pricing.ts";
@@ -848,6 +849,40 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, crop: 
 
   // Cost output carries no statement content — only numbers, a model name, a label.
   check("cost note carries no private content", !/\$\d{3,}|account|merchant/i.test(`${exact.note} ${totalOnly.note}`));
+}
+
+// ----- production diagnostics visibility gating -----
+{
+  check("diagnostics hidden in production by default", shouldShowDiagnostics({ nodeEnv: "production" }) === false);
+  check("diagnostics shown in production with opt-in flag", shouldShowDiagnostics({ nodeEnv: "production", showFlag: "true" }) === true);
+  check("diagnostics always shown in development", shouldShowDiagnostics({ nodeEnv: "development" }) === true);
+  check("diagnostics hidden when flag is not exactly 'true'", shouldShowDiagnostics({ nodeEnv: "production", showFlag: "1" }) === false);
+}
+
+// ----- production-safe parse summary (SERVER_SAFE_PARSE_TRACE) -----
+{
+  // Build a real outcome from a vision run whose candidate carries a secret merchant.
+  const broken = cc([row({ description: "warn", debit: null, credit: null })], 23058.3, 23058.3, { credits: 1519.68, debits: 22972.51 });
+  const r = await runAiAssist(broken, ON, {}, {
+    env: {} as NodeJS.ProcessEnv,
+    images: [img("table-body-p3-middle")],
+    evidence: { detectedBalances: [1605.47, 23058.3] },
+    call: reply({ candidate: { statementKind: "credit-card", openingBalance: 1605.47, closingBalance: 23058.3, summaryTotals: { totalCredits: 1519.68, totalDebits: 22972.51 }, transactions: [
+      { transactionDate: "2025-01-10", description: "SECRETMERCHANT PURCHASE", debit: 22972.51, amount: -22972.51 },
+      { transactionDate: "2025-01-05", description: "Payment", credit: 1519.68, amount: 1519.68 },
+    ] } }),
+  });
+  r.outcome.rendererBackendAvailable = true;
+  r.outcome.rendererBackendName = "@napi-rs/canvas";
+  const summary = buildSafeParseSummary({ validationStatus: "passed", confidence: 0.9, previewLimited: false, outcome: r.outcome });
+  const keys = Object.keys(summary);
+  check("safe summary includes the vision-path fields", keys.includes("aiFallbackType") && keys.includes("aiVisionUsed") && keys.includes("aiImageCropsCount") && keys.includes("rendererBackendAvailable"));
+  check("safe summary values are safe primitives", Object.values(summary).every((v) => v === null || ["string", "number", "boolean"].includes(typeof v)));
+  const serialized = JSON.stringify(summary);
+  check("safe summary contains no merchant/row/prompt content", !/SECRETMERCHANT|PURCHASE|base64,|data:image|"prompt"/i.test(serialized));
+  check("safe summary reports renderer backend", summary.rendererBackendAvailable === true && summary.rendererBackendName === "@napi-rs/canvas");
+  // It must NOT carry any content-bearing field (counts like aiImageCropsCount are fine).
+  check("safe summary has no content fields", !keys.some((k) => /description|prompt|response|merchant|account|rawtext/i.test(k)));
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

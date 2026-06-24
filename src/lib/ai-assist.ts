@@ -119,6 +119,12 @@ export type AiAssistOutcome = {
   aiEligibilityReasons: string[];
   /** Safe label for why AI was skipped (null when it ran/was eligible). */
   aiSkippedReason: string | null;
+  /** Server-side image renderer backend probe (set by the route). null = not probed. */
+  rendererBackendAvailable: boolean | null;
+  /** Safe backend name (e.g. "@napi-rs/canvas") or null. */
+  rendererBackendName: string | null;
+  /** Safe label for why the renderer backend was unavailable, if probed. */
+  rendererProbeReason: string | null;
 };
 
 export type VisionSelectionDiag = {
@@ -971,6 +977,9 @@ function baseOutcome(statement: ParsedStatement, config: AiAssistConfig): AiAssi
     interestFeeRowsAdded: 0,
     aiEligibilityReasons: elig.reasons,
     aiSkippedReason: elig.skippedReason,
+    rendererBackendAvailable: null,
+    rendererBackendName: null,
+    rendererProbeReason: null,
   };
 }
 
@@ -1157,6 +1166,9 @@ export function notAttemptedOutcome(
     interestFeeRowsAdded: 0,
     aiEligibilityReasons: [],
     aiSkippedReason: status === "not-eligible" ? "parser-verified" : null,
+    rendererBackendAvailable: null,
+    rendererBackendName: null,
+    rendererProbeReason: null,
   };
 }
 

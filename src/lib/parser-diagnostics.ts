@@ -10,19 +10,65 @@
 // statements before launch. These metrics help that testing; they do not
 // replace it.
 
-import type { TransactionRow, BalanceCheck, BalanceMode } from "@/lib/upload";
-import { LOW_CONFIDENCE_THRESHOLD } from "@/lib/upload";
+import type { TransactionRow, BalanceCheck, BalanceMode } from "./upload.ts";
+import { LOW_CONFIDENCE_THRESHOLD } from "./upload.ts";
 import {
   SCANNED_PDF_WARNING,
   type StatementKind,
   type LayoutFamily,
   type CreditCardParseStats,
   type LayoutParseStats,
-} from "@/lib/parser";
-import type { StatementValidation } from "@/lib/statement-model";
-import type { AiAssistOutcome } from "@/lib/ai-assist";
+} from "./parser.ts";
+import type { StatementValidation } from "./statement-model.ts";
+import type { AiAssistOutcome } from "./ai-assist.ts";
 
 export type ParserQuality = "good" | "needs-review" | "poor";
+
+/**
+ * Whether the safe diagnostics panel should render. Always on in development; in
+ * production only behind the explicit NEXT_PUBLIC_SHOW_DEBUG_DIAGNOSTICS opt-in.
+ */
+export function shouldShowDiagnostics(opts: { nodeEnv?: string; showFlag?: string }): boolean {
+  return opts.nodeEnv !== "production" || opts.showFlag === "true";
+}
+
+/**
+ * Build the PRODUCTION-SAFE one-line parse summary (for SERVER_SAFE_PARSE_TRACE
+ * and tests). Contains ONLY safe aggregate fields — never prompts, responses,
+ * rows, descriptions, names, account numbers, or any statement content.
+ */
+export function buildSafeParseSummary(input: {
+  validationStatus: string;
+  confidence: number;
+  previewLimited: boolean;
+  outcome: AiAssistOutcome;
+}): Record<string, string | number | boolean | null> {
+  const o = input.outcome;
+  return {
+    validationStatus: input.validationStatus,
+    confidence: input.confidence,
+    previewLimited: input.previewLimited,
+    aiEligible: o.eligible,
+    aiCalled: o.called,
+    aiStatus: o.status,
+    aiFallbackType: o.aiFallbackType,
+    aiVisionUsed: o.aiVisionUsed,
+    aiRenderedPagesCount: o.aiRenderedPagesCount,
+    aiImageCropsCount: o.aiImageCropsCount,
+    aiFullPageImagesCount: o.aiFullPageImagesCount,
+    aiRenderFailedReason: o.aiRenderFailedReason,
+    rendererBackendAvailable: o.rendererBackendAvailable,
+    rendererBackendName: o.rendererBackendName,
+    rendererProbeReason: o.rendererProbeReason,
+    aiCallCount: o.aiCallCount,
+    aiTotalTokenCount: o.aiTotalTokenCount,
+    adoptedCandidateSource: o.adoptedCandidateSource,
+    aiRejectedReason: o.aiRejectedReason,
+    renderDurationMs: o.renderDurationMs,
+    aiCallDurationMs: o.aiCallDurationMs,
+    routeDurationMs: o.routeDurationMs,
+  };
+}
 export type DiagnosticsBalanceStatus = "passed" | "needs-review" | "limited";
 
 export type ParserDiagnostics = {
@@ -51,6 +97,10 @@ export type ParserDiagnostics = {
   quality: ParserQuality;
   qualityLabel: string;
   qualityReason: string;
+  /** Safe deployment/runtime label (e.g. "production"). */
+  environmentLabel?: string;
+  /** Conversion presentation state (verified / review-recommended / ...). */
+  conversionState?: string;
   /** Free-preview page-cap diagnostics (safe counts/labels only). */
   preview?: {
     previewLimited: boolean;
@@ -79,6 +129,8 @@ export function buildParserDiagnostics(input: {
   validation?: StatementValidation;
   aiAssist?: AiAssistOutcome;
   preview?: ParserDiagnostics["preview"];
+  environmentLabel?: string;
+  conversionState?: string;
 }): ParserDiagnostics {
   const {
     source,
@@ -95,6 +147,8 @@ export function buildParserDiagnostics(input: {
     validation,
     aiAssist,
     preview,
+    environmentLabel,
+    conversionState,
   } = input;
 
   const totalRows = rows.length;
@@ -188,6 +242,8 @@ export function buildParserDiagnostics(input: {
     quality,
     qualityLabel,
     qualityReason,
+    environmentLabel,
+    conversionState,
     preview,
   };
 }

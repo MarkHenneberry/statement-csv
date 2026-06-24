@@ -69,6 +69,28 @@ export function ParserDiagnosticsPanel({
 
       <p className="mt-3 text-xs text-slate-600">{d.qualityReason}</p>
 
+      <div className="mt-4">
+        <p className="text-xs font-medium text-slate-700">Environment &amp; renderer</p>
+        <dl className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+          <Metric label="Runtime env" value={d.environmentLabel ?? "—"} />
+          <Metric label="Conversion state" value={d.conversionState ?? "—"} />
+          {d.aiAssist ? (
+            <>
+              <Metric
+                label="Renderer backend available"
+                value={
+                  d.aiAssist.rendererBackendAvailable === null
+                    ? "—"
+                    : yesNo(d.aiAssist.rendererBackendAvailable)
+                }
+              />
+              <Metric label="Renderer backend" value={d.aiAssist.rendererBackendName ?? "—"} />
+              <Metric label="Renderer probe reason" value={d.aiAssist.rendererProbeReason ?? "—"} />
+            </>
+          ) : null}
+        </dl>
+      </div>
+
       {d.validation ? (
         <div className="mt-4">
           <p className="text-xs font-medium text-slate-700">Statement validation (model)</p>

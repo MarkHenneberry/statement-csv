@@ -35,7 +35,7 @@ import { BalanceCheckPanel } from "@/components/upload/BalanceCheckPanel";
 import { TransactionExportButtons } from "@/components/upload/TransactionExportButtons";
 import { UploadWarning } from "@/components/upload/UploadWarning";
 import { ParserDiagnosticsPanel } from "@/components/upload/ParserDiagnosticsPanel";
-import { buildParserDiagnostics } from "@/lib/parser-diagnostics";
+import { buildParserDiagnostics, shouldShowDiagnostics } from "@/lib/parser-diagnostics";
 import type { AiAssistOutcome } from "@/lib/ai-assist";
 
 type Status = "upload" | "processing" | "preview" | "error";
@@ -56,13 +56,20 @@ type PreviewMeta = {
   meaningfulPagesDetected?: number;
   skippedMeaningfulPagesCount?: number;
   previewLimitedReason?: string;
+  runtimeEnv?: string;
   creditCardStats?: CreditCardParseStats;
   parseStats?: LayoutParseStats;
   validation?: StatementValidation;
   aiAssist?: AiAssistOutcome;
 };
 
-const isDev = process.env.NODE_ENV !== "production";
+// Safe diagnostics may be shown in production behind an explicit opt-in flag so we
+// can diagnose deployment-specific behavior (e.g. the vision render path) without
+// exposing any statement content. NEXT_PUBLIC_ is inlined at build time.
+const showDiagnostics = shouldShowDiagnostics({
+  nodeEnv: process.env.NODE_ENV,
+  showFlag: process.env.NEXT_PUBLIC_SHOW_DEBUG_DIAGNOSTICS,
+});
 
 function balanceModeForKind(kind: StatementKind): BalanceMode {
   return kind === "credit-card" ? "credit-card" : "bank-account";
@@ -125,6 +132,7 @@ export function UploadFlow() {
       meaningfulPagesDetected: data.meaningfulPagesDetected,
       skippedMeaningfulPagesCount: data.skippedMeaningfulPagesCount,
       previewLimitedReason: data.previewLimitedReason,
+      runtimeEnv: data.runtimeEnv,
       creditCardStats: data.creditCardStats,
       parseStats: data.parseStats,
       validation: data.validation,
@@ -431,13 +439,15 @@ export function UploadFlow() {
           <TransactionExportButtons rows={rows} sourceFileName={meta.fileName} />
         </div>
 
-        {isDev ? (
+        {showDiagnostics ? (
           <ParserDiagnosticsPanel
             diagnostics={buildParserDiagnostics({
               source: meta.source,
               statementKind: meta.statementKind,
               layoutFamily: meta.layoutFamily,
               pageCount: meta.pageCount,
+              environmentLabel: meta.runtimeEnv,
+              conversionState: presentation.state,
               openingBalance: meta.openingBalance,
               closingBalance: meta.closingBalance,
               warnings: meta.parserWarnings,
