@@ -32,7 +32,8 @@ import type { TransactionRow } from "../src/lib/upload.ts";
 import { computeBalanceCheck, resolveBalanceStatus, getRowWarnings, deriveAmount, countRowWarningSeverity } from "../src/lib/upload.ts";
 import { conversionPresentation, resolveConversionState, type ConversionInputs } from "../src/lib/conversion-state.ts";
 import { evaluateAiEligibility } from "../src/lib/ai-assist.ts";
-import { recoverDescriptionFromLine } from "../src/lib/parser.ts";
+import { recoverDescriptionFromLine, parseDayMonthDate } from "../src/lib/parser.ts";
+import { resolveCreditCardOpenClose } from "../src/lib/coordinate-table.ts";
 import { detectMeaningfulPages, analyzePreviewLimit } from "../src/lib/free-preview.ts";
 import { shouldShowDiagnostics, buildSafeParseSummary } from "../src/lib/parser-diagnostics.ts";
 import { estimateAiCost, formatUsd, AI_MODEL_PRICING } from "../src/lib/ai-cost.ts";
@@ -1159,6 +1160,46 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   check("one bad parser row → 'no usable transaction table' state", oneBadRow.state === "needs-review" && /no usable transaction table/i.test(oneBadRow.bannerTitle));
   check("no-usable-table copy says transactions appear missing", /transactions appear to be missing/i.test(oneBadRow.bannerBody));
   check("no-usable-table is not verified / not safe export", oneBadRow.badgeTone !== "green" && oneBadRow.exportTone !== "safe");
+}
+
+// ----- credit-card DD/MM date parsing (no year) -----
+{
+  check("DD/MM day-first: 23/01 → Jan 23", parseDayMonthDate("23/01", 2025) === "2025-01-23");
+  check("DD/MM swaps when impossible day-first: 29/01 → Jan 29", parseDayMonthDate("29/01", 2025) === "2025-01-29");
+  check("DD/MM with dash: 5-1 parses", parseDayMonthDate("5-1", 2025) === "2025-05-01");
+  check("DD/MM without year returns MM-DD", parseDayMonthDate("23/01") === "01-23");
+  check("DD/MM rejects out-of-range", parseDayMonthDate("45/99", 2025) === null);
+  check("DD/MM rejects non-date", parseDayMonthDate("hello", 2025) === null);
+}
+
+// ----- credit-card opening/closing guardrail (no same-balance false pass) -----
+{
+  // Detected opening wrongly equals New Balance (horizontal-summary mislabel):
+  // derive Previous Balance from authoritative totals = new - debits + credits.
+  const r = resolveCreditCardOpenClose(23058.3, 23058.3, { credits: 1519.68, debits: 22972.51 });
+  check("CC open/close derives previous balance when opening == closing", Math.abs((r.opening ?? 0) - 1605.47) < 0.01 && r.closing === 23058.3);
+  // Missing opening → derive it.
+  const r2 = resolveCreditCardOpenClose(null, 23058.3, { credits: 1519.68, debits: 22972.51 });
+  check("CC open/close derives previous balance when opening missing", Math.abs((r2.opening ?? 0) - 1605.47) < 0.01);
+  // Distinct opening/closing are left untouched.
+  const r3 = resolveCreditCardOpenClose(1605.47, 23058.3, { credits: 1519.68, debits: 22972.51 });
+  check("CC open/close leaves a distinct opening untouched", r3.opening === 1605.47 && r3.closing === 23058.3);
+  // No totals to derive from → resolver leaves the detected values as-is; a
+  // same-balance near-empty candidate is downgraded by candidate scoring instead.
+  const r4 = resolveCreditCardOpenClose(23058.3, 23058.3, { credits: null, debits: null });
+  check("CC open/close does not fabricate when no totals", r4.opening === 23058.3 && r4.closing === 23058.3);
+}
+
+// ----- verified parser result skips AI even with a few missing-date rows -----
+{
+  const many: TransactionRow[] = [];
+  for (let i = 0; i < 80; i += 1) many.push(row({ debit: 100, credit: null, date: "2025-01-02", description: `Purchase ${i}` }));
+  many.push(row({ debit: 35.94, credit: null, date: "", description: "Interest Charge on Purchases" })); // 1 missing date
+  many.push(row({ credit: 1519.68, debit: null, date: "2025-01-05", description: "Payment" }));
+  // opening + debits - credits = closing: 1605.47 + 8035.94 - 1519.68 = 8121.73
+  const reconciled = cc(many, 1605.47, 8121.73, { credits: 1519.68, debits: 8035.94 });
+  check("reconciled itemized CC parse verifies", reconciled.validation.status === "passed");
+  check("verified parse with 1 missing-date row still skips AI", isAiAssistEligible(reconciled) === false);
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

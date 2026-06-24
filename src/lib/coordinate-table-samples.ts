@@ -818,4 +818,36 @@ export const coordinateSamples: CoordSample[] = [
       note: "combined 'APR 22 APR 24' cell resolves to the transaction date via findDate",
     },
   },
+
+  // T. Credit-union DD/MM credit-card: Date | Description | Amount, day/month dates
+  // with no year, an unsigned payment (credit by keyword), a zero-amount interest
+  // line (ignored), and a summary total (ignored). Distinct previous/new balance.
+  {
+    name: "T-credit-union-ddmm-credit-card",
+    description: "Date | Description | Amount; DD/MM dates, unsigned payment, zero line, summary total",
+    rows: [
+      [["East Coast Credit Union Mastercard", X.date]],
+      [["Previous Balance", X.date], ["$1,000.00", X.amount]],
+      [["Date", X.date], ["Description", X.desc], ["Amount", X.amount]],
+      [["23/01", X.date], ["MAGNACHARGE BATTERY", X.desc], ["65.96", X.amount]],
+      [["25/01", X.date], ["GROCERY STORE", X.desc], ["34.04", X.amount]],
+      [["29/01", X.date], ["Interest Charge on Purchases", X.desc], ["35.94", X.amount]],
+      [["29/01", X.date], ["Interest Charge on Cash Advances", X.desc], ["0.00", X.amount]],
+      [["05/01", X.date], ["PAYMENT THANK YOU", X.desc], ["136.00", X.amount]],
+      [["Total Debits", X.desc], ["$135.94", X.amount]],
+      [["New Balance", X.date], ["$999.94", X.amount]],
+    ],
+    expect: {
+      rows: 4,
+      opening: 1000,
+      closing: 999.94,
+      totalCredits: 136,
+      totalDebits: 135.94,
+      balancePasses: true,
+      columnOrder: "date|description|amount",
+      statementKind: "credit-card",
+      noDescriptionIncludes: ["Cash Advances", "Total Debits"],
+      note: "DD/MM dates recovered; unsigned PAYMENT is a credit; $0.00 interest line and Total Debits summary ignored",
+    },
+  },
 ];

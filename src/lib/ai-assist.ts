@@ -196,6 +196,20 @@ export function evaluateAiEligibility(statement: ParsedStatement): AiEligibility
   const txns = statement.transactions;
   const reasons: string[] = [];
 
+  // VERIFIED parser result: reconciled (passed), high confidence, known kind, with
+  // rows. The parser already produced a strong itemized result, so AI is skipped —
+  // even if a few rows have a missing date (a review nit handled by the UI, not a
+  // reason to spend a vision call). This keeps AI strictly a fallback.
+  const verified =
+    v.status === "passed" &&
+    v.confidence >= LOW_CONFIDENCE_THRESHOLD &&
+    statement.statementKind !== "unknown" &&
+    txns.length > 0 &&
+    !txns.some((t) => !hasAmt(t.debit) && !hasAmt(t.credit));
+  if (verified) {
+    return { eligible: false, reasons: [], skippedReason: "parser-verified" };
+  }
+
   if (v.status !== "passed") reasons.push("validation-not-passed");
   if (v.confidence < LOW_CONFIDENCE_THRESHOLD) reasons.push("low-confidence");
   if (statement.statementKind === "unknown") reasons.push("unknown-statement-kind");

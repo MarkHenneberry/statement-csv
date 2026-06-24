@@ -16,6 +16,7 @@ import {
   extractMoneyValues,
   normalizeDate,
   findDate,
+  parseDayMonthDate,
   detectBalanceLine,
   detectCreditCardBalances,
   detectBankSummary,
@@ -82,6 +83,8 @@ export type CoordTableDiagnostics = {
   regionsStitched: number;
   /** Credit-card amount rows rejected as summary/metadata (no date context). */
   ccRowsRejectedAsNonTx: number;
+  /** Zero-amount itemized lines ignored (e.g. "Interest Charge on Cash Advances $0.00"). */
+  ccZeroAmountRowsIgnored: number;
   /** Optional columns (category/posting date) present and not used for amounts. */
   ccOptionalColumnsIgnored: number;
 };
@@ -636,6 +639,19 @@ const COORD_STOP_RE =
 const STITCH_BARRIER_RE =
   /important (?:information about your account|account information)|how to (?:reach|contact) us|trade ?-?marks?|closing notice|protecting your|payment slip|remittance|please pay|amount past due|interest rate chart|time to pay|total payment enclosed/i;
 
+// Credit-card single-amount tables print one Amount column: purchases, fees, and
+// interest are debits; payments/credits/refunds are credits. Sign/CR is the
+// primary signal; when an amount has NO sign, these description keywords mark the
+// row as a credit. Conservative (clear payment/credit words only) so a normal
+// purchase stays a debit. Generic, not bank-specific.
+const CC_CREDIT_DESC_RE =
+  /\bpayment\b|thank ?you|paiement|\bmerci\b|\brefund\b|\breturn(?:ed)?\b|credit voucher|\breversal\b|\brebate\b|cash ?back|\badjustment\b|\bcredit\b/i;
+
+/** Should a single, unsigned credit-card amount be treated as a credit (payment/refund)? */
+function ccDescriptionIsCredit(desc: string): boolean {
+  return CC_CREDIT_DESC_RE.test(desc);
+}
+
 // Foreign-currency / exchange detail sub-line (attached to the row above).
 function isFxDetail(text: string): boolean {
   return (
@@ -660,7 +676,12 @@ function cellDate(raw: string, year: number | undefined): string | null {
   const direct = normalizeDate(raw, year);
   if (direct) return direct;
   const d = findDate(raw);
-  return d ? normalizeDate(d.match, year) : null;
+  if (d) return normalizeDate(d.match, year);
+  // Last resort: a bare day/month date (e.g. "23/01" or a "23/01 24/01" pair) that
+  // findDate does not recognize. The cell is already known to be the date column,
+  // so parsing DD/MM here is safe. Take the FIRST day/month token (transaction date).
+  const dm = raw.match(/\b\d{1,2}[/-]\d{1,2}\b/);
+  return dm ? parseDayMonthDate(dm[0], year) : null;
 }
 
 function cellMoney(cell: string): { value: number; negative: boolean } | null {
@@ -671,6 +692,38 @@ function cellMoney(cell: string): { value: number; negative: boolean } | null {
   const trailing = cell.slice(cell.lastIndexOf(last.raw) + last.raw.length);
   const negative = last.value < 0 || /\bcr\b/i.test(trailing);
   return { value: Math.abs(last.value), negative };
+}
+
+/**
+ * Resolve credit-card opening/closing so we never silently use New Balance for
+ * BOTH. New Balance (closing) is the reliable anchor; Previous Balance (opening) is
+ * frequently mislabeled when the statement prints a horizontal summary row, so the
+ * detected opening can wrongly equal closing. When opening is missing or equals
+ * closing, derive Previous Balance from the AUTHORITATIVE printed totals
+ * (previous = new - debits + credits). If it cannot be confidently distinguished,
+ * leave opening null rather than produce a same-balance false pass.
+ */
+export function resolveCreditCardOpenClose(
+  opening: number | null,
+  closing: number | null,
+  summary: { credits: number | null; debits: number | null },
+): { opening: number | null; closing: number | null } {
+  const cr = summary.credits;
+  const db = summary.debits;
+  const haveTotals = typeof cr === "number" && typeof db === "number";
+  const sameAsClosing =
+    typeof opening === "number" && typeof closing === "number" && Math.abs(opening - closing) < 0.01;
+  if (typeof closing === "number" && haveTotals && (opening === null || sameAsClosing)) {
+    // Authoritative previous balance: previous = new - debits + credits. This may
+    // equal closing (a net-zero period, which is legitimate) or differ (the
+    // mislabel case); either way the derived value is correct. When there are no
+    // printed totals to derive from we leave the detected values as-is: a
+    // same-balance near-empty false candidate is downgraded by candidate scoring
+    // (see scoreCandidate), not silently rewritten here.
+    const implied = Math.round((closing - (db as number) + (cr as number)) * 100) / 100;
+    return { opening: implied, closing };
+  }
+  return { opening, closing };
 }
 
 // ----- 5/6. Row reconstruction + summary separation per table region -----
@@ -709,6 +762,8 @@ type Diag = {
   footerLegalRowsIgnored: number;
   /** Credit-card amount rows rejected for having no date context (summary/metadata). */
   rowsRejectedAsNonTx: number;
+  /** Zero-amount itemized lines ignored (never a real transaction). */
+  zeroAmountRowsIgnored: number;
 };
 
 /**
@@ -741,6 +796,13 @@ function buildRegionRows(
 
   const finalizePending = (amountInfo: { value: number; negative: boolean } | null) => {
     if (pendingDesc.length === 0 && !pendingDate) return;
+    // A zero amount is not a transaction (e.g. "Interest Charge on Cash Advances $0.00").
+    if (amountInfo && Math.abs(amountInfo.value) < 0.005) {
+      diag.zeroAmountRowsIgnored += 1;
+      pendingDesc = [];
+      pendingDate = null;
+      return;
+    }
     if (!amountInfo) {
       pendingDesc = [];
       pendingDate = null;
@@ -749,9 +811,10 @@ function buildRegionRows(
     const row = newCoordRow();
     row.date = pendingDate ?? carriedDate ?? "";
     row.description = cleanDescription(pendingDesc.join(" "));
-    // Single-amount table: sign/CR decides direction (CC charge default = debit).
+    // Single-amount table: sign/CR decides direction (CC charge default = debit);
+    // an unsigned payment/credit/refund description is treated as a credit.
     if (region.statementKind === "credit-card") {
-      if (amountInfo.negative) row.credit = amountInfo.value;
+      if (amountInfo.negative || ccDescriptionIsCredit(row.description)) row.credit = amountInfo.value;
       else row.debit = amountInfo.value;
     } else {
       row.debit = amountInfo.value; // bank single-amount fallback (rare)
@@ -845,12 +908,25 @@ function buildRegionRows(
         if (region.statementKind === "bank-account" && balanceInfo && lastBalance !== null) {
           credit = balanceInfo.value > lastBalance;
         }
+        // Credit-card: an UNSIGNED amount on a payment/credit/refund row is a credit.
+        if (!credit && isCcRegion && ccDescriptionIsCredit(row.description)) credit = true;
         if (credit) row.credit = amountInfo.value;
         else row.debit = amountInfo.value;
       } else if (debitInfo) {
         row.debit = debitInfo.value;
       } else if (creditInfo) {
         row.credit = creditInfo.value;
+      }
+
+      // A zero-amount line is not a transaction (e.g. an itemized "$0.00" fee or
+      // interest line). Skip it: it contributes nothing and would otherwise show as
+      // a no-amount row. The running balance, if any, is still carried.
+      const rowMoney = Math.max(Math.abs(row.debit ?? 0), Math.abs(row.credit ?? 0));
+      if (rowMoney < 0.005) {
+        if (balanceInfo) lastBalance = balanceInfo.value;
+        diag.zeroAmountRowsIgnored += 1;
+        fxSeen = false;
+        continue;
       }
 
       if (balanceInfo) {
@@ -942,24 +1018,25 @@ function buildRegionCandidate(
     summaryRowsIgnored: 0,
     footerLegalRowsIgnored: 0,
     rowsRejectedAsNonTx: 0,
+    zeroAmountRowsIgnored: 0,
   };
   const isCc = region.statementKind === "credit-card";
   const seedBalance = isCc ? null : bankOpenClose.opening;
   const rows = buildRegionRows(lines, region, end, year, diag, seedBalance);
   if (rows.length === 0) return null;
 
-  const opening = isCc ? ccBalances.opening : bankOpenClose.opening;
+  const summary = isCc
+    ? ccSummary
+    : { credits: bankSummary.credits, debits: bankSummary.debits };
   // Bank closing: prefer an explicit statement balance label. Only fall back to
   // the last running balance for a sole/complete table; for one of several
   // regions the last running balance is a mid-statement value and would let a
   // fragment trivially "reconcile" (opening + credits − debits == lastBalance
   // holds for any contiguous subset) and wrongly beat the complete text parse.
-  const closing = isCc
-    ? ccBalances.closing
-    : (bankOpenClose.closing ?? (allowRunningClose ? lastRowBalance(rows) : null));
-  const summary = isCc
-    ? ccSummary
-    : { credits: bankSummary.credits, debits: bankSummary.debits };
+  const bankClosing = bankOpenClose.closing ?? (allowRunningClose ? lastRowBalance(rows) : null);
+  const { opening, closing } = isCc
+    ? resolveCreditCardOpenClose(ccBalances.opening, ccBalances.closing, ccSummary)
+    : { opening: bankOpenClose.opening, closing: bankClosing };
   const columnOrder = region.columns.map((c) => c.meaning).join("|");
 
   return {
@@ -987,6 +1064,7 @@ function buildRegionCandidate(
       stitched: false,
       regionsStitched: 1,
       ccRowsRejectedAsNonTx: diag.rowsRejectedAsNonTx,
+      ccZeroAmountRowsIgnored: diag.zeroAmountRowsIgnored,
       ccOptionalColumnsIgnored: region.columns.filter((c) => OPTIONAL_MEANINGS.has(c.meaning)).length,
     },
   };
@@ -1187,9 +1265,10 @@ function buildStitchedCandidate(
     // recover them; they are unique labels, so widening is safe.
     const allTexts = lines.map((l) => l.text);
     const b = detectCreditCardBalances(allTexts);
-    opening = b.opening;
-    closing = b.closing;
     summary = detectCreditCardSummary(allTexts);
+    const resolved = resolveCreditCardOpenClose(b.opening, b.closing, summary);
+    opening = resolved.opening;
+    closing = resolved.closing;
   } else {
     opening = regionBankBalances(lines, first.headerIndex, ends[firstIdx]).opening;
     const lastClose = regionBankBalances(lines, last.headerIndex, ends[lastIdx]).closing;
@@ -1227,6 +1306,7 @@ function buildStitchedCandidate(
       stitched: true,
       regionsStitched: group.length,
       ccRowsRejectedAsNonTx: sum((d) => d.ccRowsRejectedAsNonTx),
+      ccZeroAmountRowsIgnored: sum((d) => d.ccZeroAmountRowsIgnored),
       ccOptionalColumnsIgnored: group.reduce(
         (a, idx) => a + regions[idx].columns.filter((c) => OPTIONAL_MEANINGS.has(c.meaning)).length,
         0,

@@ -432,6 +432,7 @@ export function ParserDiagnosticsPanel({
             <Metric label="Chosen candidate stitched" value={yesNo(d.parseStats.coordStitched)} />
             <Metric label="Chosen regions stitched" value={String(d.parseStats.coordRegionsStitched)} />
             <Metric label="CC rows rejected as non-tx" value={String(d.parseStats.coordCcRowsRejectedAsNonTx)} />
+            <Metric label="CC zero-amount rows ignored" value={String(d.parseStats.coordCcZeroAmountRowsIgnored)} />
             <Metric label="CC optional columns ignored" value={String(d.parseStats.coordCcOptionalColumnsIgnored)} />
           </dl>
 

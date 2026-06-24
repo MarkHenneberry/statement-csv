@@ -96,6 +96,8 @@ export type LayoutParseStats = {
   coordRegionsStitched: number;
   /** Credit-card amount rows rejected as summary/metadata in the chosen candidate. */
   coordCcRowsRejectedAsNonTx: number;
+  /** Zero-amount itemized CC lines ignored in the chosen candidate. */
+  coordCcZeroAmountRowsIgnored: number;
   /** Optional CC columns (category/posting date) ignored in the chosen candidate. */
   coordCcOptionalColumnsIgnored: number;
   finalBalanceDifference: number | null;
@@ -428,6 +430,32 @@ export function normalizeDate(raw: string, fallbackYear?: number): string | null
   }
 
   return null;
+}
+
+/**
+ * Parse a bare day/month date with NO year (e.g. "23/01", "5-1"), using the
+ * statement's inferred year. Day/month order is disambiguated the same way as the
+ * year-bearing parser (default month/day, swap when the first part is > 12), which
+ * covers Canadian DD/MM credit-card statements (e.g. credit unions) whose
+ * transaction tables print "DD/MM DD/MM Description Amount".
+ *
+ * Intentionally NOT added to findDate/DATE_PATTERNS: a bare "NN/NN" is too easily
+ * confused with other tokens in free text, so this is used only where a value is
+ * already known to be a date (a coordinate date-column cell). Returns null when the
+ * token is not a plausible day/month date.
+ */
+export function parseDayMonthDate(raw: string, fallbackYear?: number): string | null {
+  const m = raw.trim().match(/^(\d{1,2})[/-](\d{1,2})$/);
+  if (!m) return null;
+  let mo = Number(m[1]);
+  let d = Number(m[2]);
+  if (mo > 12 && d <= 12) {
+    const t = mo;
+    mo = d;
+    d = t;
+  }
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  return fallbackYear ? `${fallbackYear}-${pad2(mo)}-${pad2(d)}` : `${pad2(mo)}-${pad2(d)}`;
 }
 
 const DATE_PATTERNS: RegExp[] = [
@@ -1795,6 +1823,7 @@ type CoordDiag = {
   stitched: boolean;
   regionsStitched: number;
   ccRowsRejectedAsNonTx: number;
+  ccZeroAmountRowsIgnored: number;
   ccOptionalColumnsIgnored: number;
 };
 
@@ -1922,6 +1951,21 @@ function scoreCandidate(c: Candidate): number {
   const lowConf = c.rows.filter((r) => r.confidence < LOW_CONFIDENCE).length;
   s -= lowConf * 1;
 
+  // Anti false-pass: a near-empty candidate that only "balances" because opening
+  // and closing are the SAME value (e.g. a one-line "on your last statement..."
+  // prose row that wrongly reused New Balance for both) cannot represent a
+  // statement whose summary shows real activity. Heavily downgrade it so a real
+  // itemized table candidate always wins. A genuine single-transaction statement
+  // has distinct opening/closing, so it is not affected.
+  const summaryActivity =
+    (c.summary.credits !== null && Math.abs(c.summary.credits) >= 0.01) ||
+    (c.summary.debits !== null && Math.abs(c.summary.debits) >= 0.01);
+  const sameOpenClose =
+    c.openingBalance !== null &&
+    c.closingBalance !== null &&
+    Math.abs(toCents(c.openingBalance) - toCents(c.closingBalance)) < 1;
+  if (rowCount <= 1 && summaryActivity && sameOpenClose) s -= 150;
+
   return s;
 }
 
@@ -2004,6 +2048,7 @@ function buildCandidates(
           stitched: cc.diagnostics.stitched,
           regionsStitched: cc.diagnostics.regionsStitched,
           ccRowsRejectedAsNonTx: cc.diagnostics.ccRowsRejectedAsNonTx,
+          ccZeroAmountRowsIgnored: cc.diagnostics.ccZeroAmountRowsIgnored,
           ccOptionalColumnsIgnored: cc.diagnostics.ccOptionalColumnsIgnored,
         },
       });
@@ -2260,6 +2305,7 @@ export function parseStatementText(text: string, items?: PdfTextItem[]): ParseRe
     coordStitched: chosen.coord?.stitched ?? false,
     coordRegionsStitched: chosen.coord?.regionsStitched ?? 0,
     coordCcRowsRejectedAsNonTx: chosen.coord?.ccRowsRejectedAsNonTx ?? 0,
+    coordCcZeroAmountRowsIgnored: chosen.coord?.ccZeroAmountRowsIgnored ?? 0,
     coordCcOptionalColumnsIgnored: chosen.coord?.ccOptionalColumnsIgnored ?? 0,
     finalBalanceDifference: chosen.balance.diffCents !== null ? chosen.balance.diffCents / 100 : null,
     chosenCandidateSource: chosen.source,
