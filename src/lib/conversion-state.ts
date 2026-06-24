@@ -32,6 +32,12 @@ export type ConversionInputs = {
   previewLimited: boolean;
   /** Scanned/encrypted/no extractable content. */
   unsupported: boolean;
+  /**
+   * No usable transaction table was extracted (e.g. only a lone non-transaction
+   * parser row remains and AI produced nothing usable). Drives clearer copy so a
+   * single bad row is not presented as a meaningful conversion.
+   */
+  noUsableTransactionTable?: boolean;
 };
 
 export type ExportTone = "safe" | "review" | "neutral";
@@ -175,15 +181,21 @@ export function conversionPresentation(input: ConversionInputs): ConversionPrese
       // low-confidence / aggregate), say so plainly instead of implying the math
       // failed. The conversion is still not verified, so export stays non-safe.
       const mathMatched = input.balanceStatus === "passed" && input.rowCount > 0;
+      // A lone non-transaction row (or nothing usable) should be named plainly so
+      // users do not mistake one bad row for a real conversion.
+      const noTable = input.noUsableTransactionTable === true;
+      const bannerBody = noTable
+        ? "No usable transaction table was extracted. Transactions appear to be missing. You can add rows manually below, or try a different PDF export from your bank."
+        : mathMatched
+          ? "The balance math matches, but the transaction rows are incomplete or low-confidence. Review the highlighted rows before export."
+          : "We could not fully verify this conversion. Review the highlighted rows before export.";
       return {
         state: "needs-review",
-        badgeLabel: "Needs review",
+        badgeLabel: noTable ? "No transactions found" : "Needs review",
         badgeTone: "amber",
         bannerVariant: "warning",
-        bannerTitle: "Needs review",
-        bannerBody: mathMatched
-          ? "The balance math matches, but the transaction rows are incomplete or low-confidence. Review the highlighted rows before export."
-          : "We could not fully verify this conversion. Review the highlighted rows before export.",
+        bannerTitle: noTable ? "No usable transaction table" : "Needs review",
+        bannerBody,
         secondaryCopy: null,
         showTopExport: hasRows,
         exportTone: "review",

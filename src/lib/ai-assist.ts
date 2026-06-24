@@ -36,7 +36,7 @@ import {
 } from "./statement-model.ts";
 import type { StatementKind } from "./parser.ts";
 import type { TransactionRow } from "./upload.ts";
-import type { VisionImage } from "./pdf-render.ts";
+import type { VisionImage, VisionImageMeta } from "./pdf-render.ts";
 
 export type AiAssistConfig = {
   enabled: boolean;
@@ -135,6 +135,8 @@ export type AiAssistOutcome = {
   aiLowConfidenceRowRate: number | null;
   aiItemizedRowCount: number | null;
   aiLargestRowShareOfDebits: number | null;
+  /** Safe per-image vision evidence metadata, in send order (no pixels/text). */
+  aiVisionEvidence: VisionImageMeta[];
 };
 
 export type VisionSelectionDiag = {
@@ -260,6 +262,12 @@ export type AiEvidence = {
    * interest/fee rows that a transaction-only pass tends to miss.
    */
   creditCardInterestFees: InterestFeeDetection | null;
+  /**
+   * "Blinders": a compact deterministic guide that focuses the model on the
+   * itemized transaction table and supplies summary totals as TEXT anchors (so the
+   * model validates against them instead of turning them into rows). No raw text.
+   */
+  blinders: BlindersPacket | null;
   transactions: {
     transactionDate: string | null;
     postingDate: string | null;
@@ -276,6 +284,81 @@ export type InterestFeeDetection = {
   feesCharged: number | null;
   lineItems: { description: string; amount: number; date: string | null }[];
 };
+
+/**
+ * Deterministic evidence packet that guides the vision call. Contains ONLY safe
+ * anchors/targets/labels/region-ids — never raw statement text, rows, descriptions,
+ * merchants, account numbers, names, prompts, AI responses, images, or base64.
+ */
+export type BlindersPacket = {
+  statementKind: string;
+  balanceMode: "bank-account" | "credit-card";
+  openingAnchor: number | null;
+  closingAnchor: number | null;
+  totalCreditsTarget: number | null;
+  totalDebitsTarget: number | null;
+  period: { start: string | null; end: string | null } | null;
+  parserFailureReasons: string[];
+  transactionTablePages: number[];
+  summaryPages: number[];
+  tableHeaderPages: number[];
+  allowedRegions: string[];
+  excludedRegions: string[];
+  /** Ordered list of the images the model is being sent (kind + page, no pixels). */
+  visionEvidenceOrder: { id: string; kind: string; page: number }[];
+  validationRequirements: string[];
+};
+
+/** Build the Blinders packet from safe primitives (pure + testable). */
+export function buildBlindersPacket(input: {
+  statementKind: string;
+  balanceMode: "bank-account" | "credit-card";
+  openingAnchor: number | null;
+  closingAnchor: number | null;
+  totalCreditsTarget: number | null;
+  totalDebitsTarget: number | null;
+  period?: { start: string | null; end: string | null } | null;
+  parserFailureReasons: string[];
+  transactionTablePages: number[];
+  summaryPages: number[];
+  tableHeaderPages: number[];
+  visionEvidenceOrder: { id: string; kind: string; page: number }[];
+}): BlindersPacket {
+  return {
+    statementKind: input.statementKind,
+    balanceMode: input.balanceMode,
+    openingAnchor: input.openingAnchor,
+    closingAnchor: input.closingAnchor,
+    totalCreditsTarget: input.totalCreditsTarget,
+    totalDebitsTarget: input.totalDebitsTarget,
+    period: input.period ?? null,
+    parserFailureReasons: input.parserFailureReasons,
+    transactionTablePages: input.transactionTablePages,
+    summaryPages: input.summaryPages,
+    tableHeaderPages: input.tableHeaderPages,
+    allowedRegions: ["transactions", "transactions-continued", "current-period-fees-interest"],
+    excludedRegions: [
+      "summary",
+      "totals",
+      "balance-summary",
+      "payment-summary",
+      "remittance",
+      "rewards",
+      "points",
+      "year-to-date",
+      "legal",
+      "warning",
+    ],
+    visionEvidenceOrder: input.visionEvidenceOrder,
+    validationRequirements: [
+      "Every row must be an itemized transaction visible in the transaction-table images.",
+      "Do not create summary, total, aggregate, or placeholder rows.",
+      "Use the opening/closing anchors and credit/debit targets only to VALIDATE totals, never as transaction rows.",
+      "If dozens of itemized rows are visible, return dozens of rows.",
+      "Return needs-review issues if the table rows are not legible enough to extract.",
+    ],
+  };
+}
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const sumDebits = (s: ParsedStatement) => s.transactions.reduce((a, t) => a + (t.debit ?? 0), 0);
@@ -327,6 +410,7 @@ export function buildAiEvidence(
   return {
     parserLikelyMissedTransactions,
     creditCardInterestFees: supplement.creditCardInterestFees ?? null,
+    blinders: supplement.blinders ?? null,
     parserSummary: {
       statementKind: statement.statementKind,
       openingBalance: statement.openingBalance ?? null,
@@ -983,7 +1067,19 @@ export const SYSTEM_PROMPT =
   "should be rare. It is BETTER to return a candidate with issues (needs review) than a " +
   "reconciled candidate built from aggregate or placeholder rows: if the visual " +
   "evidence is insufficient to extract the itemized rows, return needs-review issues " +
-  "instead of a balanced-but-fake candidate.";
+  "instead of a balanced-but-fake candidate. " +
+  "COMPLETENESS — extract EVERY visible itemized row: the image evidence is ordered " +
+  "transaction-table-first (see evidence.blinders.visionEvidenceOrder); each image is " +
+  "a chunk of the transaction table (overlapping halves, so the same row may appear in " +
+  "two chunks — output it once). Read ALL of them and return EVERY itemized transaction " +
+  "you can see. Do NOT stop after one or two rows. If dozens of rows are visible, return " +
+  "dozens of rows (40, 60, 80+ is normal and expected for a full statement). A long, " +
+  "fully itemized candidate is ALWAYS preferred over a short candidate that only explains " +
+  "the totals. Use evidence.blinders openingAnchor/closingAnchor and the credit/debit " +
+  "targets ONLY to check your extraction adds up — never turn an anchor or target into a " +
+  "row. Return strict JSON only. The only acceptable reason to return few rows is that " +
+  "the table rows are genuinely not legible in the images; in that case return " +
+  "needs-review issues, not a short reconciled summary.";
 
 export async function callOpenAiChat(
   messages: ChatMessage[],
@@ -1044,6 +1140,18 @@ export type ChatCaller = (request: AiRequest, config: AiAssistConfig) => Promise
  */
 const defaultCaller: ChatCaller = ({ evidence, images }, config) => {
   const userContent: ChatContentPart[] = [{ type: "text", text: JSON.stringify(evidence) }];
+  if (images.length > 0) {
+    // Tell the model what the images are and in what order (transaction-table chunks
+    // first), so it reads them as table rows and extracts the full itemized list.
+    userContent.push({
+      type: "text",
+      text:
+        `The ${images.length} images below are transaction-table chunks, ordered transaction-table-first ` +
+        "(overlapping halves; a row may appear in two chunks — output it once). Extract EVERY itemized " +
+        "transaction row visible across all of them. Do not stop early; dozens of rows are expected for a " +
+        "full statement. Summary totals are provided as text anchors in evidence.blinders for validation only.",
+    });
+  }
   for (const img of images) userContent.push({ type: "image_url", image_url: { url: img.dataUrl } });
   const model = images.length > 0 ? (config.visionModel ?? config.model) : config.model;
   return callOpenAiChat(
@@ -1052,7 +1160,8 @@ const defaultCaller: ChatCaller = ({ evidence, images }, config) => {
       { role: "user", content: images.length > 0 ? userContent : JSON.stringify(evidence) },
     ],
     config,
-    { jsonMode: true, model: model ?? undefined },
+    // Generous output cap so a long (80+ row) itemized JSON answer is never truncated.
+    { jsonMode: true, model: model ?? undefined, maxTokens: 8000 },
   );
 };
 
@@ -1126,6 +1235,7 @@ function baseOutcome(statement: ParsedStatement, config: AiAssistConfig): AiAssi
     aiLowConfidenceRowRate: null,
     aiItemizedRowCount: null,
     aiLargestRowShareOfDebits: null,
+    aiVisionEvidence: [],
   };
 }
 
@@ -1356,6 +1466,7 @@ export function notAttemptedOutcome(
     aiLowConfidenceRowRate: null,
     aiItemizedRowCount: null,
     aiLargestRowShareOfDebits: null,
+    aiVisionEvidence: [],
   };
 }
 

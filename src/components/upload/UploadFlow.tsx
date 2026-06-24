@@ -263,6 +263,11 @@ export function UploadFlow() {
     const { material: materialWarningCount, minor: minorWarningCount } =
       countRowWarningSeverity(rows);
     const unsupported = meta.parserWarnings.includes(SCANNED_PDF_WARNING);
+    // No usable transaction table: at most one row and the conversion did not pass
+    // (e.g. AI rejected a fake candidate and only a lone parser row remains). Don't
+    // present that single bad row as a meaningful conversion.
+    const noUsableTransactionTable =
+      rows.length <= 1 && balanceStatus !== "passed" && !meta.previewLimited && !unsupported;
     const presentation = conversionPresentation({
       balanceStatus,
       confidence: meta.validation?.confidence ?? (balanceStatus === "passed" ? 1 : 0),
@@ -272,6 +277,7 @@ export function UploadFlow() {
       summaryMatched: null,
       previewLimited: meta.previewLimited,
       unsupported,
+      noUsableTransactionTable,
     });
 
     // Specific issues to list under the banner (preview truncation is NOT a parse

@@ -187,6 +187,27 @@ export function ParserDiagnosticsPanel({
               label="Largest row share of debits"
               value={d.aiAssist.aiLargestRowShareOfDebits === null ? "—" : d.aiAssist.aiLargestRowShareOfDebits.toFixed(2)}
             />
+            <Metric label="Vision evidence count" value={String(d.aiAssist.aiVisionEvidence.length)} />
+            <Metric
+              label="Vision evidence order"
+              value={
+                d.aiAssist.aiVisionEvidence.length
+                  ? d.aiAssist.aiVisionEvidence.map((m) => `${m.kind}:p${m.page}`).join(", ")
+                  : "—"
+              }
+            />
+            <Metric
+              label="Vision tx image included"
+              value={yesNo(d.aiAssist.aiVisionEvidence.some((m) => m.kind === "table-header" || m.kind === "table-body" || m.kind === "final-rows"))}
+            />
+            <Metric
+              label="Vision summary image included"
+              value={yesNo(d.aiAssist.aiVisionEvidence.some((m) => m.kind === "summary" || m.kind === "totals"))}
+            />
+            <Metric
+              label="Vision min image height"
+              value={d.aiAssist.aiVisionEvidence.length ? String(Math.min(...d.aiAssist.aiVisionEvidence.map((m) => m.height))) : "—"}
+            />
             <Metric
               label="AI selected section"
               value={d.aiAssist.aiSelectedSectionIndex === null ? "—" : String(d.aiAssist.aiSelectedSectionIndex)}

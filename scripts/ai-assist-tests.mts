@@ -18,6 +18,7 @@ import {
   candidateBeatsParser,
   repairCreditCardInterestFees,
   evaluateCandidateQuality,
+  buildBlindersPacket,
   SYSTEM_PROMPT,
   type AiAssistConfig,
   type ChatResult,
@@ -271,9 +272,25 @@ check("footer says scanned/image not supported", /scanned or image-based stateme
   const regions = selectVisionRegions({ pageCount: 3, hasLowConfidence: true });
   const excluded = new Set<string>(EXCLUDED_REGION_KINDS as readonly string[]);
   check("crop selection excludes footer/legal/blank kinds", regions.every((r) => !excluded.has(r.kind)) && regions.length > 0);
-  check("crop selection targets summary + totals", regions.some((r) => r.kind === "summary") && regions.some((r) => r.kind === "totals"));
-  check("low-confidence region added when present", regions.some((r) => r.kind === "low-confidence"));
-  check("no low-confidence region when absent", selectVisionRegions({ pageCount: 1, hasLowConfidence: false }).every((r) => r.kind !== "low-confidence"));
+  // Summary/totals are NOT sent as images (they become text anchors); selection is
+  // transaction-table focused.
+  check("crop selection targets the transaction table", regions.some((r) => r.kind === "table-header") && regions.some((r) => r.kind === "table-body"));
+  check("crop selection does not send summary/totals images", regions.every((r) => r.kind !== "summary" && r.kind !== "totals"));
+
+  // Transaction pages come FIRST and are chunked (header chunk + body chunk).
+  const tx = selectVisionRegions({
+    pageCount: 6,
+    hasLowConfidence: true,
+    transactionHeaderPages: [3, 4],
+    summaryPages: [1, 5],
+    legalPages: [2],
+    maxRegions: 10,
+  });
+  check("transaction-table evidence is ordered first", tx.length > 0 && (tx[0].kind === "table-header" || tx[0].kind === "table-body"));
+  check("no summary/totals images for credit-card table", tx.every((r) => r.kind !== "summary" && r.kind !== "totals"));
+  check("transaction pages 3 and 4 are the evidence pages", [...new Set(tx.map((r) => r.page))].sort((a, b) => a - b).join(",") === "3,4");
+  check("each tx page is chunked into header + body halves", tx.some((r) => r.page === 3 && r.band === "upper") && tx.some((r) => r.page === 3 && r.band === "lower"));
+  check("legal pages are never targeted", tx.every((r) => r.page !== 2));
 }
 
 // ----- vision rendering: crop vs full-page fallback + graceful degrade -----
@@ -343,7 +360,7 @@ check("footer says scanned/image not supported", /scanned or image-based stateme
 }
 
 // ----- vision fallback: one multimodal call + diagnostics -----
-const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, crop: true, dataUrl: "data:image/png;base64,AAAA" });
+const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: "top", crop: true, dataUrl: "data:image/png;base64,AAAA" });
 {
   let calls = 0;
   const r = await runAiAssist(brokenStmt, ON, {}, {
@@ -1079,6 +1096,69 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, crop: 
   const mathOkRowsBad = conversionPresentation({ ...base, balanceStatus: "passed" });
   check("needs-review distinguishes math vs rows", mathOkRowsBad.state === "needs-review" && /balance math matches/i.test(mathOkRowsBad.bannerBody) && /incomplete or low-confidence/i.test(mathOkRowsBad.bannerBody));
   check("needs-review (math ok) is not verified and not safe export", mathOkRowsBad.badgeTone !== "green" && mathOkRowsBad.exportTone !== "safe");
+}
+
+// ----- Blinders packet (focused, safe evidence) -----
+{
+  const blinders = buildBlindersPacket({
+    statementKind: "credit-card",
+    balanceMode: "credit-card",
+    openingAnchor: 1605.47,
+    closingAnchor: 23058.3,
+    totalCreditsTarget: 1519.68,
+    totalDebitsTarget: 22972.51,
+    period: { start: "2024-12-30", end: "2025-01-29" },
+    parserFailureReasons: ["validation-not-passed"],
+    transactionTablePages: [3, 4],
+    summaryPages: [1, 5],
+    tableHeaderPages: [3, 4],
+    visionEvidenceOrder: [
+      { id: "table-header-p3-upper", kind: "table-header", page: 3 },
+      { id: "table-body-p3-lower", kind: "table-body", page: 3 },
+    ],
+  });
+  check("blinders carries opening/closing anchors", blinders.openingAnchor === 1605.47 && blinders.closingAnchor === 23058.3);
+  check("blinders carries credit/debit targets", blinders.totalCreditsTarget === 1519.68 && blinders.totalDebitsTarget === 22972.51);
+  check("blinders lists transaction table pages", blinders.transactionTablePages.join(",") === "3,4");
+  check("blinders allows transactions + current-period fees/interest", blinders.allowedRegions.includes("transactions") && blinders.allowedRegions.some((r) => /fee|interest/i.test(r)));
+  check("blinders excludes summary/totals/legal/rewards/ytd", ["summary", "totals", "legal", "rewards", "year-to-date"].every((r) => blinders.excludedRegions.includes(r)));
+  check("blinders evidence order is transaction-table-first", blinders.visionEvidenceOrder[0].kind.startsWith("table"));
+  check("blinders requires itemized rows + anchors-for-validation-only", blinders.validationRequirements.some((v) => /itemized/i.test(v)) && blinders.validationRequirements.some((v) => /validate/i.test(v)));
+  // No private content (only numbers, safe labels, region ids).
+  check("blinders contains no private text", !/\bunspecified\b|merchant|account number|payment to|\$/i.test(JSON.stringify(blinders)));
+
+  // Blinders flow into the evidence packet.
+  const broken = cc([row({ description: "warn", debit: null, credit: null })], 23058.3, 23058.3, { credits: 1519.68, debits: 22972.51 });
+  const ev = buildAiEvidence(broken, { blinders });
+  check("evidence carries the blinders packet", ev.blinders !== null && ev.blinders!.transactionTablePages.join(",") === "3,4");
+  check("evidence blinders supplies summary totals as anchors (text, not rows)", ev.blinders!.totalDebitsTarget === 22972.51 && ev.blinders!.totalCreditsTarget === 1519.68);
+}
+
+// ----- prompt: completeness + no short reconciled summary -----
+{
+  check("prompt asks for EVERY itemized row", /return EVERY itemized transaction/i.test(SYSTEM_PROMPT));
+  check("prompt says dozens of rows produce dozens of rows", /dozens of rows/i.test(SYSTEM_PROMPT));
+  check("prompt forbids stopping after one or two rows", /do not stop after one or two rows/i.test(SYSTEM_PROMPT));
+  check("prompt prefers long itemized over short summary candidate", /long, fully itemized candidate is ALWAYS preferred/i.test(SYSTEM_PROMPT));
+  check("prompt uses anchors for validation only", /use evidence\.blinders.*only to check/i.test(SYSTEM_PROMPT));
+}
+
+// ----- bad parser one-row fallback is not presented as a useful conversion -----
+{
+  const oneBadRow = conversionPresentation({
+    balanceStatus: "review",
+    confidence: 0.4,
+    rowCount: 1,
+    materialWarningCount: 1,
+    minorWarningCount: 0,
+    summaryMatched: null,
+    previewLimited: false,
+    unsupported: false,
+    noUsableTransactionTable: true,
+  });
+  check("one bad parser row → 'no usable transaction table' state", oneBadRow.state === "needs-review" && /no usable transaction table/i.test(oneBadRow.bannerTitle));
+  check("no-usable-table copy says transactions appear missing", /transactions appear to be missing/i.test(oneBadRow.bannerBody));
+  check("no-usable-table is not verified / not safe export", oneBadRow.badgeTone !== "green" && oneBadRow.exportTone !== "safe");
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

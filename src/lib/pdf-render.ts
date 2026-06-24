@@ -31,7 +31,9 @@ export const EXCLUDED_REGION_KINDS = [
   "disclosure",
 ] as const;
 
-export type VisionBand = "top" | "middle" | "bottom" | "full";
+// "upper"/"lower" are overlapping HALVES used to chunk a long transaction table
+// into two readable, header-bearing sections.
+export type VisionBand = "top" | "middle" | "bottom" | "full" | "upper" | "lower";
 
 export type VisionRegion = {
   id: string;
@@ -44,10 +46,24 @@ export type VisionImage = {
   id: string;
   kind: VisionRegionKind | "full-page";
   page: number;
+  /** The vertical band this image was cropped from (for diagnostics). */
+  band: VisionBand;
   /** true = a targeted crop; false = a (downscaled) full relevant page fallback. */
   crop: boolean;
   /** data: URL of the rendered PNG. Never logged. */
   dataUrl: string;
+};
+
+/** SAFE per-image metadata for diagnostics (no pixels, no text, no base64). */
+export type VisionImageMeta = {
+  id: string;
+  kind: VisionImage["kind"];
+  page: number;
+  band: VisionBand;
+  crop: boolean;
+  width: number;
+  height: number;
+  byteSize: number;
 };
 
 export type VisionRenderResult = {
@@ -58,6 +74,8 @@ export type VisionRenderResult = {
   fullPages: number;
   /** Safe label when no images were produced (e.g. "render-backend-unavailable"). */
   failureReason: string | null;
+  /** Safe aggregate metadata for each produced image, in send order. */
+  meta: VisionImageMeta[];
 };
 
 export type SelectRegionsInput = {
@@ -87,7 +105,6 @@ export function selectVisionRegions(input: SelectRegionsInput): VisionRegion[] {
   const last = pages;
   const legal = new Set(input.legalPages ?? []);
   const txPages = (input.transactionHeaderPages ?? []).filter((p) => p >= 1 && p <= pages && !legal.has(p));
-  const summaryPages = (input.summaryPages ?? []).filter((p) => p >= 1 && p <= pages);
   const max = input.maxRegions ?? (txPages.length > 0 ? 8 : 6);
   const regions: VisionRegion[] = [];
   const add = (kind: VisionRegionKind, page: number, band: VisionBand) => {
@@ -95,31 +112,27 @@ export function selectVisionRegions(input: SelectRegionsInput): VisionRegion[] {
     regions.push({ id: `${kind}-p${page}-${band}`, kind, page, band });
   };
 
-  // Opening/closing summary: a detected summary page, else page 1.
-  add("summary", summaryPages[0] ?? 1, "top");
-
   if (txPages.length > 0) {
-    // Transaction tables fill the whole page, so render the FULL transaction pages
-    // (band "full") rather than a vertical slice — band-cropping silently drops the
-    // top/bottom rows of a dense table, which makes the rebuilt totals miss
-    // transactions and never reconcile. A header crop on the first table page still
-    // captures the column labels explicitly.
-    add("table-header", txPages[0], "top");
+    // TRANSACTION TABLE FIRST and ONLY. The itemized table is the thing we need the
+    // model to read, so every image is a transaction-table chunk. Summary/totals
+    // are NOT sent as images (the model can misread them as transaction rows); they
+    // are supplied as TEXT anchors in the evidence/Blinders packet instead. Each
+    // transaction page is chunked into two overlapping, header-bearing halves so the
+    // rows render large enough to read (a single full-page image makes dense rows
+    // tiny after the model downscales it).
     for (const p of txPages.slice(0, 4)) {
-      add("table-body", p, "full");
+      add("table-header", p, "upper"); // top half (includes the column header)
+      add("table-body", p, "lower"); // bottom half (overlaps the top half)
     }
-    // Closing/totals usually on the summary page (or last page).
-    add("totals", summaryPages[summaryPages.length - 1] ?? last, "bottom");
+    // Only an explicitly current-period fee/interest page (already classified as a
+    // transaction page) is included; summary/totals/legal/rewards pages are not.
+    for (const p of input.failurePages ?? []) add("table-body", p, "full");
   } else {
-    // No header pages detected: page-1 + last-page heuristic.
-    add("table-header", 1, "middle");
-    add("table-body", 1, "middle");
+    // No header pages detected: page-1 + last-page heuristic (chunked).
+    add("table-header", 1, "upper");
+    add("table-body", 1, "lower");
     add("final-rows", last, "bottom");
-    add("totals", last, "bottom");
   }
-
-  for (const p of input.failurePages ?? []) add("table-body", p, "middle");
-  if (input.hasLowConfidence) add("low-confidence", txPages[0] ?? 1, "middle");
 
   // De-dupe by id and cap (token control: targeted, not the whole document).
   const seen = new Set<string>();
@@ -195,6 +208,12 @@ function bandRange(band: VisionBand, h: number): [number, number] {
       return [Math.round(h * 0.25), Math.round(h * 0.78)];
     case "bottom":
       return [Math.round(h * 0.55), h];
+    // Overlapping halves for chunking a long table. "upper" keeps the column
+    // header; the overlap means no row is lost between the two chunks.
+    case "upper":
+      return [0, Math.round(h * 0.58)];
+    case "lower":
+      return [Math.round(h * 0.42), h];
     default:
       return [0, h];
   }
@@ -232,7 +251,10 @@ type DefaultRenderer = { render: RegionRenderer; reason: () => string | null };
  * page-render-error — never a generic label. Native deps are imported dynamically
  * (server-only) so they never reach a client bundle. `scaleWidth` bounds width.
  */
-function makeDefaultRenderer(scaleWidth = 1100): DefaultRenderer {
+// Higher render width than before so dense transaction rows stay legible after the
+// vision model downscales/tiles the image. Chunking (upper/lower halves) keeps each
+// image a readable size at this width.
+function makeDefaultRenderer(scaleWidth = 1500): DefaultRenderer {
   const pageCache = new Map<number, { png: Uint8Array; height: number } | null>();
   let firstReason: string | null = null;
   const setReason = (r: string) => {
@@ -310,10 +332,10 @@ export async function renderVisionEvidence(
   opts: { enabled: boolean; renderer?: RegionRenderer; maxImages?: number } = { enabled: false },
 ): Promise<VisionRenderResult> {
   if (!opts.enabled) {
-    return { available: false, images: [], renderedPages: 0, crops: 0, fullPages: 0, failureReason: "vision-disabled" };
+    return { available: false, images: [], renderedPages: 0, crops: 0, fullPages: 0, failureReason: "vision-disabled", meta: [] };
   }
   if (regions.length === 0) {
-    return { available: false, images: [], renderedPages: 0, crops: 0, fullPages: 0, failureReason: "no-regions" };
+    return { available: false, images: [], renderedPages: 0, crops: 0, fullPages: 0, failureReason: "no-regions", meta: [] };
   }
   const usingDefault = !opts.renderer;
   const def = usingDefault ? makeDefaultRenderer() : null;
@@ -331,6 +353,7 @@ export async function renderVisionEvidence(
       id: region.id,
       kind: rendered.crop ? region.kind : "full-page",
       page: region.page,
+      band: region.band,
       crop: rendered.crop,
       dataUrl: rendered.dataUrl,
     });
@@ -339,8 +362,24 @@ export async function renderVisionEvidence(
     // Specific reason from the actual render attempt (default), or for an injected
     // renderer that produced nothing, "injected-renderer-no-output".
     const reason = usingDefault ? def!.reason() ?? "page-render-error" : "injected-renderer-no-output";
-    return { available: false, images: [], renderedPages: 0, crops: 0, fullPages: 0, failureReason: reason };
+    return { available: false, images: [], renderedPages: 0, crops: 0, fullPages: 0, failureReason: reason, meta: [] };
   }
+  // SAFE per-image metadata (dimensions + byte size only; no pixels/text/base64).
+  const meta: VisionImageMeta[] = images.map((img) => {
+    const b64 = img.dataUrl.split(",")[1] ?? "";
+    const bytes2 = Buffer.from(b64, "base64");
+    const dims = bytes2.length >= 24 ? pngDimensions(bytes2) : { width: 0, height: 0 };
+    return {
+      id: img.id,
+      kind: img.kind,
+      page: img.page,
+      band: img.band,
+      crop: img.crop,
+      width: dims.width,
+      height: dims.height,
+      byteSize: bytes2.length,
+    };
+  });
   return {
     available: true,
     images,
@@ -348,5 +387,6 @@ export async function renderVisionEvidence(
     crops: images.filter((i) => i.crop).length,
     fullPages: images.filter((i) => !i.crop).length,
     failureReason: null,
+    meta,
   };
 }

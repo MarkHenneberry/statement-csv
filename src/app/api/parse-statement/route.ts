@@ -15,10 +15,12 @@ import {
   isAiAssistEligible,
   resolveAiAssist,
   repairCreditCardInterestFees,
+  buildBlindersPacket,
   notAttemptedOutcome,
   type AiEvidence,
   type VisionSelectionDiag,
   type InterestFeeDetection,
+  type BlindersPacket,
 } from "@/lib/ai-assist";
 import { parsedStatementToRows } from "@/lib/statement-model";
 import { buildSafeParseSummary } from "@/lib/parser-diagnostics";
@@ -28,6 +30,7 @@ import {
   analyzeVisionPages,
   probeRenderBackend,
   type VisionImage,
+  type VisionImageMeta,
   type VisionRegion,
 } from "@/lib/pdf-render";
 import {
@@ -252,6 +255,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   let rendererBackendAvailable: boolean | null = null;
   let rendererBackendName: string | null = null;
   let rendererProbeReason: string | null = null;
+  let visionEvidenceMeta: VisionImageMeta[] = [];
+  let blinders: BlindersPacket | null = null;
   if (pdfBytes && aiConfig.enabled && isAiAssistEligible(statement)) {
     const visionRequested = process.env.ENABLE_AI_VISION_FALLBACK !== "false";
     if (visionRequested && !aiConfig.visionModel) {
@@ -294,10 +299,27 @@ export async function POST(request: Request): Promise<NextResponse> {
         const rendered = await renderVisionEvidence(pdfBytes, regions, { enabled: true, maxImages: 10 });
         renderDurationMs = Date.now() - renderStart;
         visionImages = rendered.images;
+        visionEvidenceMeta = rendered.meta;
         if (!rendered.available) renderFailedReason = rendered.failureReason;
         if (process.env.AI_VISION_DEBUG_SAVE_CROPS === "true") {
           await saveVisionCropsForDebug(rendered.images, regions);
         }
+        // Blinders: focus the model on the itemized table; supply summary totals as
+        // TEXT anchors (never as images). Built from the SAME deterministic signals.
+        blinders = buildBlindersPacket({
+          statementKind: statement.statementKind,
+          balanceMode: statement.statementKind === "credit-card" ? "credit-card" : "bank-account",
+          openingAnchor: statement.openingBalance ?? null,
+          closingAnchor: statement.closingBalance ?? null,
+          totalCreditsTarget: statement.summaryTotals?.totalCredits ?? null,
+          totalDebitsTarget: statement.summaryTotals?.totalDebits ?? null,
+          period: { start: statement.periodStart ?? null, end: statement.periodEnd ?? null },
+          parserFailureReasons: statement.validation.status === "passed" ? [] : ["validation-not-passed"],
+          transactionTablePages: pageAnalysis.transactionHeaderPages,
+          summaryPages: pageAnalysis.summaryPages,
+          tableHeaderPages: pageAnalysis.transactionHeaderPages,
+          visionEvidenceOrder: rendered.images.map((img) => ({ id: img.id, kind: img.kind, page: img.page })),
+        });
       } catch {
         // Never fail the conversion because rendering failed; degrade to text-layout.
         visionImages = [];
@@ -312,7 +334,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     aiConfig,
     { fileName, pageCount: extracted.pageCount ?? undefined },
     {
-      evidence: { detectedBalances, regionLines, candidateSummaries, creditCardInterestFees },
+      evidence: { detectedBalances, regionLines, candidateSummaries, creditCardInterestFees, blinders },
       images: visionImages,
       renderFailedReason,
       visionSelection,
@@ -321,6 +343,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   let finalStatement = resolved.statement;
   let finalRows = resolved.rows;
   const aiOutcome = resolved.outcome;
+  // Safe per-image vision evidence metadata (no pixels/text/base64) for diagnostics.
+  aiOutcome.aiVisionEvidence = visionEvidenceMeta;
 
   // Deterministic interest/fee repair for the non-AI path: when AI did not replace
   // the statement (disabled/not adopted) but the parser captured the table and is

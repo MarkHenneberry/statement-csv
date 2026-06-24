@@ -71,6 +71,12 @@ export function buildSafeParseSummary(input: {
     aiItemizedRowCount: o.aiItemizedRowCount,
     aiMissingDateRate: o.aiMissingDateRate,
     aiLargestRowShareOfDebits: o.aiLargestRowShareOfDebits,
+    // Vision evidence quality (safe aggregates; no pixels/text/base64).
+    visionEvidenceCount: o.aiVisionEvidence.length,
+    visionTransactionImageIncluded: o.aiVisionEvidence.some((m) => m.kind === "table-header" || m.kind === "table-body" || m.kind === "final-rows"),
+    visionSummaryImageIncluded: o.aiVisionEvidence.some((m) => m.kind === "summary" || m.kind === "totals"),
+    visionMaxImageBytes: o.aiVisionEvidence.reduce((mx, m) => Math.max(mx, m.byteSize), 0) || null,
+    visionMinImageHeight: o.aiVisionEvidence.length ? Math.min(...o.aiVisionEvidence.map((m) => m.height)) : null,
     renderDurationMs: o.renderDurationMs,
     aiCallDurationMs: o.aiCallDurationMs,
     routeDurationMs: o.routeDurationMs,
