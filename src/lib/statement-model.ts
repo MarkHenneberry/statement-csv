@@ -23,6 +23,7 @@ import {
   LOW_CONFIDENCE_THRESHOLD,
   isAggregateOrPlaceholderDescription,
 } from "./upload.ts";
+import { splitTrailingSpendCategory } from "./parser.ts";
 import type { ParseResult, StatementKind, LayoutFamily, LayoutParseStats } from "./parser.ts";
 
 export type Transaction = {
@@ -359,6 +360,24 @@ export function buildParsedStatement(
   meta: BuildStatementMeta = {},
 ): ParsedStatement {
   const transactions = result.rows.map(transactionFromRow);
+  // Final, conservative metadata cleanup for credit-card spend-category leakage:
+  // when a statement-provided category label trails a real merchant/location
+  // description and the row carries no category yet, move it to the internal
+  // category field and keep the default Description clean. Structure-aware capture
+  // in the coordinate parser already handles most rows (those already have a
+  // category, so this is a no-op there) — this primarily cleans the text-parser
+  // path. It only strips DISTINCTIVE multi-word taxonomy phrases, so genuine
+  // merchant names and city/province text (e.g. "DARTMOUTH NS") are never touched.
+  if (result.statementKind === "credit-card") {
+    for (const t of transactions) {
+      if (t.category && t.category.trim()) continue;
+      const split = splitTrailingSpendCategory(t.description);
+      if (split.category) {
+        t.description = split.description;
+        t.category = split.category;
+      }
+    }
+  }
   const validation = buildValidation(result, transactions);
   return {
     institution: meta.institution,

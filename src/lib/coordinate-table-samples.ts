@@ -53,6 +53,8 @@ export type CoordSample = {
     regionsStitched?: number;
     /** Substrings that must NOT appear in any parsed row description. */
     noDescriptionIncludes?: string[];
+    /** Substrings that MUST each appear in some parsed row description (kept intact). */
+    descriptionIncludes?: string[];
     /** Substrings that MUST appear across the parsed rows' (internal) categories. */
     categoryIncludes?: string[];
     note?: string;
@@ -886,8 +888,38 @@ export const coordinateSamples: CoordSample[] = [
       columnOrder: "date|postDate|description|category|amount",
       statementKind: "credit-card",
       noDescriptionIncludes: ["Retail and Grocery", "Restaurants", "Total charges", "Total credits"],
+      descriptionIncludes: ["GROCERY STORE", "DINER 88"],
       categoryIncludes: ["Retail and Grocery", "Restaurants", "Payments"],
       note: "Spend Categories captured internally not merged; 'Total charges'/'Total credits' summary detected, not rows",
+    },
+  },
+
+  // AA. CC with Reference + Type metadata columns: both must be excluded from the
+  // Description (no model field for them, so they are simply not merged). Merchant
+  // + city/province text must remain intact. Generic metadata-column handling.
+  {
+    name: "AA-cc-reference-and-type-columns",
+    description: "Trans Date | Description | Reference | Type | Amount; metadata columns kept out of Description",
+    rows: [
+      [["Some Bank Visa", 50]],
+      [["Previous Balance", 50], ["$0.00", 580]],
+      [["Trans Date", 50], ["Description", 200], ["Reference", 380], ["Type", 480], ["Amount", 580]],
+      [["JAN 05", 50], ["COFFEE SHOP HALIFAX NS", 200], ["0001234567", 380], ["Purchase", 480], ["4.50", 580]],
+      [["JAN 06", 50], ["GROCERY MART DARTMOUTH NS", 200], ["0007654321", 380], ["Purchase", 480], ["95.50", 580]],
+      [["New Balance", 50], ["$100.00", 580]],
+    ],
+    expect: {
+      rows: 2,
+      opening: 0,
+      closing: 100,
+      totalCredits: 0,
+      totalDebits: 100,
+      balancePasses: true,
+      columnOrder: "date|description|reference|type|amount",
+      statementKind: "credit-card",
+      noDescriptionIncludes: ["0001234567", "0007654321", "Purchase"],
+      descriptionIncludes: ["COFFEE SHOP HALIFAX NS", "GROCERY MART DARTMOUTH NS"],
+      note: "Reference + Type metadata columns excluded from Description; HALIFAX NS / DARTMOUTH NS preserved",
     },
   },
 ];

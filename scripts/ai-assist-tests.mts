@@ -26,6 +26,7 @@ import {
 import { detectCreditCardInterestFees } from "../src/lib/parser.ts";
 import {
   buildStatementFromRows,
+  parsedStatementToRows,
   type ParsedStatement,
 } from "../src/lib/statement-model.ts";
 import type { TransactionRow } from "../src/lib/upload.ts";
@@ -1415,6 +1416,42 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   check("default CSV excludes Category even when rows have a category", !/Category/.test(defaultCsv.split("\r\n")[0]) && !/Retail and Grocery/.test(defaultCsv));
   const optInCsv = rowsToCsv(withCat, { includeCategory: true });
   check("opt-in CSV includes Category when explicitly enabled", /Category/.test(optInCsv.split("\r\n")[0]) && /Retail and Grocery/.test(optInCsv));
+}
+
+// ----- text-path metadata cleanup chokepoint (credit-card, structure-imperfect) -----
+{
+  // Credit-card rows whose Description still carries a trailing statement-provided
+  // category (the text-parser path can't separate columns) are cleaned at model
+  // build time and the category is preserved internally. City/province stays put.
+  const s = cc(
+    [
+      row({ description: "GOOGLE *Google One HALIFAX NS Professional and Financial Services", debit: 9.99 }),
+      row({ description: "WAL-MART #1176 DARTMOUTH NS Retail and Grocery", debit: 50.01 }),
+      row({ description: "PAYMENT THANK YOU", credit: 60 }),
+    ],
+    100,
+    100,
+  );
+  const t0 = s.transactions[0];
+  const t1 = s.transactions[1];
+  check("text-path: trailing category stripped from description", t0.description === "GOOGLE *Google One HALIFAX NS", t0.description);
+  check("text-path: city/province retained in description", /HALIFAX NS/.test(t0.description) && /DARTMOUTH NS/.test(t1.description));
+  check("text-path: category preserved internally", t0.category === "Professional and Financial Services", t0.category ?? "");
+  check("text-path: second row cleaned + category kept", t1.description === "WAL-MART #1176 DARTMOUTH NS" && t1.category === "Retail and Grocery", `${t1.description} | ${t1.category}`);
+  check("text-path: merchant-only row untouched", s.transactions[2].description === "PAYMENT THANK YOU");
+
+  // Default CSV/Excel must NOT carry the captured category (no regression).
+  const csvRows = parsedStatementToRows(s);
+  const csv = rowsToCsv(csvRows);
+  check("default CSV header excludes Category (metadata preserved internally only)", csv.split("\r\n")[0] === "Date,Description,Debit,Credit,Amount,Balance");
+  check("default CSV body excludes the captured category text", !/Professional and Financial Services|Retail and Grocery/.test(csv));
+  check("opt-in CSV includes the captured category", /Retail and Grocery/.test(rowsToCsv(csvRows, { includeCategory: true })));
+
+  // A bank-account statement is NOT subjected to spend-category stripping (spend
+  // categories are a credit-card construct): a merchant name that happens to END in
+  // a category-like phrase is left fully intact.
+  const b = bank([row({ description: "ACME PERSONAL AND HOUSEHOLD EXPENSES", credit: 100, balance: 200 })], 100, 200);
+  check("bank-account descriptions are not category-stripped", b.transactions[0].description === "ACME PERSONAL AND HOUSEHOLD EXPENSES" && (b.transactions[0].category ?? "") === "");
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

@@ -43,6 +43,11 @@ for (const sample of coordinateSamples) {
   const categoryMisses = (e.categoryIncludes ?? []).filter(
     (sub) => !parsed.rows.some((r) => (r.category ?? "").includes(sub)),
   );
+  // Every expected description substring must remain in some row (merchant + city/
+  // province text is never clipped by metadata-column handling).
+  const descMisses = (e.descriptionIncludes ?? []).filter(
+    (sub) => !parsed.rows.some((r) => r.description.includes(sub)),
+  );
 
   const checks: [string, boolean][] = [
     ["source", ps?.chosenCandidateSource === expectedSource],
@@ -57,6 +62,7 @@ for (const sample of coordinateSamples) {
     ["columnOrder", expectedSource !== "coordinate-table" || ps?.coordColumnOrder === e.columnOrder],
     ["noSummaryInDesc", descViolations.length === 0],
     ["categoryCaptured", categoryMisses.length === 0],
+    ["descriptionKept", descMisses.length === 0],
     ["stitched", e.stitched === undefined || ps?.coordStitched === e.stitched],
     [
       "regionsStitched",

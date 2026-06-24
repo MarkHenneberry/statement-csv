@@ -49,7 +49,10 @@ export type VisualLine = {
   text: string; // full reconstructed line text
 };
 
-// Normalized column meanings the table mapper targets.
+// Normalized column meanings the table mapper targets. "category" is captured into
+// the (internal) category field; "reference"/"type"/"metadata" are statement-
+// provided columns that are detected ONLY so their values are kept OUT of the
+// Description (they are not captured into the model and never exported by default).
 export type ColumnMeaning =
   | "date"
   | "postDate"
@@ -58,7 +61,10 @@ export type ColumnMeaning =
   | "credit"
   | "amount"
   | "balance"
-  | "category";
+  | "category"
+  | "reference"
+  | "type"
+  | "metadata";
 
 export type TableColumn = {
   meaning: ColumnMeaning;
@@ -175,7 +181,22 @@ const HEADER_PATTERNS: { meaning: ColumnMeaning; re: RegExp }[] = [
   },
   { meaning: "amount", re: /^(amount\s*\(\s*\$\s*\)|amount\s*\$|amount)$/ },
   { meaning: "balance", re: /^(running balance|balance)$/ },
-  { meaning: "category", re: /^(spend categories|categories|category)$/ },
+  // Statement-provided metadata columns. Detected so their values stay OUT of the
+  // Description. Anchored exact phrases (label families, not bank-specific strings)
+  // so a real merchant/description header is never misread as metadata.
+  {
+    meaning: "category",
+    re: /^(spend categor(?:y|ies)|merchant categor(?:y|ies)|transaction categor(?:y|ies)|categor(?:y|ies))$/,
+  },
+  {
+    meaning: "reference",
+    re: /^(reference(?:\s*(?:number|no\.?|#))?|ref(?:erence)?\.?\s*(?:no\.?|#)|ref\.?\s*#?)$/,
+  },
+  { meaning: "type", re: /^(transaction type|trans\.? type|tran\.? type|type)$/ },
+  {
+    meaning: "metadata",
+    re: /^(rewards?|reward (?:points?|indicator)|points?|points? earned|card\s*(?:number|no\.?|#)|account\s*(?:number|no\.?|#)|budget|difference|year[-\s]?to[-\s]?date|ytd)$/,
+  },
 ];
 
 /**
@@ -1163,7 +1184,13 @@ function meaningSet(cols: TableColumn[]): string {
 // Columns that carry the reconciliation-relevant meaning. Optional columns
 // (category / reference / postDate) may appear on one page but not another and
 // must NOT block stitching of an otherwise-identical table.
-const OPTIONAL_MEANINGS = new Set<ColumnMeaning>(["category", "postDate"]);
+const OPTIONAL_MEANINGS = new Set<ColumnMeaning>([
+  "category",
+  "postDate",
+  "reference",
+  "type",
+  "metadata",
+]);
 
 /** Do shared columns sit at similar x-centers (same physical layout)? */
 function centersAlign(a: TableColumn[], b: TableColumn[], tol = 30): boolean {

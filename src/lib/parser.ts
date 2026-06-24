@@ -316,6 +316,7 @@ const SPEND_CATEGORY_PHRASES = [
   "personal and household expenses",
   "personal and household",
   "hotel, entertainment and recreation",
+  "hotel entertainment and recreation",
   "entertainment and recreation",
   "home and office improvement",
   "home and office",
