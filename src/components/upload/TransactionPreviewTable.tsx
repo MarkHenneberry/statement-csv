@@ -16,7 +16,7 @@ function parseNumber(value: string): number | null {
 }
 
 const cellInput =
-  "w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm text-slate-800 focus:border-brand-300 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-200";
+  "w-full rounded-md border border-transparent bg-transparent px-1.5 py-0.5 text-sm text-slate-800 focus:border-brand-300 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-200";
 
 function TextCell({
   value,
@@ -134,12 +134,12 @@ export function TransactionPreviewTable({
             </colgroup>
             <thead>
               <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
-                <th className="px-1.5 py-1.5" aria-label="Status" />
-                <th className="px-1.5 py-1.5 font-medium">Date</th>
-                <th className="px-1.5 py-1.5 font-medium">Description</th>
-                <th className="px-1.5 py-1.5 text-right font-medium">Debit</th>
-                <th className="px-1.5 py-1.5 text-right font-medium">Credit</th>
-                <th className="px-1.5 py-1.5 text-right font-medium">
+                <th className="px-1.5 py-1" aria-label="Status" />
+                <th className="px-1.5 py-1 font-medium">Date</th>
+                <th className="px-1.5 py-1 font-medium">Description</th>
+                <th className="px-1.5 py-1 text-right font-medium">Debit</th>
+                <th className="px-1.5 py-1 text-right font-medium">Credit</th>
+                <th className="px-1.5 py-1 text-right font-medium">
                   <span
                     className="inline-flex cursor-help items-center gap-1"
                     title="Calculated from debit/credit"
@@ -150,9 +150,9 @@ export function TransactionPreviewTable({
                     </svg>
                   </span>
                 </th>
-                <th className="px-1.5 py-1.5 text-right font-medium">Balance</th>
-                {showCategory ? <th className="px-1.5 py-1.5 font-medium">Category</th> : null}
-                <th className="px-1.5 py-1.5" aria-label="Actions" />
+                <th className="px-1.5 py-1 text-right font-medium">Balance</th>
+                {showCategory ? <th className="px-1.5 py-1 font-medium">Category</th> : null}
+                <th className="px-1.5 py-1" aria-label="Actions" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -165,7 +165,7 @@ export function TransactionPreviewTable({
                     key={row.id}
                     className={flagged ? "bg-amber-50/60" : "hover:bg-slate-50/60"}
                   >
-                    <td className="px-1.5 py-1 align-top">
+                    <td className="px-1.5 py-0.5 align-top">
                       {flagged ? (
                         <span
                           className="inline-flex h-5 w-5 items-center justify-center text-amber-500"
@@ -182,7 +182,7 @@ export function TransactionPreviewTable({
                         </span>
                       ) : null}
                     </td>
-                    <td className="px-1 py-1 align-top">
+                    <td className="px-1 py-0.5 align-top">
                       <TextCell
                         ariaLabel="Date"
                         value={row.date}
@@ -192,7 +192,7 @@ export function TransactionPreviewTable({
                         onChange={(v) => onUpdate(row.id, { date: v })}
                       />
                     </td>
-                    <td className="px-1 py-1 align-top">
+                    <td className="px-1 py-0.5 align-top">
                       <TextCell
                         ariaLabel="Description"
                         value={row.description}
@@ -207,7 +207,7 @@ export function TransactionPreviewTable({
                         </p>
                       ) : null}
                     </td>
-                    <td className="px-1 py-1 align-top">
+                    <td className="px-1 py-0.5 align-top">
                       <NumberCell
                         ariaLabel="Debit"
                         value={row.debit}
@@ -217,7 +217,7 @@ export function TransactionPreviewTable({
                         }
                       />
                     </td>
-                    <td className="px-1 py-1 align-top">
+                    <td className="px-1 py-0.5 align-top">
                       <NumberCell
                         ariaLabel="Credit"
                         value={row.credit}
@@ -227,7 +227,7 @@ export function TransactionPreviewTable({
                         }
                       />
                     </td>
-                    <td className="px-1.5 py-1 align-top">
+                    <td className="px-1.5 py-0.5 align-top">
                       <div
                         className="flex items-center justify-end gap-1 rounded-md bg-slate-50 px-2 py-1 text-sm tabular-nums text-slate-500"
                         title="Calculated from debit/credit"
@@ -239,7 +239,7 @@ export function TransactionPreviewTable({
                         {formatMoney(amount)}
                       </div>
                     </td>
-                    <td className="px-1 py-1 align-top">
+                    <td className="px-1 py-0.5 align-top">
                       <NumberCell
                         ariaLabel="Balance"
                         value={row.balance}
@@ -247,7 +247,7 @@ export function TransactionPreviewTable({
                       />
                     </td>
                     {showCategory ? (
-                      <td className="px-1 py-1 align-top">
+                      <td className="px-1 py-0.5 align-top">
                         <TextCell
                           ariaLabel="Category"
                           value={row.category}

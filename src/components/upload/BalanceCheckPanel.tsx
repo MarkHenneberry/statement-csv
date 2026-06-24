@@ -11,7 +11,7 @@ function Line({
   strong?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 py-1.5 text-sm">
+    <div className="flex items-center justify-between gap-3 py-1 text-xs">
       <span className={strong ? "font-medium text-slate-900" : "text-slate-600"}>
         {label}
       </span>
@@ -46,18 +46,18 @@ export function BalanceCheckPanel({
   }[status];
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="flex items-center justify-between">
+    <div className="rounded-lg border border-slate-200 bg-white p-3">
+      <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-slate-900">Balance checks</h3>
         <span
-          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${badge.tone}`}
+          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${badge.tone}`}
         >
           <span className={`h-1.5 w-1.5 rounded-full ${badge.dot}`} />
           {badge.label}
         </span>
       </div>
 
-      <div className="mt-3 divide-y divide-slate-100">
+      <div className="mt-2 divide-y divide-slate-100">
         <Line label="Opening balance" value={formatMoney(check.openingBalance)} />
         <Line label="Total credits" value={formatMoney(check.totalCredits)} />
         <Line label="Total debits" value={formatMoney(check.totalDebits)} />
@@ -73,7 +73,7 @@ export function BalanceCheckPanel({
         <Line label="Difference" value={formatMoney(difference)} strong />
       </div>
 
-      <p className="mt-4 text-xs leading-relaxed text-slate-500">
+      <p className="mt-3 text-xs leading-snug text-slate-500">
         Balance checks help catch missing or misread transactions before export.
         {status === "limited"
           ? " Opening or closing balance was not found, so this check is limited. Review the rows carefully."

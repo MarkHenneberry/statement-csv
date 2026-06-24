@@ -58,18 +58,18 @@ export function StatementSummary({
     : null;
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="text-xs font-medium uppercase tracking-wide text-brand-600">
             Statement summary
           </p>
-          <p className="mt-0.5 truncate text-base font-semibold text-slate-900">
+          <p className="mt-0.5 truncate text-sm font-semibold text-slate-900">
             {fileName}
           </p>
         </div>
         <span
-          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium ${
+          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${
             stateBadge ? stateBadge.tone : badge.tone
           }`}
         >
@@ -78,7 +78,7 @@ export function StatementSummary({
         </span>
       </div>
 
-      <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+      <dl className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
         <Stat
           label="Source"
           value={source === "real-parser" ? "Real parser" : "Sample data"}

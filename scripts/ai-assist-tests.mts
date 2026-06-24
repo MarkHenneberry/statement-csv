@@ -1270,10 +1270,30 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   check("table date column has a stable width >= 100px", /w-\[10[0-9]px\]|w-\[1[1-9][0-9]px\]/.test(tableSrc));
   check("table does not show category by default (prop default false)", /showCategory = false/.test(tableSrc));
 
+  // Description is the only flexible (width-less) column; every numeric column has
+  // a fixed width so money/date never get squeezed below their content.
+  const colMatches = tableSrc.match(/<col[^>]*\/>/g) ?? [];
+  const widthlessCols = colMatches.filter((c) => !/w-/.test(c));
+  check("description is the single flexible column", widthlessCols.length === 1);
+  check("money/date columns use fixed widths (no truncate classes on cells)", !/\btruncate\b/.test(tableSrc) && !/overflow-hidden/.test(tableSrc));
+
   // Excel export columns exclude Category by default (source-level guard).
   const exportSrc = readFileSync("src/components/upload/TransactionExportButtons.tsx", "utf8");
   check("Excel export gates Category behind includeCategory", /includeCategory\s*\?/.test(exportSrc) && /header: "Category"/.test(exportSrc));
   check("Excel export never includes a Confidence column", !/header: "Confidence"/i.test(exportSrc));
+}
+
+// ----- review layout: balance panel stays beside the table on desktop -----
+{
+  const flowSrc = readFileSync("src/components/upload/UploadFlow.tsx", "utf8");
+  check("table + balance use a desktop side-by-side row (lg:flex-row)", /lg:flex-row/.test(flowSrc));
+  check("balance panel is a compact fixed-width sidebar on desktop", /lg:w-\[2[0-9][0-9]px\]/.test(flowSrc));
+  check("table region can shrink safely (min-w-0 flex-1)", /min-w-0 flex-1/.test(flowSrc));
+  check("review wrapper uses tighter spacing (space-y-3)", /space-y-3/.test(flowSrc));
+
+  const pageSrc = readFileSync("src/app/upload/page.tsx", "utf8");
+  check("conversion page uses the wide review container", /size="review"/.test(pageSrc));
+  check("conversion page uses tighter review padding", /py-6/.test(pageSrc));
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

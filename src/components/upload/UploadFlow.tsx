@@ -304,9 +304,9 @@ export function UploadFlow() {
     }
 
     return (
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h1 className="text-lg font-bold tracking-tight text-slate-900 sm:text-xl">
             Review your conversion
           </h1>
           <div className="flex items-center gap-2">
@@ -314,7 +314,7 @@ export function UploadFlow() {
               <button
                 type="button"
                 onClick={loadSample}
-                className="text-sm font-medium text-slate-500 transition hover:text-slate-800"
+                className="text-xs font-medium text-slate-500 transition hover:text-slate-800"
               >
                 Load sample preview
               </button>
@@ -322,7 +322,7 @@ export function UploadFlow() {
             <button
               type="button"
               onClick={resetAll}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
             >
               <span aria-hidden="true">&larr;</span> Convert another statement
             </button>
@@ -401,11 +401,11 @@ export function UploadFlow() {
             tone === "safe" ? "Ready to export" : tone === "neutral" ? "Download preview" : "Review before export";
           return (
             <div
-              className={`flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between ${container}`}
+              className={`flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between ${container}`}
             >
               <div className="max-w-xl">
                 <p className={`text-sm font-semibold ${titleColor}`}>{heading}</p>
-                <p className={`mt-0.5 text-sm ${noteColor}`}>{presentation.exportNote}</p>
+                <p className={`mt-0.5 text-xs ${noteColor}`}>{presentation.exportNote}</p>
               </div>
               <TransactionExportButtons
                 rows={rows}
@@ -416,11 +416,11 @@ export function UploadFlow() {
           );
         })()}
 
-        {/* Table gets priority width; the balance panel is a compact fixed-width
-            sidebar that stacks BELOW the table on narrower screens (so the table
-            never gets squeezed into horizontal scroll). min-w-0 lets the table's
-            own overflow handling work inside the flex row. */}
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
+        {/* Desktop: table on the left, a compact fixed-width balance panel on the
+            right (kept beside the table from the `lg` breakpoint up). It only stacks
+            below the table on smaller screens. min-w-0 lets the table's own
+            overflow handling work inside the flex row. */}
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
           <div className="min-w-0 flex-1">
             <TransactionPreviewTable
               rows={rows}
@@ -430,7 +430,7 @@ export function UploadFlow() {
               showCategory={false}
             />
           </div>
-          <div className="w-full xl:w-[280px] xl:flex-none">
+          <div className="w-full lg:w-[260px] lg:flex-none">
             <BalanceCheckPanel check={check} validationStatus={validationStatus} />
           </div>
         </div>
@@ -442,8 +442,8 @@ export function UploadFlow() {
           deposits, payments, or refunds.
         </p>
 
-        <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="max-w-xl text-sm text-slate-600">
+        <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="max-w-xl text-xs text-slate-600">
             Export the reviewed rows as a CSV or Excel file for spreadsheets, bookkeeping,
             or accounting software. Nothing is uploaded or stored.
           </p>
