@@ -26,6 +26,9 @@ const config: Config = {
         // Wider container for the conversion/review flow so the transaction table
         // can span most of a normal desktop without horizontal scrolling.
         wide: "90rem",
+        // Even wider for the review page so the spreadsheet-style table + a compact
+        // balance sidebar both fit without clipping money/date columns.
+        review: "100rem",
       },
     },
   },

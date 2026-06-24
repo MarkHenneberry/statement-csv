@@ -2,7 +2,6 @@
 
 import {
   TransactionRow,
-  LOW_CONFIDENCE_THRESHOLD,
   deriveAmount,
   formatMoney,
   getRowWarnings,
@@ -14,12 +13,6 @@ function parseNumber(value: string): number | null {
   if (value.trim() === "") return null;
   const n = Number(value);
   return Number.isNaN(n) ? null : n;
-}
-
-function confidenceTone(confidence: number): string {
-  if (confidence >= 0.9) return "bg-emerald-50 text-emerald-700";
-  if (confidence >= LOW_CONFIDENCE_THRESHOLD) return "bg-slate-100 text-slate-600";
-  return "bg-amber-100 text-amber-800";
 }
 
 const cellInput =
@@ -123,18 +116,20 @@ export function TransactionPreviewTable({
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className={`w-full ${showCategory ? "min-w-[920px]" : "min-w-[760px]"} table-fixed border-collapse text-sm`}>
+          <table className={`w-full ${showCategory ? "min-w-[800px]" : "min-w-[680px]"} table-fixed border-collapse text-sm`}>
             <colgroup>
-              <col className="w-7" />
+              <col className="w-6" />
+              {/* Date: stable width that always fits a full YYYY-MM-DD. */}
               <col className="w-[104px]" />
-              {/* Description has no fixed width, so it absorbs the extra space. */}
+              {/* Description: the only flexible column — absorbs remaining width. */}
               <col />
-              <col className="w-[92px]" />
-              <col className="w-[92px]" />
               <col className="w-[96px]" />
-              <col className="w-[92px]" />
-              {showCategory ? <col className="w-[112px]" /> : null}
-              <col className="w-[56px]" />
+              <col className="w-[96px]" />
+              {/* Amount: fits "-$1,077.06" plus the read-only icon. */}
+              <col className="w-[116px]" />
+              {/* Balance: fits values like "302,242.50". */}
+              <col className="w-[104px]" />
+              {showCategory ? <col className="w-[120px]" /> : null}
               <col className="w-9" />
             </colgroup>
             <thead>
@@ -157,7 +152,6 @@ export function TransactionPreviewTable({
                 </th>
                 <th className="px-1.5 py-1.5 text-right font-medium">Balance</th>
                 {showCategory ? <th className="px-1.5 py-1.5 font-medium">Category</th> : null}
-                <th className="px-1.5 py-1.5 text-right font-medium">Conf.</th>
                 <th className="px-1.5 py-1.5" aria-label="Actions" />
               </tr>
             </thead>
@@ -165,7 +159,6 @@ export function TransactionPreviewTable({
               {rows.map((row) => {
                 const warnings = getRowWarnings(row);
                 const flagged = warnings.length > 0;
-                const lowConfidence = row.confidence < LOW_CONFIDENCE_THRESHOLD;
                 const amount = deriveAmount(row.debit, row.credit);
                 return (
                   <tr
@@ -263,16 +256,6 @@ export function TransactionPreviewTable({
                         />
                       </td>
                     ) : null}
-                    <td className="px-1.5 py-1 text-right align-top">
-                      <span
-                        className={`inline-flex rounded-full px-1.5 py-0.5 text-xs font-medium ${confidenceTone(
-                          row.confidence,
-                        )}`}
-                        title={lowConfidence ? "Low confidence" : undefined}
-                      >
-                        {Math.round(row.confidence * 100)}%
-                      </span>
-                    </td>
                     <td className="px-1.5 py-1 text-right align-top">
                       <button
                         type="button"

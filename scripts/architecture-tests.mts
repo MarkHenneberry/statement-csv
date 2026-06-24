@@ -100,8 +100,10 @@ const SUMMARY_HEAVY_CC = [
   const csv = rowsToCsv(rows);
   check("export rows are derived from model transactions", fromModel.length === statement.transactions.length && rows.length === statement.transactions.length);
   check(
-    "CSV contains only normalized fields, never raw statement lines",
-    csv.startsWith("Date,Description,Debit,Credit,Amount,Balance,Category") &&
+    "CSV contains only normalized core fields, never raw statement lines",
+    csv.startsWith("Date,Description,Debit,Credit,Amount,Balance") &&
+      !/^[^\n]*Category/.test(csv) && // Category excluded from the default export
+      !/^[^\n]*Confidence/i.test(csv) &&
       !csv.includes("Details of your account activity") &&
       !csv.includes("Opening Balance 2,000.00"),
   );

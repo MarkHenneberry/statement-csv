@@ -416,10 +416,12 @@ export function UploadFlow() {
           );
         })()}
 
-        {/* Table gets priority width; the balance panel is a compact sidebar that
-            stacks below on smaller screens. */}
-        <div className="grid gap-4 lg:grid-cols-4">
-          <div className="lg:col-span-3">
+        {/* Table gets priority width; the balance panel is a compact fixed-width
+            sidebar that stacks BELOW the table on narrower screens (so the table
+            never gets squeezed into horizontal scroll). min-w-0 lets the table's
+            own overflow handling work inside the flex row. */}
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
+          <div className="min-w-0 flex-1">
             <TransactionPreviewTable
               rows={rows}
               onUpdate={updateRow}
@@ -428,7 +430,7 @@ export function UploadFlow() {
               showCategory={false}
             />
           </div>
-          <div className="lg:col-span-1">
+          <div className="w-full xl:w-[280px] xl:flex-none">
             <BalanceCheckPanel check={check} validationStatus={validationStatus} />
           </div>
         </div>

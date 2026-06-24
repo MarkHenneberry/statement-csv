@@ -58,15 +58,20 @@ export const PROCESSING_STEPS = [
   "Preparing preview",
 ];
 
-export const CSV_HEADERS = [
+// Core export columns shown by default. Category is intentionally NOT here: AI
+// category suggestions are not a default feature yet, so default exports stay clean.
+export const CORE_CSV_HEADERS = [
   "Date",
   "Description",
   "Debit",
   "Credit",
   "Amount",
   "Balance",
-  "Category",
 ];
+
+// Full header set (adds Category) used only when category export is enabled. Kept
+// so future Plus/Pro category support can opt in without restructuring.
+export const CSV_HEADERS = [...CORE_CSV_HEADERS, "Category"];
 
 let idCounter = 0;
 export function makeRowId(): string {
@@ -311,22 +316,31 @@ function csvNumber(value: number | null): string {
   return value === null || Number.isNaN(value) ? "" : value.toFixed(2);
 }
 
-/** Serialize the current rows to CSV text using the export column order. */
-export function rowsToCsv(rows: TransactionRow[]): string {
-  const lines = [CSV_HEADERS.join(",")];
+/**
+ * Serialize the current rows to CSV text. Category is excluded by default (AI
+ * categorization is not a default feature); pass { includeCategory: true } to add
+ * it when category suggestions/export are enabled. Confidence and internal fields
+ * are never exported.
+ */
+export function rowsToCsv(
+  rows: TransactionRow[],
+  opts: { includeCategory?: boolean } = {},
+): string {
+  const includeCategory = opts.includeCategory ?? false;
+  const headers = includeCategory ? CSV_HEADERS : CORE_CSV_HEADERS;
+  const lines = [headers.join(",")];
   for (const r of rows) {
-    lines.push(
-      [
-        csvCell(r.date),
-        csvCell(r.description),
-        csvNumber(r.debit),
-        csvNumber(r.credit),
-        // Amount always reflects the derived debit/credit value.
-        csvNumber(deriveAmount(r.debit, r.credit)),
-        csvNumber(r.balance),
-        csvCell(r.category),
-      ].join(","),
-    );
+    const cells = [
+      csvCell(r.date),
+      csvCell(r.description),
+      csvNumber(r.debit),
+      csvNumber(r.credit),
+      // Amount always reflects the derived debit/credit value.
+      csvNumber(deriveAmount(r.debit, r.credit)),
+      csvNumber(r.balance),
+    ];
+    if (includeCategory) cells.push(csvCell(r.category));
+    lines.push(cells.join(","));
   }
   return lines.join("\r\n");
 }

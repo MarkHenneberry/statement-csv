@@ -21,7 +21,7 @@ export default function UploadPage() {
   return (
     // Wider, denser container than the marketing pages so the review table can use
     // most of the screen width on desktop.
-    <Container size="wide" className="py-8 sm:py-10">
+    <Container size="review" className="py-6 sm:py-8">
       <UploadFlow />
       <p className="mx-auto mt-10 max-w-2xl text-center text-sm text-slate-500">
         <span className="font-semibold text-slate-700">

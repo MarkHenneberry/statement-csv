@@ -29,7 +29,7 @@ import {
   type ParsedStatement,
 } from "../src/lib/statement-model.ts";
 import type { TransactionRow } from "../src/lib/upload.ts";
-import { computeBalanceCheck, resolveBalanceStatus, getRowWarnings, deriveAmount, countRowWarningSeverity } from "../src/lib/upload.ts";
+import { computeBalanceCheck, resolveBalanceStatus, getRowWarnings, deriveAmount, countRowWarningSeverity, rowsToCsv, CORE_CSV_HEADERS, CSV_HEADERS } from "../src/lib/upload.ts";
 import { conversionPresentation, resolveConversionState, type ConversionInputs } from "../src/lib/conversion-state.ts";
 import { evaluateAiEligibility } from "../src/lib/ai-assist.ts";
 import { recoverDescriptionFromLine, parseDayMonthDate, detectStatementDateContext, resolveDayMonthDate } from "../src/lib/parser.ts";
@@ -1238,6 +1238,42 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
 
   // parseDayMonthDate (legacy MM/DD default) still works for callers without order.
   check("legacy parseDayMonthDate pads + applies year", parseDayMonthDate("3/5", 2025) === "2025-03-05");
+}
+
+// ----- default export columns (no Category / Confidence) -----
+{
+  check("core headers are Date..Balance, no Category", CORE_CSV_HEADERS.join(",") === "Date,Description,Debit,Credit,Amount,Balance");
+  check("full headers add Category (for opt-in)", CSV_HEADERS.includes("Category") && CSV_HEADERS[CSV_HEADERS.length - 1] === "Category");
+
+  const exportRows = [
+    row({ date: "2025-01-02", description: "Grocery Store", debit: 1050.77, credit: null, balance: 37877.88 }),
+    row({ date: "2025-01-05", description: "Payment", debit: null, credit: 5116.81, balance: 302242.5 }),
+  ];
+  const csv = rowsToCsv(exportRows);
+  const header = csv.split("\r\n")[0];
+  check("default CSV header excludes Category", header === "Date,Description,Debit,Credit,Amount,Balance");
+  check("default CSV excludes Confidence", !/confidence/i.test(csv));
+  check("default CSV keeps full YYYY-MM-DD dates", csv.includes("2025-01-02") && csv.includes("2025-01-05"));
+  check("default CSV money is 2-decimal, not clipped", csv.includes("1050.77") && csv.includes("5116.81") && csv.includes("302242.50"));
+  check("default CSV blank for empty debit/credit (not 0)", csv.split("\r\n")[1].split(",")[3] === "");
+
+  // Opt-in keeps category support for future Plus/Pro.
+  const withCat = rowsToCsv([row({ date: "2025-01-02", description: "X", debit: 5, credit: null, category: "Groceries" })], { includeCategory: true });
+  check("opt-in CSV includes Category column + value", withCat.split("\r\n")[0].endsWith(",Category") && /Groceries/.test(withCat));
+}
+
+// ----- review table: no public confidence; date/money widths not truncating -----
+{
+  const tableSrc = readFileSync("src/components/upload/TransactionPreviewTable.tsx", "utf8");
+  check("table does not render a Confidence column", !/Conf\./.test(tableSrc) && !/row\.confidence/.test(tableSrc));
+  check("table date column placeholder supports full YYYY-MM-DD", /YYYY-MM-DD/.test(tableSrc));
+  check("table date column has a stable width >= 100px", /w-\[10[0-9]px\]|w-\[1[1-9][0-9]px\]/.test(tableSrc));
+  check("table does not show category by default (prop default false)", /showCategory = false/.test(tableSrc));
+
+  // Excel export columns exclude Category by default (source-level guard).
+  const exportSrc = readFileSync("src/components/upload/TransactionExportButtons.tsx", "utf8");
+  check("Excel export gates Category behind includeCategory", /includeCategory\s*\?/.test(exportSrc) && /header: "Category"/.test(exportSrc));
+  check("Excel export never includes a Confidence column", !/header: "Confidence"/i.test(exportSrc));
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

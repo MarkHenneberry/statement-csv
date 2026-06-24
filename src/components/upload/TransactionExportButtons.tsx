@@ -30,12 +30,15 @@ export function TransactionExportButtons({
   sourceFileName,
   className = "",
   labelPrefix,
+  includeCategory = false,
 }: {
   rows: TransactionRow[];
   sourceFileName: string;
   className?: string;
   /** Optional label qualifier, e.g. "preview" → "Download preview CSV". */
   labelPrefix?: string;
+  /** Include the Category column (only when category suggestions are enabled). */
+  includeCategory?: boolean;
 }) {
   const [excelBusy, setExcelBusy] = useState(false);
   const disabled = rows.length === 0;
@@ -43,7 +46,7 @@ export function TransactionExportButtons({
 
   function handleCsv() {
     // Pure client-side export — no upload, no storage.
-    const csv = rowsToCsv(rows);
+    const csv = rowsToCsv(rows, { includeCategory });
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     triggerDownload(blob, `${exportBaseName(sourceFileName)}.csv`);
   }
@@ -59,6 +62,8 @@ export function TransactionExportButtons({
       const moneyCell = (v: number | null) =>
         v !== null ? { type: Number, value: v } : null;
 
+      // Core columns match the visible table + the default CSV. Category is added
+      // only when explicitly enabled. Confidence/internal fields are never exported.
       const columns: Column<TransactionRow>[] = [
         { header: "Date", cell: (r) => textCell(r.date) },
         { header: "Description", cell: (r) => textCell(r.description) },
@@ -67,7 +72,9 @@ export function TransactionExportButtons({
         // Amount is derived from debit/credit, identical to the CSV export.
         { header: "Amount", cell: (r) => moneyCell(deriveAmount(r.debit, r.credit)) },
         { header: "Balance", cell: (r) => moneyCell(r.balance) },
-        { header: "Category", cell: (r) => textCell(r.category) },
+        ...(includeCategory
+          ? [{ header: "Category", cell: (r: TransactionRow) => textCell(r.category) }]
+          : []),
       ];
 
       const output = writeXlsxFile(rows, { columns, sheet: "Transactions" });
