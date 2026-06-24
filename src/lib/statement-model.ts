@@ -21,6 +21,7 @@ import {
   blankRow,
   toCents,
   LOW_CONFIDENCE_THRESHOLD,
+  isAggregateOrPlaceholderDescription,
 } from "./upload.ts";
 import type { ParseResult, StatementKind, LayoutFamily, LayoutParseStats } from "./parser.ts";
 
@@ -232,13 +233,29 @@ function buildValidation(
     Math.abs(check.totalCredits) < 0.01 && Math.abs(check.totalDebits) < 0.01;
   const lowRowVsSummary = summaryActivity && rows.length <= 1 && parsedActivityNearZero;
 
-  if (credGross || debGross || lowRowVsSummary) {
+  // A genuinely reconciled, itemized parse: the balances reconcile EXACTLY (diff 0)
+  // against the statement's OWN opening/closing, parsed activity is meaningful (not
+  // the near-zero false-pass shape), and the rows are real itemized transactions
+  // (not aggregate/summary/placeholder plugs). In that case a gap against a
+  // DETECTED summary total is far more likely a mis-detected/partial summary label
+  // (e.g. "Total charges" vs "Total purchases") than missing transactions, so it
+  // must NOT hard-downgrade to needs-review nor carry a "transactions appear to be
+  // missing" issue. This keeps final validation consistent with a selected
+  // candidate that already reconciles. The near-zero / lone-row false-pass shape is
+  // excluded here and still hard-downgraded below.
+  const itemizedCount = transactions.filter(
+    (t) => !isAggregateOrPlaceholderDescription(t.description),
+  ).length;
+  const reconciledItemized =
+    check.available && check.passed && !parsedActivityNearZero && itemizedCount >= 2;
+
+  if (!reconciledItemized && (credGross || debGross || lowRowVsSummary)) {
     // Hard downgrade: never report "passed" when the parse missed the activity
     // the statement summary describes. Forces needs-review and AI fallback.
     status = "needs-review";
     issues.push("Parsed activity does not match the statement summary totals; transactions appear to be missing.");
     confidence = Math.min(confidence, 0.4) - 0.1;
-  } else {
+  } else if (!reconciledItemized) {
     // Minor mismatch (both totals present and close-ish): confidence only.
     if (meaningful(sum.credits) && Math.abs(toCents(check.totalCredits) - toCents(sum.credits)) > 1) {
       issues.push("Parsed credits do not exactly match the statement's summary total.");
@@ -248,6 +265,15 @@ function buildValidation(
       issues.push("Parsed debits do not exactly match the statement's summary total.");
       confidence -= 0.15;
     }
+  } else {
+    // Reconciled itemized parse: balances match the statement exactly. A gap to a
+    // detected summary LABEL is a small confidence acknowledgement only — never a
+    // needs-review downgrade and never a stale "transactions missing" issue.
+    const credSummaryGap =
+      meaningful(sum.credits) && Math.abs(toCents(check.totalCredits) - toCents(sum.credits)) > 1;
+    const debSummaryGap =
+      meaningful(sum.debits) && Math.abs(toCents(check.totalDebits) - toCents(sum.debits)) > 1;
+    if (credSummaryGap || debSummaryGap) confidence -= 0.05;
   }
 
   // Row-level contamination: incomplete or low-confidence rows.

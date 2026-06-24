@@ -24,6 +24,7 @@ import {
   detectBankSummary,
   detectCreditCardSummary,
   cleanDescription,
+  splitTrailingSpendCategory,
   type StatementKind,
   type StatementDateContext,
 } from "./parser.ts";
@@ -833,6 +834,33 @@ function buildRegionRows(
   const cell = (cells: string[], m: ColumnMeaning): string =>
     ci[m] !== undefined ? cells[ci[m]!] : "";
 
+  // Set a row's Description and (internal) category. When the layout has a SEPARATE
+  // category column, its value is already split out by x-position — capture it into
+  // the model (preserved internally; excluded from the default table + export).
+  // When there is NO category column, only for credit-card tables strip a
+  // DISTINCTIVE trailing spend-category phrase that leaked into the description
+  // (structure-aware first; conservative string strip as a fallback). Real merchant
+  // descriptions are left untouched.
+  const setDescriptionAndCategory = (
+    row: TransactionRow,
+    rawDescription: string,
+    categoryCell: string,
+  ) => {
+    const desc = cleanDescription(rawDescription);
+    if (categoryCell) {
+      row.description = desc;
+      row.category = categoryCell;
+      return;
+    }
+    if (region.statementKind === "credit-card") {
+      const split = splitTrailingSpendCategory(desc);
+      row.description = split.description;
+      if (split.category) row.category = split.category;
+      return;
+    }
+    row.description = desc;
+  };
+
   const finalizePending = (amountInfo: { value: number; negative: boolean } | null) => {
     if (pendingDesc.length === 0 && !pendingDate) return;
     // A zero amount is not a transaction (e.g. "Interest Charge on Cash Advances $0.00").
@@ -849,7 +877,7 @@ function buildRegionRows(
     }
     const row = newCoordRow();
     row.date = pendingDate ?? carriedDate ?? "";
-    row.description = cleanDescription(pendingDesc.join(" "));
+    setDescriptionAndCategory(row, pendingDesc.join(" "), "");
     // Single-amount table: sign/CR decides direction (CC charge default = debit);
     // an unsigned payment/credit/refund description is treated as a credit.
     if (region.statementKind === "credit-card") {
@@ -933,7 +961,7 @@ function buildRegionRows(
       if (!dateVal && (descCell || pendingDesc.length)) diag.datelessRowsPromoted += 1;
       row.date = effDate;
       const descParts = [...pendingDesc, descCell].filter(Boolean);
-      row.description = cleanDescription(descParts.join(" "));
+      setDescriptionAndCategory(row, descParts.join(" "), cell(cells, "category"));
       pendingDesc = [];
       pendingDate = null;
 

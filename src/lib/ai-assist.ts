@@ -24,7 +24,11 @@
 // Uses fetch (no SDK dependency). The HTTP call reads the key from process.env at
 // call time and must only run server-side (the API route is runtime "nodejs").
 
-import { LOW_CONFIDENCE_THRESHOLD } from "./upload.ts";
+import {
+  LOW_CONFIDENCE_THRESHOLD,
+  AGGREGATE_DESC_RE,
+  PLACEHOLDER_DESC_RE,
+} from "./upload.ts";
 import {
   buildStatementFromRows,
   parsedStatementToRows,
@@ -809,13 +813,9 @@ export function repairCreditCardInterestFees(
 }
 
 // ----- Candidate quality (anti "fake reconciliation") -----
-
-// Descriptions that name a SUMMARY/TOTAL rather than an itemized transaction.
-const AGGREGATE_DESC_RE =
-  /\bsummary\b|sub-?total|total (?:debits?|credits?|purchases?|payments?|charges?|fees?|interest)\b|aggregate|net (?:purchases|charges)|balance summary|remaining (?:balance|charges|purchases)|purchases?\s*(?:&|and|\/|\\)?\s*charges|charges?\s*(?:&|and|\/|\\)?\s*purchases/i;
-// Descriptions that are PLACEHOLDERS standing in for unextracted rows.
-const PLACEHOLDER_DESC_RE =
-  /\bunspecified\b|missing transactions?|placeholder|other charges|\bvarious\b|miscellaneous|to be determined|\btbd\b|\bn\/a\b|reconcil/i;
+// AGGREGATE_DESC_RE / PLACEHOLDER_DESC_RE are shared with final validation (see
+// upload.ts) so the AI candidate-quality gate and the parser's own validation
+// agree on what counts as a real itemized row.
 
 export type CandidateQualityStatus = "ok" | "rejected" | "not-evaluated";
 

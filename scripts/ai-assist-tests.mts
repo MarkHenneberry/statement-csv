@@ -32,7 +32,8 @@ import type { TransactionRow } from "../src/lib/upload.ts";
 import { computeBalanceCheck, resolveBalanceStatus, getRowWarnings, deriveAmount, countRowWarningSeverity, rowsToCsv, CORE_CSV_HEADERS, CSV_HEADERS } from "../src/lib/upload.ts";
 import { conversionPresentation, resolveConversionState, type ConversionInputs } from "../src/lib/conversion-state.ts";
 import { evaluateAiEligibility } from "../src/lib/ai-assist.ts";
-import { recoverDescriptionFromLine, parseDayMonthDate, detectStatementDateContext, resolveDayMonthDate } from "../src/lib/parser.ts";
+import { recoverDescriptionFromLine, parseDayMonthDate, detectStatementDateContext, resolveDayMonthDate, detectCreditCardSummary, detectCreditCardBalances, splitTrailingSpendCategory } from "../src/lib/parser.ts";
+import { isAggregateOrPlaceholderDescription } from "../src/lib/upload.ts";
 import { resolveCreditCardOpenClose } from "../src/lib/coordinate-table.ts";
 import { detectMeaningfulPages, analyzePreviewLimit } from "../src/lib/free-preview.ts";
 import { shouldShowDiagnostics, buildSafeParseSummary } from "../src/lib/parser-diagnostics.ts";
@@ -1318,6 +1319,102 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
     "review container max-width is a focused ~1120-1240px (70-77.5rem)",
     reviewWidth !== undefined && Number(reviewWidth) >= 70 && Number(reviewWidth) <= 77.5,
   );
+}
+
+// ----- credit-card summary/balance label families (generalized, not bank-specific) -----
+{
+  // "Total charges" + "Total credits" must both resolve (charges == debits family).
+  const s1 = detectCreditCardSummary(["Total charges $3,249.03", "Total credits $2,126.98"]);
+  check("CC summary: 'Total charges' detected as debits", s1.debits === 3249.03, String(s1.debits));
+  check("CC summary: 'Total credits' detected as credits", s1.credits === 2126.98, String(s1.credits));
+
+  // "Payments / Total credits" + "Purchases / Total charges" wording.
+  const s2 = detectCreditCardSummary(["Payments / Credits 2,126.98", "Purchases / Debits 3,249.03"]);
+  check("CC summary: 'Payments / Credits' detected", s2.credits === 2126.98, String(s2.credits));
+  check("CC summary: 'Purchases / Debits' detected", s2.debits === 3249.03, String(s2.debits));
+
+  // A "Minimum payment" line must NOT be mistaken for the payments/credits total.
+  const s3 = detectCreditCardSummary(["Minimum payment $35.00", "Total payments $2,126.98"]);
+  check("CC summary: minimum payment is not the credits total", s3.credits === 2126.98, String(s3.credits));
+
+  // Balance label families: previous/new and statement-balance / amount-due variants.
+  const b1 = detectCreditCardBalances(["Previous balance 82.68", "New balance 1,204.73"]);
+  check("CC balances: previous/new", b1.opening === 82.68 && b1.closing === 1204.73, `${b1.opening}/${b1.closing}`);
+  const b2 = detectCreditCardBalances(["Balance from previous statement $82.68", "Total amount due $1,204.73"]);
+  check("CC balances: 'balance from previous statement' + 'total amount due'", b2.opening === 82.68 && b2.closing === 1204.73, `${b2.opening}/${b2.closing}`);
+  const b3 = detectCreditCardBalances(["Previous balance 82.68", "Minimum payment 35.00", "Statement balance 1,204.73"]);
+  check("CC balances: minimum payment not used as closing", b3.closing === 1204.73, String(b3.closing));
+}
+
+// ----- consistency: reconciled itemized parse stays passed; no stale mismatch issue -----
+{
+  // 3 itemized rows reconcile EXACTLY (82.68 + 3249.03 − 2126.98 = 1204.73), but the
+  // DETECTED summary debit is mis-read (2000). Previously this gross-mismatched to
+  // needs-review with a "transactions appear missing" issue. It must now stay passed.
+  const rows = [
+    row({ description: "GROCERY STORE", debit: 1000 }),
+    row({ description: "DINER 88", debit: 2249.03 }),
+    row({ description: "PAYMENT THANK YOU", credit: 2126.98 }),
+  ];
+  const s = cc(rows, 82.68, 1204.73, { credits: 2126.98, debits: 2000 });
+  check("reconciled itemized CC stays passed despite mis-detected summary debit", s.validation.status === "passed", s.validation.status);
+  check(
+    "reconciled itemized CC does not inherit a stale 'transactions missing' issue",
+    !s.validation.issues.some((i) => /appear to be missing/i.test(i)),
+    s.validation.issues.join(" | "),
+  );
+  check("reconciled itemized CC keeps high confidence", s.validation.confidence >= 0.7, String(s.validation.confidence));
+  // Final user-facing balance status agrees with the selected reconciled candidate.
+  const chk = computeBalanceCheck(82.68, 1204.73, rows, "credit-card");
+  check("conversion balance status agrees (passed)", resolveBalanceStatus(chk, s.validation.status) === "passed");
+  // Parser-verified → AI is skipped entirely.
+  const elig = evaluateAiEligibility(s);
+  check("reconciled itemized CC is parser-verified (AI skipped)", elig.eligible === false && elig.skippedReason === "parser-verified");
+
+  // NEGATIVE control: a near-zero / lone-row parse with meaningful summary is STILL
+  // hard-downgraded (the false-pass guard must remain strict).
+  const falsePass = cc([row({ description: "ON YOUR LAST STATEMENT", debit: null, credit: null })], 1204.73, 1204.73, { credits: 2126.98, debits: 3249.03 });
+  check("near-zero lone-row parse still needs-review", falsePass.validation.status === "needs-review", falsePass.validation.status);
+
+  // NEGATIVE control: a candidate that reconciles via an AGGREGATE 'Total purchases'
+  // plug (not itemized) must NOT be rescued — row quality keeps it needs-review.
+  const aggregate = cc(
+    [row({ description: "PAYMENT THANK YOU", credit: 2126.98 }), row({ description: "Total purchases", debit: 3249.03 })],
+    82.68,
+    1204.73,
+    { credits: 2126.98, debits: 2000 },
+  );
+  check("aggregate-row reconciliation is not verified (row quality)", aggregate.validation.status === "needs-review", aggregate.validation.status);
+}
+
+// ----- statement-provided category / metadata handling -----
+{
+  // Structural-first: ai-assist + validation share the aggregate/placeholder test.
+  check("shared aggregate detector flags 'Total purchases'", isAggregateOrPlaceholderDescription("Total purchases") === true);
+  check("shared aggregate detector ignores a real merchant", isAggregateOrPlaceholderDescription("GROCERY STORE #221") === false);
+
+  // String-strip fallback: a DISTINCTIVE trailing spend-category phrase is removed
+  // from a polluted description and preserved as the category.
+  const a = splitTrailingSpendCategory("GROCERY STORE #221 Retail and Grocery");
+  check("category split: distinctive trailing phrase stripped", a.description === "GROCERY STORE #221" && a.category === "Retail and Grocery", `${a.description} | ${a.category}`);
+  const b = splitTrailingSpendCategory("SHELL 4421 Personal and Household Expenses");
+  check("category split: another distinctive family stripped", b.description === "SHELL 4421" && b.category === "Personal and Household Expenses");
+
+  // Conservative: a real merchant name is never reduced, and an ambiguous SINGLE
+  // word (handled only via a structural column) is NOT string-stripped.
+  const c = splitTrailingSpendCategory("BED BATH AND BEYOND");
+  check("category split: real merchant preserved (no false strip)", c.description === "BED BATH AND BEYOND" && c.category === "");
+  const d = splitTrailingSpendCategory("CITY TRANSIT Restaurants");
+  check("category split: ambiguous single word not string-stripped", d.description === "CITY TRANSIT Restaurants" && d.category === "");
+  const e = splitTrailingSpendCategory("Retail and Grocery");
+  check("category split: category-only description left intact", e.description === "Retail and Grocery" && e.category === "");
+
+  // Category is never in the default CSV/Excel export, even when rows carry one.
+  const withCat = [row({ description: "GROCERY STORE", debit: 50, category: "Retail and Grocery" })];
+  const defaultCsv = rowsToCsv(withCat);
+  check("default CSV excludes Category even when rows have a category", !/Category/.test(defaultCsv.split("\r\n")[0]) && !/Retail and Grocery/.test(defaultCsv));
+  const optInCsv = rowsToCsv(withCat, { includeCategory: true });
+  check("opt-in CSV includes Category when explicitly enabled", /Category/.test(optInCsv.split("\r\n")[0]) && /Retail and Grocery/.test(optInCsv));
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

@@ -53,6 +53,8 @@ export type CoordSample = {
     regionsStitched?: number;
     /** Substrings that must NOT appear in any parsed row description. */
     noDescriptionIncludes?: string[];
+    /** Substrings that MUST appear across the parsed rows' (internal) categories. */
+    categoryIncludes?: string[];
     note?: string;
   };
 };
@@ -181,7 +183,11 @@ export const coordinateSamples: CoordSample[] = [
       balancePasses: true,
       columnOrder: "date|postDate|description|category|amount",
       statementKind: "credit-card",
-      note: "Category column ignored for amounts; payment credit via trailing minus",
+      // Category column is captured INTERNALLY (preserved for future Plus/Pro) and
+      // kept OUT of the Description; amounts come from the Amount column only.
+      noDescriptionIncludes: ["Groceries", "Dining"],
+      categoryIncludes: ["Groceries", "Dining", "Payment"],
+      note: "Category column captured internally, kept out of Description; payment credit via trailing minus",
     },
   },
 
@@ -848,6 +854,40 @@ export const coordinateSamples: CoordSample[] = [
       statementKind: "credit-card",
       noDescriptionIncludes: ["Cash Advances", "Total Debits"],
       note: "DD/MM dates recovered; unsigned PAYMENT is a credit; $0.00 interest line and Total Debits summary ignored",
+    },
+  },
+
+  // Z. CC with a Spend Categories column AND label-family summary totals
+  // ("Total charges" / "Total credits"). The category is captured internally and
+  // kept out of Description; the summary totals are detected (not turned into rows)
+  // and validate against the reconciled itemized rows. A class of statements, not
+  // one bank.
+  {
+    name: "Z-cc-spend-categories-and-summary-labels",
+    description: "Trans Date | Post Date | Description | Spend Categories | Amount; Total charges/credits summary",
+    rows: [
+      [["Some Bank Visa", X.date]],
+      [["Previous Balance", X.date], ["$82.68", X.amount]],
+      [["Trans Date", X.date], ["Post Date", X.postDate], ["Description", X.desc], ["Spend Categories", X.category], ["Amount", X.amount]],
+      [["JAN 05", X.date], ["JAN 06", X.postDate], ["GROCERY STORE", X.desc], ["Retail and Grocery", X.category], ["1,000.00", X.amount]],
+      [["JAN 09", X.date], ["JAN 10", X.postDate], ["DINER 88", X.desc], ["Restaurants", X.category], ["2,249.03", X.amount]],
+      [["JAN 10", X.date], ["JAN 11", X.postDate], ["PAYMENT THANK YOU", X.desc], ["Payments", X.category], ["2,126.98-", X.amount]],
+      [["Total charges", X.date], ["$3,249.03", X.amount]],
+      [["Total credits", X.date], ["$2,126.98", X.amount]],
+      [["New Balance", X.date], ["$1,204.73", X.amount]],
+    ],
+    expect: {
+      rows: 3,
+      opening: 82.68,
+      closing: 1204.73,
+      totalCredits: 2126.98,
+      totalDebits: 3249.03,
+      balancePasses: true,
+      columnOrder: "date|postDate|description|category|amount",
+      statementKind: "credit-card",
+      noDescriptionIncludes: ["Retail and Grocery", "Restaurants", "Total charges", "Total credits"],
+      categoryIncludes: ["Retail and Grocery", "Restaurants", "Payments"],
+      note: "Spend Categories captured internally not merged; 'Total charges'/'Total credits' summary detected, not rows",
     },
   },
 ];

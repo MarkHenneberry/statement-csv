@@ -301,6 +301,55 @@ export function recoverDescriptionFromLine(line: string, dateMatch: string | nul
   return cleanDescription(s);
 }
 
+// Statement-provided SPEND-CATEGORY taxonomy phrases (e.g. a credit card's "Spend
+// Categories" column). DISTINCTIVE multi-word phrases only — every entry is an
+// "X and Y" / multi-token taxonomy label that is extremely unlikely to be the real
+// ending of a merchant name, so stripping it from a polluted Description is safe.
+// Ambiguous single words (e.g. "Restaurants", "Transportation") are intentionally
+// excluded here: they are only separated via a STRUCTURAL category column, never by
+// trailing-string stripping. Generic across issuers, not a single-bank list.
+const SPEND_CATEGORY_PHRASES = [
+  "retail and grocery",
+  "health and education",
+  "professional and financial services",
+  "professional and financial",
+  "personal and household expenses",
+  "personal and household",
+  "hotel, entertainment and recreation",
+  "entertainment and recreation",
+  "home and office improvement",
+  "home and office",
+  "foreign currency transactions",
+  "gas and automotive",
+  "recreation and entertainment",
+];
+
+const TRAILING_SPEND_CATEGORY_RE = new RegExp(
+  `\\s+(${SPEND_CATEGORY_PHRASES.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\s*$`,
+  "i",
+);
+
+/**
+ * Separate a statement-provided spend-category label that leaked onto the END of a
+ * Description (when the layout had no separable category column). Returns the
+ * cleaned description plus the category when a DISTINCTIVE taxonomy phrase is found
+ * trailing real merchant text; otherwise returns the description unchanged with an
+ * empty category. Conservative by design: never strips when little/no merchant text
+ * would remain, so real descriptions are preserved.
+ */
+export function splitTrailingSpendCategory(description: string): {
+  description: string;
+  category: string;
+} {
+  const m = description.match(TRAILING_SPEND_CATEGORY_RE);
+  if (!m || m.index === undefined) return { description, category: "" };
+  const head = description.slice(0, m.index).trim();
+  // Require meaningful merchant text to remain; never reduce a row to (near) empty,
+  // and never strip when the whole description IS just the category label.
+  if (head.length < 3 || !/[A-Za-z]{2,}/.test(head)) return { description, category: "" };
+  return { description: head, category: m[1].trim() };
+}
+
 export type MoneyMatch = { raw: string; value: number; index: number; end: number };
 
 /**
@@ -1424,10 +1473,15 @@ export function detectCreditCardInterestFees(
   return { interestCharged, feesCharged, lineItems };
 }
 
-/** Find the amount on (or just after) a labelled balance line. */
-function findLabeledAmount(lines: string[], labelRe: RegExp): number | null {
+/**
+ * Find the amount on (or just after) a labelled balance line. An optional
+ * `excludeRe` skips lines that also match a confusable label (e.g. when looking
+ * for "payments / total credits", skip "minimum payment" / "payment due" lines).
+ */
+function findLabeledAmount(lines: string[], labelRe: RegExp, excludeRe?: RegExp): number | null {
   for (let i = 0; i < lines.length; i += 1) {
     if (!labelRe.test(lines[i])) continue;
+    if (excludeRe && excludeRe.test(lines[i])) continue;
     // Prefer a dollar amount on the labelled line, then any money value on it
     // (many statements print balances without a "$", e.g. "Previous Balance 1,605.47").
     const onLineDollar = extractMoneyValues(lines[i], { requireDollar: true });
@@ -1451,13 +1505,23 @@ export function detectCreditCardBalances(lines: string[]): {
   opening: number | null;
   closing: number | null;
 } {
+  // OPENING (prior-period balance) label family. Order: most specific first.
   const opening =
     findLabeledAmount(lines, /previous (?:account |statement )?balance/i) ??
-    findLabeledAmount(lines, /previous statement balance/i);
+    findLabeledAmount(lines, /prior (?:account |statement )?balance/i) ??
+    findLabeledAmount(lines, /balance from (?:your )?previous statement/i) ??
+    findLabeledAmount(lines, /opening balance/i);
+  // CLOSING (this-period balance) label family. "new balance" / "total balance"
+  // are the strongest; "statement balance" / "total amount due" are common
+  // alternatives. Exclude minimum/past-due/previous so we never grab those.
+  const CLOSING_EXCLUDE = /minimum|past due|previous|prior|available/i;
   const closing =
-    findLabeledAmount(lines, /\bnew balance\b/i) ??
-    findLabeledAmount(lines, /total account balance/i) ??
-    findLabeledAmount(lines, /total balance/i);
+    findLabeledAmount(lines, /\bnew balance\b/i, CLOSING_EXCLUDE) ??
+    findLabeledAmount(lines, /total account balance/i, CLOSING_EXCLUDE) ??
+    findLabeledAmount(lines, /total balance/i, CLOSING_EXCLUDE) ??
+    findLabeledAmount(lines, /statement balance/i, CLOSING_EXCLUDE) ??
+    findLabeledAmount(lines, /total amount due/i, CLOSING_EXCLUDE) ??
+    findLabeledAmount(lines, /\bbalance due\b/i, CLOSING_EXCLUDE);
   return { opening, closing };
 }
 
@@ -1469,20 +1533,37 @@ export function detectCreditCardSummary(lines: string[]): {
   credits: number | null;
   debits: number | null;
 } {
-  const payments = findLabeledAmount(lines, /your payments|payments? (?:&|and) credits/i);
-  const purchases = findLabeledAmount(lines, /your new charges|new charges (?:&|and) credits|purchases (?:&|and) debits/i);
+  // CREDITS family = payments + credits to the card. Skip "minimum payment" /
+  // "payment due" / remittance lines so a payment-slip figure is never used.
+  const PAYMENT_EXCLUDE =
+    /minimum|payment due|past due|please pay|payment enclosed|payment options|how to|available/i;
+  // DEBITS family = purchases + charges. Exclusions are light (these labels are
+  // rarely confusable) but avoid per-category interest/fee sublabels here.
+  const payments = findLabeledAmount(
+    lines,
+    /your payments|payments? (?:&|and|\/) ?credits/i,
+    PAYMENT_EXCLUDE,
+  );
+  const purchases = findLabeledAmount(
+    lines,
+    /your new charges|new charges (?:&|and|\/) ?credits|purchases (?:&|and|\/) ?debits/i,
+  );
   const interest = findLabeledAmount(lines, /your interest|interest charged/i);
-  // Generic statement-summary labels used by many issuers (e.g. a summary box with
-  // "Total Credits" / "Total Debits" / "Total Payments" / "Total Purchases").
-  // An explicit "Total Debits/Credits" is the AUTHORITATIVE total, so prefer it
-  // over summing component lines (which can be partial). Not bank-specific.
+  // Generic statement-summary labels used by many issuers (a summary box with
+  // "Total Credits"/"Total Payments" and "Total Debits"/"Total Charges"/"Total
+  // Purchases"). An explicit authoritative "Total X" is preferred over summing
+  // component lines (which can be partial). Label families, not bank-specific.
   const totalCreditsLabel =
-    findLabeledAmount(lines, /total credits/i) ?? findLabeledAmount(lines, /total payments/i);
-  const totalDebitsLabel = findLabeledAmount(lines, /total debits/i);
+    findLabeledAmount(lines, /total payments? ?(?:&|and|\/) ?credits/i, PAYMENT_EXCLUDE) ??
+    findLabeledAmount(lines, /total credits/i, PAYMENT_EXCLUDE) ??
+    findLabeledAmount(lines, /total payments?\b/i, PAYMENT_EXCLUDE);
+  const totalDebitsLabel =
+    findLabeledAmount(lines, /total purchases? ?(?:&|and|\/) ?debits?/i) ??
+    findLabeledAmount(lines, /total (?:debits?|charges?|purchases?)\b/i);
   const credits = totalCreditsLabel ?? payments;
   const componentDebits =
     purchases !== null || interest !== null
-      ? (purchases ?? 0) + (interest ?? 0) + (findLabeledAmount(lines, /total purchases/i) ?? 0)
+      ? (purchases ?? 0) + (interest ?? 0)
       : null;
   const debits = totalDebitsLabel ?? componentDebits;
   return { credits, debits };

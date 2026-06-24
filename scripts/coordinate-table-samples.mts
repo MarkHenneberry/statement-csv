@@ -38,6 +38,11 @@ for (const sample of coordinateSamples) {
   const descViolations = (e.noDescriptionIncludes ?? []).filter((sub) =>
     parsed.rows.some((r) => r.description.includes(sub)),
   );
+  // Every expected category substring must be captured on some row's (internal)
+  // category field — confirms a separate category column is preserved, not dropped.
+  const categoryMisses = (e.categoryIncludes ?? []).filter(
+    (sub) => !parsed.rows.some((r) => (r.category ?? "").includes(sub)),
+  );
 
   const checks: [string, boolean][] = [
     ["source", ps?.chosenCandidateSource === expectedSource],
@@ -51,6 +56,7 @@ for (const sample of coordinateSamples) {
     // Column order is only meaningful when a coordinate candidate was chosen.
     ["columnOrder", expectedSource !== "coordinate-table" || ps?.coordColumnOrder === e.columnOrder],
     ["noSummaryInDesc", descViolations.length === 0],
+    ["categoryCaptured", categoryMisses.length === 0],
     ["stitched", e.stitched === undefined || ps?.coordStitched === e.stitched],
     [
       "regionsStitched",

@@ -208,6 +208,26 @@ export function isRowFlagged(row: TransactionRow): boolean {
   return getRowWarnings(row).length > 0;
 }
 
+// Descriptions that name a SUMMARY/TOTAL rather than an itemized transaction
+// (e.g. a "Total purchases" line wrongly captured as a row). Generic across
+// issuers — label families, not bank-specific strings.
+export const AGGREGATE_DESC_RE =
+  /\bsummary\b|sub-?total|total (?:debits?|credits?|purchases?|payments?|charges?|fees?|interest)\b|aggregate|net (?:purchases|charges)|balance summary|remaining (?:balance|charges|purchases)|purchases?\s*(?:&|and|\/|\\)?\s*charges|charges?\s*(?:&|and|\/|\\)?\s*purchases/i;
+// Descriptions that are PLACEHOLDERS standing in for unextracted rows.
+export const PLACEHOLDER_DESC_RE =
+  /\bunspecified\b|missing transactions?|placeholder|other charges|\bvarious\b|miscellaneous|to be determined|\btbd\b|\bn\/a\b|reconcil/i;
+
+/**
+ * True when a description names a summary/total/aggregate or is a placeholder
+ * standing in for unextracted rows — i.e. NOT a real itemized transaction.
+ * Shared by candidate-quality (AI) and final validation so both agree on what an
+ * "itemized" row is.
+ */
+export function isAggregateOrPlaceholderDescription(desc: string | null | undefined): boolean {
+  const s = desc ?? "";
+  return AGGREGATE_DESC_RE.test(s) || PLACEHOLDER_DESC_RE.test(s);
+}
+
 export function countFlaggedRows(rows: TransactionRow[]): number {
   return rows.filter(isRowFlagged).length;
 }
