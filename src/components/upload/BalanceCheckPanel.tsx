@@ -11,7 +11,7 @@ function Line({
   strong?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 py-1 text-xs">
+    <div className="flex items-center justify-between gap-3 py-0.5 text-xs">
       <span className={strong ? "font-medium text-slate-900" : "text-slate-600"}>
         {label}
       </span>
@@ -46,9 +46,9 @@ export function BalanceCheckPanel({
   }[status];
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-3">
+    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-slate-900">Balance checks</h3>
+        <h3 className="text-xs font-semibold text-slate-900">Balance checks</h3>
         <span
           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${badge.tone}`}
         >
@@ -73,7 +73,7 @@ export function BalanceCheckPanel({
         <Line label="Difference" value={formatMoney(difference)} strong />
       </div>
 
-      <p className="mt-3 text-xs leading-snug text-slate-500">
+      <p className="mt-2.5 text-[11px] leading-snug text-slate-500">
         Balance checks help catch missing or misread transactions before export.
         {status === "limited"
           ? " Opening or closing balance was not found, so this check is limited. Review the rows carefully."

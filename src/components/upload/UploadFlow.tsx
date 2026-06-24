@@ -304,9 +304,9 @@ export function UploadFlow() {
     }
 
     return (
-      <div className="space-y-3">
+      <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h1 className="text-lg font-bold tracking-tight text-slate-900 sm:text-xl">
+          <h1 className="text-base font-bold tracking-tight text-slate-900 sm:text-lg">
             Review your conversion
           </h1>
           <div className="flex items-center gap-2">
@@ -322,7 +322,7 @@ export function UploadFlow() {
             <button
               type="button"
               onClick={resetAll}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
             >
               <span aria-hidden="true">&larr;</span> Convert another statement
             </button>
@@ -330,7 +330,7 @@ export function UploadFlow() {
         </div>
 
         {meta.source === "mock-fallback" ? (
-          <UploadWarning variant="info" title="Showing sample data">
+          <UploadWarning variant="info" title="Showing sample data" dense>
             This is example data, not your statement. Use it to explore the preview,
             editing, and CSV export.
           </UploadWarning>
@@ -345,10 +345,10 @@ export function UploadFlow() {
               presentation.state === "review-recommended") &&
             reviewReasons.length > 0;
           return (
-            <UploadWarning variant={presentation.bannerVariant} title={presentation.bannerTitle}>
+            <UploadWarning variant={presentation.bannerVariant} title={presentation.bannerTitle} dense>
               <p>{presentation.bannerBody}</p>
               {presentation.secondaryCopy ? (
-                <p className="mt-1 text-sm opacity-90">{presentation.secondaryCopy}</p>
+                <p className="mt-1 text-xs opacity-90">{presentation.secondaryCopy}</p>
               ) : null}
               {rows.length === 0 && presentation.state !== "unsupported" ? (
                 <p className="mt-1">
@@ -401,7 +401,7 @@ export function UploadFlow() {
             tone === "safe" ? "Ready to export" : tone === "neutral" ? "Download preview" : "Review before export";
           return (
             <div
-              className={`flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between ${container}`}
+              className={`flex flex-col gap-2 rounded-lg border p-2.5 sm:flex-row sm:items-center sm:justify-between ${container}`}
             >
               <div className="max-w-xl">
                 <p className={`text-sm font-semibold ${titleColor}`}>{heading}</p>
@@ -420,7 +420,7 @@ export function UploadFlow() {
             right (kept beside the table from the `lg` breakpoint up). It only stacks
             below the table on smaller screens. min-w-0 lets the table's own
             overflow handling work inside the flex row. */}
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
+        <div className="flex flex-col gap-2.5 lg:flex-row lg:items-start">
           <div className="min-w-0 flex-1">
             <TransactionPreviewTable
               rows={rows}
@@ -428,21 +428,24 @@ export function UploadFlow() {
               onDelete={deleteRow}
               onAdd={addRow}
               showCategory={false}
+              // Balance stays out of the visible table (the panel beside it shows
+              // the balance verification); it remains in the CSV/Excel export.
+              showBalance={false}
             />
           </div>
-          <div className="w-full lg:w-[260px] lg:flex-none">
+          <div className="w-full lg:w-[230px] lg:flex-none">
             <BalanceCheckPanel check={check} validationStatus={validationStatus} />
           </div>
         </div>
 
-        <p className="text-xs leading-relaxed text-slate-500">
+        <p className="text-[11px] leading-snug text-slate-500">
           <span className="font-medium text-slate-600">Debit</span> means money out, such as
           purchases, withdrawals, fees, or charges.{" "}
           <span className="font-medium text-slate-600">Credit</span> means money in, such as
           deposits, payments, or refunds.
         </p>
 
-        <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5 sm:flex-row sm:items-center sm:justify-between">
           <p className="max-w-xl text-xs text-slate-600">
             Export the reviewed rows as a CSV or Excel file for spreadsheets, bookkeeping,
             or accounting software. Nothing is uploaded or stored.

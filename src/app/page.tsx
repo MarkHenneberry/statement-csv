@@ -96,6 +96,7 @@ export default function HomePage() {
           eyebrow="What it does"
           title="Turn Canadian statements into clean transaction data"
           description="Upload a Canadian bank or credit card statement and turn it into a clean table of transactions. The converter extracts dates, descriptions, debits, credits, balances, and amounts, then exports the result as CSV or Excel. It is built for bank statements, not generic PDFs, so it focuses on transaction rows and common Canadian statement patterns like Interac e-Transfers."
+          centered
         />
         <div className="mx-auto mt-10 max-w-4xl">
           <OutputColumnsExample
@@ -153,6 +154,7 @@ export default function HomePage() {
           eyebrow="What your CSV includes"
           title="Clean, structured transaction data"
           description="Each statement is turned into tidy rows and columns you can sort, filter, and total."
+          centered
         />
         <div className="mt-12">
           <FeatureCards items={csvIncludes} columns={4} />
@@ -201,7 +203,7 @@ DEPOSIT 2,000.00 3,240.10`}
         </div>
       </Section>
 
-      <BuiltForBankStatementsBlock muted />
+      <BuiltForBankStatementsBlock muted centered />
 
       <DataRetentionTrustBlock />
 
@@ -230,6 +232,7 @@ DEPOSIT 2,000.00 3,240.10`}
           eyebrow="Supported statement types"
           title="Built for Canadian statements first"
           description="Designed for RBC, TD, BMO, CIBC, Scotiabank, credit unions, and more. It supports common Canadian bank and credit-card statement patterns and works best with digital, text-based PDFs where the transaction text is selectable. When a statement needs review, we show it clearly before export."
+          centered
         />
         <div className="mt-12">
           <FeatureCards items={supportedTypes} columns={3} />

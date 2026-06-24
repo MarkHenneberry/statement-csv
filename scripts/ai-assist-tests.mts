@@ -1269,6 +1269,17 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   check("table date column placeholder supports full YYYY-MM-DD", /YYYY-MM-DD/.test(tableSrc));
   check("table date column has a stable width >= 100px", /w-\[10[0-9]px\]|w-\[1[1-9][0-9]px\]/.test(tableSrc));
   check("table does not show category by default (prop default false)", /showCategory = false/.test(tableSrc));
+  // Balance is hidden from the visible table by default (width relief); it stays in
+  // the data model + exports. Gated behind showBalance, default false.
+  check("table hides Balance column by default (showBalance default false)", /showBalance = false/.test(tableSrc) && /showBalance \? \(/.test(tableSrc));
+  // Compact scale: cells and the table body render at text-xs (not the larger text-sm).
+  const cellInputDecl = tableSrc.match(/const cellInput =\s*"[^"]*"/)?.[0] ?? "";
+  check(
+    "table body uses compact text-xs (not text-sm)",
+    /table-fixed border-collapse text-xs/.test(tableSrc) &&
+      /text-xs/.test(cellInputDecl) &&
+      !/text-sm/.test(cellInputDecl),
+  );
 
   // Description is the only flexible (width-less) column; every numeric column has
   // a fixed width so money/date never get squeezed below their content.
@@ -1288,12 +1299,25 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   const flowSrc = readFileSync("src/components/upload/UploadFlow.tsx", "utf8");
   check("table + balance use a desktop side-by-side row (lg:flex-row)", /lg:flex-row/.test(flowSrc));
   check("balance panel is a compact fixed-width sidebar on desktop", /lg:w-\[2[0-9][0-9]px\]/.test(flowSrc));
+  // Compact scale: review banners use the dense UploadWarning variant.
+  check("review result banners use the dense UploadWarning variant", (flowSrc.match(/dense/g) ?? []).length >= 2);
+  const warnSrc = readFileSync("src/components/upload/UploadWarning.tsx", "utf8");
+  check("UploadWarning supports a dense (compact) variant", /dense\?: boolean/.test(warnSrc) && /dense \? "gap-2 rounded-lg p-3"/.test(warnSrc));
   check("table region can shrink safely (min-w-0 flex-1)", /min-w-0 flex-1/.test(flowSrc));
-  check("review wrapper uses tighter spacing (space-y-3)", /space-y-3/.test(flowSrc));
+  check("review wrapper uses tight vertical spacing (space-y-2)", /space-y-2(?![.\d])/.test(flowSrc));
 
   const pageSrc = readFileSync("src/app/upload/page.tsx", "utf8");
   check("conversion page uses the wide review container", /size="review"/.test(pageSrc));
-  check("conversion page uses tighter review padding", /py-6/.test(pageSrc));
+  check("conversion page uses tight review padding (py-4)", /py-4/.test(pageSrc));
+
+  // The review container is a narrow, centered workspace (~1200px), not a near
+  // full-width 1600px stretch. Guard the max-width token in the Tailwind config.
+  const twSrc = readFileSync("tailwind.config.ts", "utf8");
+  const reviewWidth = twSrc.match(/review:\s*"([\d.]+)rem"/)?.[1];
+  check(
+    "review container max-width is a focused ~1120-1240px (70-77.5rem)",
+    reviewWidth !== undefined && Number(reviewWidth) >= 70 && Number(reviewWidth) <= 77.5,
+  );
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

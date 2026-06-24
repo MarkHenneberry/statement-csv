@@ -65,20 +65,28 @@ export function UploadWarning({
   title,
   children,
   className = "",
+  dense = false,
 }: {
   variant?: Variant;
   title: string;
   children?: ReactNode;
   className?: string;
+  /** Compact spacing/typography for the dense review flow. */
+  dense?: boolean;
 }) {
   const s = styles[variant];
   return (
     <div
       role={variant === "error" ? "alert" : "status"}
-      className={`flex gap-3 rounded-xl border p-4 ${s.box} ${className}`}
+      className={`flex border ${
+        dense ? "gap-2 rounded-lg p-3" : "gap-3 rounded-xl p-4"
+      } ${s.box} ${className}`}
     >
-      <Icon variant={variant} className={`mt-0.5 h-5 w-5 flex-none ${s.icon}`} />
-      <div className="text-sm">
+      <Icon
+        variant={variant}
+        className={`mt-0.5 flex-none ${dense ? "h-4 w-4" : "h-5 w-5"} ${s.icon}`}
+      />
+      <div className={dense ? "text-xs" : "text-sm"}>
         <p className={`font-semibold ${s.title}`}>{title}</p>
         {children ? <div className="mt-1 text-slate-600">{children}</div> : null}
       </div>

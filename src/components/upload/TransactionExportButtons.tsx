@@ -23,7 +23,7 @@ function triggerDownload(blob: Blob, fileName: string) {
 }
 
 const baseBtn =
-  "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex items-center justify-center gap-2 rounded-lg px-3 py-1.5 text-sm font-semibold shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
 
 export function TransactionExportButtons({
   rows,
@@ -86,7 +86,7 @@ export function TransactionExportButtons({
   }
 
   return (
-    <div className={`flex flex-col gap-3 sm:flex-row ${className}`}>
+    <div className={`flex flex-col gap-2 sm:flex-row ${className}`}>
       <button
         type="button"
         onClick={handleCsv}
