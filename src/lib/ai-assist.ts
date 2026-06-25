@@ -139,6 +139,10 @@ export type AiAssistOutcome = {
   aiLowConfidenceRowRate: number | null;
   aiItemizedRowCount: number | null;
   aiLargestRowShareOfDebits: number | null;
+  /** True when AI reduced the reconciliation difference but did NOT fully reconcile. */
+  aiImprovedButStillUnreconciled: boolean;
+  /** True when the parser result was kept because an AI candidate would have dropped rows. */
+  parserRowsPreservedOverAiRows: boolean;
   /** Safe per-image vision evidence metadata, in send order (no pixels/text). */
   aiVisionEvidence: VisionImageMeta[];
 };
@@ -980,7 +984,17 @@ export function candidateBeatsParser(parser: ParsedStatement, cand: ParsedStatem
   }
 
   if (p.difference !== null && c.difference !== null) {
-    if (c.difference < p.difference - 0.005 && c.issueCount <= p.issueCount) return true;
+    // A still-UNRECONCILED AI candidate may only win on a smaller difference when it
+    // does not DROP valid parser rows. Otherwise a candidate can "improve" the
+    // arithmetic gap merely by deleting real transactions — never adopt that. When
+    // both are incomplete, prefer the one with the most real itemized rows.
+    if (
+      c.difference < p.difference - 0.005 &&
+      c.issueCount <= p.issueCount &&
+      c.rowCount >= p.rowCount
+    ) {
+      return true;
+    }
   }
   if (c.confidence > p.confidence + 1e-9 && (c.difference ?? Infinity) <= (p.difference ?? Infinity)) return true;
   return false;
@@ -1249,6 +1263,8 @@ function baseOutcome(statement: ParsedStatement, config: AiAssistConfig): AiAssi
     aiLowConfidenceRowRate: null,
     aiItemizedRowCount: null,
     aiLargestRowShareOfDebits: null,
+    aiImprovedButStillUnreconciled: false,
+    parserRowsPreservedOverAiRows: false,
     aiVisionEvidence: [],
   };
 }
@@ -1392,10 +1408,27 @@ export async function runAiAssist(
   }
 
   const best = rankAi(candidates)!;
+  const bestMetrics = candidateMetrics(best.statement);
+  const parserMetrics = candidateMetrics(statement);
+  // Did AI reduce the difference but still not reconcile? (Used for diagnostics in
+  // both the adopt and no-adopt branches so a partial improvement is never shown as
+  // if it solved the reconciliation.)
+  const aiReducedDifference =
+    parserMetrics.difference !== null &&
+    bestMetrics.difference !== null &&
+    bestMetrics.difference < parserMetrics.difference - 0.005;
+  const aiStillUnreconciled = bestMetrics.status !== "passed";
+
   const adopt = candidateBeatsParser(statement, best.statement);
   if (!adopt) {
     out.applied = true; // a usable candidate was built and validated, just not better
     out.status = "no-improvement";
+    // If AI improved the gap but we kept the parser because the candidate would have
+    // dropped valid rows, record that explicitly so diagnostics are honest.
+    if (aiReducedDifference && bestMetrics.rowCount < parserMetrics.rowCount) {
+      out.parserRowsPreservedOverAiRows = true;
+    }
+    if (aiReducedDifference && aiStillUnreconciled) out.aiImprovedButStillUnreconciled = true;
     // Prefer a specific reason already set by the builder; otherwise the candidate
     // simply did not beat the parser under the same validation engine.
     if (!out.aiRejectedReason) out.aiRejectedReason = "candidate-worse-than-parser";
@@ -1403,6 +1436,10 @@ export async function runAiAssist(
   }
 
   const bm = candidateMetrics(best.statement);
+  // Adopted, but if it did not fully reconcile, flag it so the final state stays
+  // Needs review with a clear "improved but not reconciled" signal (the validation
+  // status is already non-passed, so the UI never presents it as solved).
+  if (bm.status !== "passed") out.aiImprovedButStillUnreconciled = true;
   out.applied = true;
   out.improved = true;
   // A candidate was adopted; any rejection reason recorded for the OTHER (unused)
@@ -1480,6 +1517,8 @@ export function notAttemptedOutcome(
     aiLowConfidenceRowRate: null,
     aiItemizedRowCount: null,
     aiLargestRowShareOfDebits: null,
+    aiImprovedButStillUnreconciled: false,
+    parserRowsPreservedOverAiRows: false,
     aiVisionEvidence: [],
   };
 }

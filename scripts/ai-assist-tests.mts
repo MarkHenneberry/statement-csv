@@ -1614,5 +1614,89 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   check("transfer cleanup: default CSV unchanged + no ref fragment", csv.split("\r\n")[0] === "Date,Description,Debit,Credit,Amount,Balance" && !/CA8a3f9c2d1e/.test(csv));
 }
 
+// ----- Goal 1: fee/formula amount handling (text bank path via full pipeline) -----
+{
+  const parseBank = (lines: string[]) => parseStatement({ text: lines.join("\n") }).statement;
+  const debitOf = (s: ParsedStatement, frag: string) =>
+    s.transactions.find((t) => t.description.includes(frag))?.debit ?? null;
+
+  // A fee row with embedded @ rates AND a separate posted amount + balance uses the
+  // POSTED amount (1.50), never a 0.75 rate, and stays a SINGLE row.
+  const a = parseBank([
+    "BANK", "Details of your account activity", "Opening Balance 100.00",
+    "Jun 1 Electronic transaction fee 1 Dr @ 0.75 1 Cr @ 0.75 1.50 98.50",
+    "Closing Balance 98.50",
+  ]);
+  check("fee row chooses posted amount over @ rate", a.transactions.length === 1 && Math.abs((debitOf(a, "transaction fee") ?? 0) - 1.5) < 0.01, JSON.stringify(a.transactions.map((t) => t.debit)));
+  check("fee row never emits a 0.75 rate as the amount", a.transactions.every((t) => Math.abs((t.debit ?? 0) - 0.75) > 0.001));
+  check("fee formula description is cleaned of the rate clause", (a.transactions[0]?.description ?? "").trim() === "Electronic transaction fee");
+
+  // Multiple count/rate fragments with NO separate posted amount (only a running
+  // balance) compute the total (Σ count×rate = 1.50) as ONE row — not per-rate rows,
+  // and the embedded "Cr" never creates a credit row.
+  const b = parseBank([
+    "BANK", "Details of your account activity", "Opening Balance 100.00",
+    "Jun 1 Electronic transaction fee 1 Dr @ 0.75 1 Cr @ 0.75 98.50",
+    "Closing Balance 98.50",
+  ]);
+  check("multi-fragment fee is one row with the computed total", b.transactions.length === 1 && Math.abs((b.transactions[0].debit ?? 0) - 1.5) < 0.01, JSON.stringify(b.transactions.map((t) => ({ d: t.debit, c: t.credit }))));
+  check("Dr/Cr in fee formula does not create a credit row", b.transactions.every((t) => (t.credit ?? 0) < 0.005) && Math.abs((b.transactions[0].debit ?? 0) - 1.5) < 0.01);
+  check("fee formula row reconciles", b.validation.status === "passed");
+}
+
+// ----- Goal 2: page-bottom / balance-less row recovery -----
+{
+  const parseBank = (lines: string[]) => parseStatement({ text: lines.join("\n") });
+
+  // A page-bottom cheque row with NO running balance is recovered and reconciles.
+  const out = parseBank([
+    "BANK", "Details of your account activity", "Opening Balance 1000.00",
+    "Jun 1 Customer Deposit 500.00 1500.00",
+    "Jun 2 Cheque - 5 945.47",
+    "Closing Balance 554.53",
+  ]);
+  check("balance-less page-bottom cheque is accepted", out.statement.transactions.some((t) => t.description.includes("Cheque") && Math.abs((t.debit ?? 0) - 945.47) < 0.01));
+  check("balance-less row recovery reconciles", out.statement.validation.status === "passed");
+  check("rowsAcceptedWithoutRunningBalance diagnostic recorded", (out.result.parseStats?.rowsAcceptedWithoutRunningBalance ?? 0) >= 1);
+  check("pageBottomRowsRecovered diagnostic recorded", (out.result.parseStats?.pageBottomRowsRecovered ?? 0) >= 1);
+
+  // Footer/legal text after the table and dateless total rows are NOT transactions.
+  const out2 = parseBank([
+    "BANK", "Details of your account activity", "Opening Balance 1000.00",
+    "Jun 1 Customer Deposit 500.00 1500.00",
+    "Closing Balance 1500.00",
+    "Important Account Information",
+    "Account Fees: 50.00",
+  ]);
+  check("footer/legal rows after the table are not transactions", out2.statement.transactions.length === 1 && out2.statement.transactions.every((t) => Math.abs((t.debit ?? 0) - 50) > 0.001));
+
+  const out3 = parseBank([
+    "BANK", "Details of your account activity", "Opening Balance 1000.00",
+    "Jun 1 Customer Deposit 500.00 1500.00",
+    "Total deposits 500.00 1500.00",
+    "Closing Balance 1500.00",
+  ]);
+  check("dateless total/summary rows are not transactions", out3.statement.transactions.length === 1);
+}
+
+// ----- Goal 3: AI adoption safety (do not adopt unreconciled AI that loses rows) -----
+{
+  // A reconciled candidate beats a non-reconciled parser.
+  const parserNR = bank([row({ credit: 10 })], 100, 200); // 100+10≠200
+  const aiPass = bank([row({ credit: 100 })], 100, 200); // reconciles
+  check("reconciled AI candidate beats non-reconciled parser", candidateBeatsParser(parserNR, aiPass) === true);
+
+  // An UNRECONCILED AI candidate with FEWER rows but a smaller difference is NOT
+  // adopted (it improved arithmetic only by dropping valid rows).
+  const parserMany = bank([row({ debit: 10 }), row({ debit: 10 }), row({ debit: 10 })], 100, 100); // diff 30, 3 rows
+  const aiFewer = bank([row({ debit: 10 }), row({ debit: 10 })], 100, 100); // diff 20, 2 rows
+  check("unreconciled AI that drops parser rows is NOT adopted", candidateBeatsParser(parserMany, aiFewer) === false);
+
+  // An UNRECONCILED AI candidate that improves the difference WITHOUT losing rows is adopted.
+  const parserOne = bank([row({ debit: 10 })], 100, 100); // diff 10, 1 row
+  const aiMore = bank([row({ debit: 2 }), row({ debit: 2 })], 100, 100); // diff 4, 2 rows
+  check("unreconciled AI that keeps rows + improves diff is adopted", candidateBeatsParser(parserOne, aiMore) === true);
+}
+
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

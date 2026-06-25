@@ -133,6 +133,16 @@ export type LayoutParseStats = {
   eTransferDescriptionsNormalized: number;
   /** Raw reference/hash fragments removed from transfer descriptions (count only). */
   rawReferenceFragmentsRemoved: number;
+  /** Bank fee rows with a count/rate formula ("N Dr/Cr @ rate") detected (count). */
+  formulaRateRowsDetected: number;
+  /** Formula fee rows whose amount used the separate posted amount column (count). */
+  formulaRateRowsResolvedToPostedAmount: number;
+  /** Formula fee rows whose amount used the computed Σ(count×rate) total (count). */
+  formulaRateRowsUsedComputedTotal: number;
+  /** Trailing rows recovered without a running balance near a page bottom (count). */
+  pageBottomRowsRecovered: number;
+  /** Rows accepted although their running-balance column was blank (count). */
+  rowsAcceptedWithoutRunningBalance: number;
 };
 
 /** Per-candidate aggregate comparison (dev diagnostics only; no row content). */
@@ -1842,6 +1852,38 @@ function feeCountRateTotal(line: string): number | null {
   return found ? Math.round(total * 100) / 100 : null;
 }
 
+/** True when the text contains a fee count/rate formula (a "N Dr/Cr @ rate" clause). */
+function hasFeeFormula(text: string): boolean {
+  return feeCountRateTotal(text) !== null;
+}
+
+/**
+ * A money value that is a RATE inside a fee formula (immediately preceded by "@",
+ * e.g. the 0.75 in "1 Dr @ 0.75"). Such values are NOT the posted transaction
+ * amount and must never be selected as the amount or a running balance.
+ */
+function isRateMoney(line: string, m: MoneyMatch): boolean {
+  return /@\s*\$?\s*$/.test(line.slice(Math.max(0, m.index - 4), m.index));
+}
+
+/**
+ * Strip a count/rate fee formula ("1 Dr @ 0.75 / 1 Cr @ 0.75") from a fee row's
+ * description so the default Description reads as the fee label (e.g. "Electronic
+ * transaction fee"). Conservative: only the formula fragments are removed.
+ */
+function stripFeeFormula(desc: string): string {
+  const cleaned = desc
+    .replace(/\b\d+\s*(?:drs?|crs?)\b\s*@\s*\$?\s*\d+(?:\.\d{1,2})?/gi, " ")
+    .replace(/@\s*\$?\s*\d+(?:\.\d{1,2})?/g, " ")
+    .replace(/\b\d+\s*(?:drs?|crs?)\b/gi, " ")
+    // Remove any leftover standalone "@" and separator slashes from the formula.
+    .replace(/\s*@\s*/g, " ")
+    .replace(/\s*\/\s*/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return cleaned;
+}
+
 /** Bank-specific direction prior from the description wording. */
 function bankKeywordPrior(desc: string): "credit" | "debit" | null {
   const l = desc.toLowerCase();
@@ -1930,6 +1972,10 @@ export function parseBankAccountTable(
   summaryStatisticalRejected: number;
   legalInfoIgnored: number;
   feeCountRateNormalized: number;
+  formulaRateRowsDetected: number;
+  formulaRateRowsResolvedToPostedAmount: number;
+  formulaRateRowsUsedComputedTotal: number;
+  pageBottomRowsRecovered: number;
 } {
   const entries: BankEntry[] = [];
   let ignoredSummaryRows = 0;
@@ -1938,7 +1984,13 @@ export function parseBankAccountTable(
   let summaryStatisticalRejected = 0;
   let legalInfoIgnored = 0;
   let feeCountRateNormalized = 0;
-  let lastBalance: number | null = null;
+  let formulaRateRowsDetected = 0;
+  let formulaRateRowsResolvedToPostedAmount = 0;
+  let formulaRateRowsUsedComputedTotal = 0;
+  let pageBottomRowsRecovered = 0;
+  // Seed with the opening balance so a fee row that is the FIRST row can still tell
+  // its single non-rate value apart (running balance vs posted amount).
+  let lastBalance: number | null = openingBalance;
   let carriedDate: string | null = null;
   let pendingDesc = "";
 
@@ -1999,12 +2051,49 @@ export function parseBankAccountTable(
       }
     }
 
+    // Capture the date carried from prior rows BEFORE this line may set a new one,
+    // so a deferred fee formula flushes against the correct (previous) date.
+    const prevCarriedDate = carriedDate;
     if (date) carriedDate = normalizeDate(date.match, year) ?? date.match;
 
-    if (moneys.length >= 1) {
-      const hasBalance = moneys.length >= 2;
-      const amountMoney = hasBalance ? moneys[moneys.length - 2] : moneys[0];
-      const balance = hasBalance ? moneys[moneys.length - 1].value : null;
+    // Fee-formula RATE values ("the 0.75 in 1 Dr @ 0.75") are NEVER the posted
+    // transaction amount or a running balance — exclude them from selection.
+    const postedMoneys = moneys.filter((m) => !isRateMoney(line, m));
+    const feeTotal = feeCountRateTotal(`${pendingDesc} ${line}`);
+    const dateLeadsLine =
+      date !== null && (moneys.length === 0 || date.index < moneys[0].index);
+
+    // A NEW dated transaction starts while a fee formula sits unflushed in
+    // pendingDesc (its posted amount never appeared) — flush it as a computed-total
+    // fee row first so it is neither lost nor merged into this row's description.
+    if (postedMoneys.length >= 1 && date && dateLeadsLine && hasFeeFormula(pendingDesc)) {
+      const ft = feeCountRateTotal(pendingDesc);
+      if (ft !== null && ft > 0) {
+        entries.push({
+          date: prevCarriedDate ?? "",
+          description: stripFeeFormula(pendingDesc) || "Service fee",
+          amount: ft,
+          balance: null,
+          prior: "debit",
+        });
+        formulaRateRowsDetected += 1;
+        formulaRateRowsUsedComputedTotal += 1;
+        feeCountRateNormalized += 1;
+      }
+      pendingDesc = "";
+    }
+
+    if (postedMoneys.length === 0 && moneys.length >= 1) {
+      // The only money on this line are fee-formula RATES (no posted amount/balance
+      // yet) — fold into the pending description (a wrapped continuation) so it does
+      // not emit a spurious rate-valued row. The posted amount, a new dated row, or
+      // the trailing flush resolves the real fee total later.
+      const frag = dateLeadsLine && date ? line.slice(date.end) : line;
+      pendingDesc = `${pendingDesc} ${frag}`.replace(/\s+/g, " ").trim();
+      continue;
+    }
+
+    if (postedMoneys.length >= 1) {
       // Description is the leading text up to the first money value; when a date
       // LEADS the row, skip it (otherwise it is a mid/late date column — TD-style
       // "Description Debit Credit DATE Balance" — and the leading text is desc).
@@ -2022,10 +2111,47 @@ export function parseBankAccountTable(
       if (!description) {
         description = recoverDescriptionFromLine(line, date ? date.match : null);
       }
-      // Fee count/rate rows: compute the real total from "N Dr/Cr @ rate" rather
-      // than letting the bare rate be read as the amount. Run on the joined
-      // description+line so a wrapped fee calculation still resolves.
-      const feeTotal = feeCountRateTotal(`${pendingDesc} ${line}`);
+
+      // Decide the posted amount vs the running balance among the non-rate values.
+      let amount: number;
+      let balance: number | null;
+      if (feeTotal !== null) {
+        // Fee count/rate row. The computed total (Σ count×rate) is the posted fee
+        // UNLESS a genuine separate posted amount exists that is not the running
+        // balance. Prefer the actual posted amount column over the rate values.
+        formulaRateRowsDetected += 1;
+        feeCountRateNormalized += 1;
+        if (postedMoneys.length >= 2) {
+          amount = Math.abs(postedMoneys[postedMoneys.length - 2].value);
+          balance = postedMoneys[postedMoneys.length - 1].value;
+          formulaRateRowsResolvedToPostedAmount += 1;
+        } else {
+          // A single non-rate value is either the posted amount OR the running
+          // balance. It is the BALANCE when it continues the running balance by the
+          // computed fee total; otherwise it is the posted amount.
+          const v = postedMoneys[0].value;
+          const continuesBalance =
+            lastBalance !== null &&
+            (Math.abs(v - (lastBalance - feeTotal)) < 0.01 ||
+              Math.abs(v - (lastBalance + feeTotal)) < 0.01);
+          if (continuesBalance) {
+            amount = feeTotal;
+            balance = v;
+            formulaRateRowsUsedComputedTotal += 1;
+          } else {
+            amount = Math.abs(v);
+            balance = null;
+            formulaRateRowsResolvedToPostedAmount += 1;
+          }
+        }
+        description = stripFeeFormula(description) || description;
+      } else {
+        const hasBalance = postedMoneys.length >= 2;
+        const amountMoney = hasBalance ? postedMoneys[postedMoneys.length - 2] : postedMoneys[0];
+        balance = hasBalance ? postedMoneys[postedMoneys.length - 1].value : null;
+        amount = Math.abs(amountMoney.value);
+      }
+
       pendingDesc = "";
       if (!carriedDate && !description) {
         // Not enough context to be a transaction.
@@ -2037,11 +2163,6 @@ export function parseBankAccountTable(
       if (yr && Number(yr[1]) >= 2090) {
         outOfPeriodRejected += 1;
         continue;
-      }
-      let amount = Math.abs(amountMoney.value);
-      if (feeTotal !== null) {
-        amount = feeTotal;
-        feeCountRateNormalized += 1;
       }
       if (balance !== null) lastBalance = balance;
       entries.push({
@@ -2060,6 +2181,25 @@ export function parseBankAccountTable(
       pendingDesc = `${pendingDesc} ${line}`.replace(/\s+/g, " ").trim();
     } else {
       ignoredSummaryRows += 1;
+    }
+  }
+
+  // A fee formula left unflushed in pendingDesc (no posted amount/balance and no
+  // following row) is a real end-of-table fee charge — flush its computed total.
+  if (hasFeeFormula(pendingDesc)) {
+    const ft = feeCountRateTotal(pendingDesc);
+    if (ft !== null && ft > 0) {
+      entries.push({
+        date: carriedDate ?? "",
+        description: stripFeeFormula(pendingDesc) || "Service fee",
+        amount: ft,
+        balance: null,
+        prior: "debit",
+      });
+      formulaRateRowsDetected += 1;
+      formulaRateRowsUsedComputedTotal += 1;
+      feeCountRateNormalized += 1;
+      pendingDesc = "";
     }
   }
 
@@ -2116,7 +2256,9 @@ export function parseBankAccountTable(
       anchor = entry.balance;
     }
   }
-  // Trailing entries with no displayed balance reconcile against the closing.
+  // Trailing entries with no displayed balance (e.g. a page-bottom cheque/fee row
+  // printed without a running balance) reconcile against the closing balance.
+  pageBottomRowsRecovered = segment.filter((e) => e.balance === null).length;
   flushSegment(closingBalance);
 
   return {
@@ -2130,6 +2272,10 @@ export function parseBankAccountTable(
     summaryStatisticalRejected,
     legalInfoIgnored,
     feeCountRateNormalized,
+    formulaRateRowsDetected,
+    formulaRateRowsResolvedToPostedAmount,
+    formulaRateRowsUsedComputedTotal,
+    pageBottomRowsRecovered,
   };
 }
 
@@ -2166,6 +2312,10 @@ type Candidate = {
   paymentRemittanceRejected: number;
   fxRowsAttached: number;
   feeCountRateNormalized: number;
+  formulaRateRowsDetected: number;
+  formulaRateRowsResolvedToPostedAmount: number;
+  formulaRateRowsUsedComputedTotal: number;
+  pageBottomRowsRecovered: number;
   accountSectionOpeningSource: string | null;
   selectedSectionHadOpeningClosing: boolean;
   source: CandidateSource;
@@ -2366,6 +2516,10 @@ function buildCandidates(
     paymentRemittanceRejected: 0,
     fxRowsAttached: 0,
     feeCountRateNormalized: 0,
+    formulaRateRowsDetected: 0,
+    formulaRateRowsResolvedToPostedAmount: 0,
+    formulaRateRowsUsedComputedTotal: 0,
+    pageBottomRowsRecovered: 0,
     accountSectionOpeningSource: null,
     selectedSectionHadOpeningClosing: false,
     source: "text-parser" as CandidateSource,
@@ -2507,6 +2661,10 @@ function buildCandidates(
         paymentRemittanceRejected: 0,
         fxRowsAttached: 0,
         feeCountRateNormalized: table.feeCountRateNormalized,
+        formulaRateRowsDetected: table.formulaRateRowsDetected,
+        formulaRateRowsResolvedToPostedAmount: table.formulaRateRowsResolvedToPostedAmount,
+        formulaRateRowsUsedComputedTotal: table.formulaRateRowsUsedComputedTotal,
+        pageBottomRowsRecovered: table.pageBottomRowsRecovered,
         accountSectionOpeningSource: openingSource,
         selectedSectionHadOpeningClosing:
           bankBalances.openingBalance !== null && effectiveClosing !== null,
@@ -2712,6 +2870,14 @@ export function parseStatementText(text: string, items?: PdfTextItem[]): ParseRe
     // Populated by the model-build description normalization (buildParsedStatement).
     eTransferDescriptionsNormalized: 0,
     rawReferenceFragmentsRemoved: 0,
+    formulaRateRowsDetected: chosen.formulaRateRowsDetected,
+    formulaRateRowsResolvedToPostedAmount: chosen.formulaRateRowsResolvedToPostedAmount,
+    formulaRateRowsUsedComputedTotal: chosen.formulaRateRowsUsedComputedTotal,
+    pageBottomRowsRecovered: chosen.pageBottomRowsRecovered,
+    // Path-agnostic: any chosen row carrying an amount but no running balance.
+    rowsAcceptedWithoutRunningBalance: rows.filter(
+      (r) => (r.debit !== null || r.credit !== null) && r.balance === null,
+    ).length,
   };
 
   const warnings: string[] = [];

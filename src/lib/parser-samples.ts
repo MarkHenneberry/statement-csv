@@ -842,4 +842,41 @@ export const parserSamples: ParserSample[] = [
       note: "count/rate fee rows normalized (2 Drs @ 1.25 = 2.50); Account Fees summary after closing ignored; in-table fee rows kept and reconcile",
     },
   },
+
+  // 7) Wrapped fee formula (posted amount, no balance) + page-bottom cheque row
+  // without a running balance. The fee must be the POSTED 1.50 (not the 0.75 rate),
+  // the wrapped formula must not split into multiple rows, and the balance-less
+  // cheque at the bottom must be recovered. Generalized page-boundary recovery.
+  {
+    name: "rbc-business-wrapped-fee-and-page-bottom-cheque",
+    description:
+      "Fee row wraps '1 Dr @ 0.75' / '1 Cr @ 0.75' with posted 1.50; a page-bottom 'Cheque - 123' row has no running balance",
+    text: [
+      "RBC BUSINESS ACCOUNT",
+      "Details of your account activity",
+      "Opening Balance 1,000.00",
+      "Jun 3 Customer Deposit 500.00 1,500.00",
+      // Fee row wraps across two lines; the posted total 1.50 is the amount, not 0.75.
+      "Jun 20 Electronic transaction fee 1 Dr @ 0.75",
+      "1 Cr @ 0.75 1.50",
+      // Page-bottom cheque with NO running balance printed beside it.
+      "Jun 25 Cheque - 123 945.47",
+      "Closing Balance 553.03",
+    ].join("\n"),
+    expect: {
+      kind: "bank-account",
+      family: "bank-account-table",
+      candidate: "bank-account",
+      minRows: 3,
+      maxRows: 3,
+      creditRows: 1,
+      debitRows: 2,
+      opening_: 1000.0,
+      closing_: 553.03,
+      totalCredits: 500.0,
+      totalDebits: 946.97,
+      balancePasses: true,
+      note: "wrapped fee resolves to posted 1.50 (one row); page-bottom balance-less cheque 945.47 recovered; reconciles",
+    },
+  },
 ];

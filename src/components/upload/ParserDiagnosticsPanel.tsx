@@ -165,6 +165,8 @@ export function ParserDiagnosticsPanel({
             />
             <Metric label="Candidate quality" value={d.aiAssist.aiCandidateQualityStatus} />
             <Metric label="Rejected for quality" value={yesNo(d.aiAssist.aiCandidateRejectedForQuality)} />
+            <Metric label="AI improved but unreconciled" value={yesNo(d.aiAssist.aiImprovedButStillUnreconciled)} />
+            <Metric label="Parser rows preserved over AI" value={yesNo(d.aiAssist.parserRowsPreservedOverAiRows)} />
             <Metric
               label="Quality reasons"
               value={d.aiAssist.aiCandidateQualityReasons.length ? d.aiAssist.aiCandidateQualityReasons.join(", ") : "—"}
@@ -445,6 +447,11 @@ export function ParserDiagnosticsPanel({
             <Metric label="Rows still missing date" value={String(d.parseStats.rowsStillMissingDate)} />
             <Metric label="e-Transfer descriptions normalized" value={String(d.parseStats.eTransferDescriptionsNormalized)} />
             <Metric label="Raw reference fragments removed" value={String(d.parseStats.rawReferenceFragmentsRemoved)} />
+            <Metric label="Formula/rate fee rows" value={String(d.parseStats.formulaRateRowsDetected)} />
+            <Metric label="Fee rows → posted amount" value={String(d.parseStats.formulaRateRowsResolvedToPostedAmount)} />
+            <Metric label="Fee rows → computed total" value={String(d.parseStats.formulaRateRowsUsedComputedTotal)} />
+            <Metric label="Page-bottom rows recovered" value={String(d.parseStats.pageBottomRowsRecovered)} />
+            <Metric label="Rows accepted without balance" value={String(d.parseStats.rowsAcceptedWithoutRunningBalance)} />
           </dl>
 
           {d.parseStats.candidateComparison.length > 0 ? (
