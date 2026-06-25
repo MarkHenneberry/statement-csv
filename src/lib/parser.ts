@@ -304,10 +304,8 @@ export function recoverDescriptionFromLine(line: string, dateMatch: string | nul
 // Statement-provided SPEND-CATEGORY taxonomy phrases (e.g. a credit card's "Spend
 // Categories" column). DISTINCTIVE multi-word phrases only — every entry is an
 // "X and Y" / multi-token taxonomy label that is extremely unlikely to be the real
-// ending of a merchant name, so stripping it from a polluted Description is safe.
-// Ambiguous single words (e.g. "Restaurants", "Transportation") are intentionally
-// excluded here: they are only separated via a STRUCTURAL category column, never by
-// trailing-string stripping. Generic across issuers, not a single-bank list.
+// ending of a merchant name, so stripping it from a polluted Description is safe
+// even WITHOUT structural confirmation. Generic across issuers, not a single bank.
 const SPEND_CATEGORY_PHRASES = [
   "retail and grocery",
   "health and education",
@@ -325,29 +323,60 @@ const SPEND_CATEGORY_PHRASES = [
   "recreation and entertainment",
 ];
 
-const TRAILING_SPEND_CATEGORY_RE = new RegExp(
-  `\\s+(${SPEND_CATEGORY_PHRASES.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\s*$`,
-  "i",
-);
+// AMBIGUOUS single-word / short category labels: these CAN be a real merchant-name
+// ending ("JOEY RESTAURANTS"), so they are stripped ONLY when the caller confirms a
+// category column was structurally detected for the row's table/section
+// (allowAmbiguous). Curated taxonomy names (not generic words) and never a
+// city/province token. Generic across issuers.
+const AMBIGUOUS_SPEND_CATEGORIES = [
+  "restaurants",
+  "transportation",
+  "transport",
+  "groceries",
+  "merchandise",
+  "healthcare",
+];
+
+const escapeRe = (p: string) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const buildTrailingRe = (phrases: string[]) =>
+  new RegExp(`\\s+(${phrases.map(escapeRe).join("|")})\\s*$`, "i");
+
+const TRAILING_DISTINCTIVE_RE = buildTrailingRe(SPEND_CATEGORY_PHRASES);
+const TRAILING_WITH_AMBIGUOUS_RE = buildTrailingRe([
+  ...SPEND_CATEGORY_PHRASES,
+  ...AMBIGUOUS_SPEND_CATEGORIES,
+]);
+const AMBIGUOUS_SET = new Set(AMBIGUOUS_SPEND_CATEGORIES);
 
 /**
  * Separate a statement-provided spend-category label that leaked onto the END of a
- * Description (when the layout had no separable category column). Returns the
- * cleaned description plus the category when a DISTINCTIVE taxonomy phrase is found
- * trailing real merchant text; otherwise returns the description unchanged with an
- * empty category. Conservative by design: never strips when little/no merchant text
- * would remain, so real descriptions are preserved.
+ * Description. Returns the cleaned description plus the category when a taxonomy
+ * label is found trailing real merchant text; otherwise returns the description
+ * unchanged with an empty category.
+ *
+ * By default only DISTINCTIVE multi-word phrases are stripped (safe without any
+ * structural signal). When `allowAmbiguous` is set — i.e. the parser STRUCTURALLY
+ * detected a category column for this row's table/section — shorter ambiguous
+ * labels ("Restaurants", "Transportation") are also stripped, with an extra guard
+ * that real merchant/location text (>= 2 tokens) must remain so a short merchant is
+ * never clipped. City/province tokens are never category labels, so they are kept.
  */
-export function splitTrailingSpendCategory(description: string): {
-  description: string;
-  category: string;
-} {
-  const m = description.match(TRAILING_SPEND_CATEGORY_RE);
+export function splitTrailingSpendCategory(
+  description: string,
+  opts: { allowAmbiguous?: boolean } = {},
+): { description: string; category: string } {
+  const re = opts.allowAmbiguous ? TRAILING_WITH_AMBIGUOUS_RE : TRAILING_DISTINCTIVE_RE;
+  const m = description.match(re);
   if (!m || m.index === undefined) return { description, category: "" };
   const head = description.slice(0, m.index).trim();
   // Require meaningful merchant text to remain; never reduce a row to (near) empty,
   // and never strip when the whole description IS just the category label.
   if (head.length < 3 || !/[A-Za-z]{2,}/.test(head)) return { description, category: "" };
+  // Ambiguous labels need a stronger guard: a multi-token head (merchant + more,
+  // e.g. with city/province), so a short merchant ending in the word isn't clipped.
+  if (AMBIGUOUS_SET.has(m[1].toLowerCase()) && head.split(/\s+/).filter(Boolean).length < 2) {
+    return { description, category: "" };
+  }
   return { description: head, category: m[1].trim() };
 }
 

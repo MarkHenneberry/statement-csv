@@ -855,13 +855,19 @@ function buildRegionRows(
   const cell = (cells: string[], m: ColumnMeaning): string =>
     ci[m] !== undefined ? cells[ci[m]!] : "";
 
-  // Set a row's Description and (internal) category. When the layout has a SEPARATE
-  // category column, its value is already split out by x-position — capture it into
-  // the model (preserved internally; excluded from the default table + export).
-  // When there is NO category column, only for credit-card tables strip a
-  // DISTINCTIVE trailing spend-category phrase that leaked into the description
-  // (structure-aware first; conservative string strip as a fallback). Real merchant
-  // descriptions are left untouched.
+  // Was a category column STRUCTURALLY detected for this region's header? When true,
+  // even an ambiguous single-word category value that leaked into the description
+  // cell (a short value whose x-center fell on the description side) may be stripped
+  // — the column's presence is the structural confirmation the spec requires.
+  const categoryColumnPresent = ci.category !== undefined;
+
+  // Set a row's Description and (internal) category. A SEPARATE category column's
+  // value is split out by x-position — capture it into the model (preserved
+  // internally; excluded from the default table + export). Otherwise, for
+  // credit-card tables, strip a trailing spend-category label that leaked into the
+  // description: DISTINCTIVE multi-word phrases always, and shorter AMBIGUOUS labels
+  // only when this region has a detected category column. Real merchant + city/
+  // province text is left untouched.
   const setDescriptionAndCategory = (
     row: TransactionRow,
     rawDescription: string,
@@ -874,7 +880,7 @@ function buildRegionRows(
       return;
     }
     if (region.statementKind === "credit-card") {
-      const split = splitTrailingSpendCategory(desc);
+      const split = splitTrailingSpendCategory(desc, { allowAmbiguous: categoryColumnPresent });
       row.description = split.description;
       if (split.category) row.category = split.category;
       return;

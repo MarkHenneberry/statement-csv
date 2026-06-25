@@ -922,4 +922,36 @@ export const coordinateSamples: CoordSample[] = [
       note: "Reference + Type metadata columns excluded from Description; HALIFAX NS / DARTMOUTH NS preserved",
     },
   },
+
+  // AB. CC with a detected Spend Categories column where short, AMBIGUOUS category
+  // values ("Restaurants", "Transportation") leaked into the Description cell (their
+  // x-center fell on the description side). Because the category COLUMN is
+  // structurally detected, those ambiguous labels are stripped from Description and
+  // captured internally. City/province text is preserved; merchants are not clipped.
+  {
+    name: "AB-cc-leaked-ambiguous-category-with-column",
+    description: "Spend Categories column detected; leaked ambiguous single-word categories stripped",
+    rows: [
+      [["Some Bank Visa", 50]],
+      [["Previous Balance", 50], ["$0.00", 600]],
+      [["Trans Date", 50], ["Post Date", 160], ["Description", 280], ["Spend Categories", 430], ["Amount", 600]],
+      [["JAN 05", 50], ["JAN 06", 160], ["RANDYS PIZZA DARTMOUTH NS", 280], ["Restaurants", 320], ["45.00", 600]],
+      [["JAN 09", 50], ["JAN 10", 160], ["CIRCLE K IRVING DARTMOUTH NS", 280], ["Transportation", 300], ["55.00", 600]],
+      [["New Balance", 50], ["$100.00", 600]],
+    ],
+    expect: {
+      rows: 2,
+      opening: 0,
+      closing: 100,
+      totalCredits: 0,
+      totalDebits: 100,
+      balancePasses: true,
+      columnOrder: "date|postDate|description|category|amount",
+      statementKind: "credit-card",
+      noDescriptionIncludes: ["Restaurants", "Transportation"],
+      descriptionIncludes: ["RANDYS PIZZA DARTMOUTH NS", "CIRCLE K IRVING DARTMOUTH NS"],
+      categoryIncludes: ["Restaurants", "Transportation"],
+      note: "category column present → leaked ambiguous labels stripped+captured; DARTMOUTH NS kept, merchant intact",
+    },
+  },
 ];

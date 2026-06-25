@@ -366,12 +366,15 @@ export function buildParsedStatement(
   // category field and keep the default Description clean. Structure-aware capture
   // in the coordinate parser already handles most rows (those already have a
   // category, so this is a no-op there) — this primarily cleans the text-parser
-  // path. It only strips DISTINCTIVE multi-word taxonomy phrases, so genuine
-  // merchant names and city/province text (e.g. "DARTMOUTH NS") are never touched.
+  // path. DISTINCTIVE multi-word taxonomy phrases are always stripped; shorter
+  // AMBIGUOUS labels ("Restaurants", "Transportation") only when the chosen parse
+  // STRUCTURALLY detected a category column (its column order includes "category"),
+  // so genuine merchant names and city/province text are never touched otherwise.
   if (result.statementKind === "credit-card") {
+    const categoryColumnDetected = (result.parseStats?.coordColumnOrder ?? "").includes("category");
     for (const t of transactions) {
       if (t.category && t.category.trim()) continue;
-      const split = splitTrailingSpendCategory(t.description);
+      const split = splitTrailingSpendCategory(t.description, { allowAmbiguous: categoryColumnDetected });
       if (split.category) {
         t.description = split.description;
         t.category = split.category;

@@ -1454,5 +1454,39 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   check("bank-account descriptions are not category-stripped", b.transactions[0].description === "ACME PERSONAL AND HOUSEHOLD EXPENSES" && (b.transactions[0].category ?? "") === "");
 }
 
+// ----- structure-gated stripping of AMBIGUOUS spend-category labels -----
+{
+  // With structural confirmation (allowAmbiguous), short ambiguous category labels
+  // are stripped and the merchant + city/province text is preserved.
+  const a = splitTrailingSpendCategory("RANDYS PIZZA - COLE HA DARTMOUTH NS Restaurants", { allowAmbiguous: true });
+  check("ambiguous strip (structure): 'Restaurants' removed, city/province kept", a.description === "RANDYS PIZZA - COLE HA DARTMOUTH NS" && a.category === "Restaurants", `${a.description} | ${a.category}`);
+  const b = splitTrailingSpendCategory("CALDWELL CONVENIENCE DARTMOUTH NS Transportation", { allowAmbiguous: true });
+  check("ambiguous strip (structure): 'Transportation' removed", b.description === "CALDWELL CONVENIENCE DARTMOUTH NS" && b.category === "Transportation");
+
+  // WITHOUT structural confirmation the same ambiguous words are NEVER stripped.
+  const c = splitTrailingSpendCategory("RANDYS PIZZA - COLE HA DARTMOUTH NS Restaurants");
+  check("ambiguous NOT stripped without structure context", c.description === "RANDYS PIZZA - COLE HA DARTMOUTH NS Restaurants" && c.category === "");
+  const d = splitTrailingSpendCategory("CIRCLE K / IRVING # 25 DARTMOUTH NS Transportation");
+  check("ambiguous NOT stripped without structure (2nd)", d.description === "CIRCLE K / IRVING # 25 DARTMOUTH NS Transportation" && d.category === "");
+
+  // Short-merchant guard: an ambiguous word with only a one-token head is NOT clipped
+  // even with structure (avoids turning "JOEY Restaurants" into "JOEY").
+  const e = splitTrailingSpendCategory("JOEY Restaurants", { allowAmbiguous: true });
+  check("ambiguous strip guarded: single-token head not clipped", e.description === "JOEY Restaurants" && e.category === "");
+
+  // Province codes are never treated as category labels.
+  const f = splitTrailingSpendCategory("SOME MERCHANT EDMONTON AB", { allowAmbiguous: true });
+  check("province code not stripped as category", f.description === "SOME MERCHANT EDMONTON AB" && f.category === "");
+
+  // Distinctive multi-word phrases still strip with or without structure context.
+  const g = splitTrailingSpendCategory("WAL-MART #1176 DARTMOUTH NS Retail and Grocery");
+  check("distinctive phrase strips without needing structure", g.description === "WAL-MART #1176 DARTMOUTH NS" && g.category === "Retail and Grocery");
+
+  // Text-path model build: a credit-card statement with NO detected category column
+  // (no parseStats) must NOT strip ambiguous labels — structure isn't confirmed.
+  const noCtx = cc([row({ description: "RANDYS PIZZA DARTMOUTH NS Restaurants", debit: 45 })], 0, 45);
+  check("model build: ambiguous kept when no category column detected", noCtx.transactions[0].description === "RANDYS PIZZA DARTMOUTH NS Restaurants");
+}
+
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
