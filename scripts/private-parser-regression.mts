@@ -139,12 +139,22 @@ for (const entry of manifest.statements ?? []) {
     if (categoryLeaks > 0) mismatches.push(`category-leaks ${categoryLeaks}`);
 
     if (mismatches.length === 0) {
-      console.log(`PASS  ${label}`);
+      const ps = result.parseStats;
+      const diag = ps
+        ? ` [inherited=${ps.rowsDateInherited} stillMissing=${ps.rowsStillMissingDate} eTransfer=${ps.eTransferDescriptionsNormalized} refRemoved=${ps.rawReferenceFragmentsRemoved} catLeaks=${categoryLeaks}]`
+        : "";
+      console.log(`PASS  ${label}${diag}`);
     } else {
       failures += 1;
       console.log(`FAIL  ${label}: ${mismatches.join(", ")}`);
     }
   } catch (err) {
+    // A missing file is environmental (partial corpus), not a parser failure —
+    // skip it so the harness stays runnable when only some statements are present.
+    if (err && typeof err === "object" && (err as { code?: string }).code === "ENOENT") {
+      console.log(`SKIP  ${label} (file not present)`);
+      continue;
+    }
     failures += 1;
     const message = err instanceof Error ? err.message : "unknown error";
     console.log(`ERROR ${label}: ${message}`);

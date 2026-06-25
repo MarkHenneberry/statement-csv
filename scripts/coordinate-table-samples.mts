@@ -48,6 +48,9 @@ for (const sample of coordinateSamples) {
   const descMisses = (e.descriptionIncludes ?? []).filter(
     (sub) => !parsed.rows.some((r) => r.description.includes(sub)),
   );
+  // When requested, every row must carry a date (validates same-day carry-forward,
+  // including across stitched page boundaries).
+  const datedOk = e.rowsAllDated !== true || parsed.rows.every((r) => r.date.trim() !== "");
 
   const checks: [string, boolean][] = [
     ["source", ps?.chosenCandidateSource === expectedSource],
@@ -63,6 +66,7 @@ for (const sample of coordinateSamples) {
     ["noSummaryInDesc", descViolations.length === 0],
     ["categoryCaptured", categoryMisses.length === 0],
     ["descriptionKept", descMisses.length === 0],
+    ["rowsAllDated", datedOk],
     ["stitched", e.stitched === undefined || ps?.coordStitched === e.stitched],
     [
       "regionsStitched",

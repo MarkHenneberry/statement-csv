@@ -441,6 +441,10 @@ export function ParserDiagnosticsPanel({
             <Metric label="Category column context" value={yesNo(d.parseStats.categoryColumnContextDetected)} />
             <Metric label="Ambiguous categories stripped" value={String(d.parseStats.ambiguousCategoriesStripped)} />
             <Metric label="Metadata categories captured" value={String(d.parseStats.metadataCategoriesCaptured)} />
+            <Metric label="Rows date inherited" value={String(d.parseStats.rowsDateInherited)} />
+            <Metric label="Rows still missing date" value={String(d.parseStats.rowsStillMissingDate)} />
+            <Metric label="e-Transfer descriptions normalized" value={String(d.parseStats.eTransferDescriptionsNormalized)} />
+            <Metric label="Raw reference fragments removed" value={String(d.parseStats.rawReferenceFragmentsRemoved)} />
           </dl>
 
           {d.parseStats.candidateComparison.length > 0 ? (

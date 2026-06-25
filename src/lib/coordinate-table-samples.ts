@@ -57,6 +57,8 @@ export type CoordSample = {
     descriptionIncludes?: string[];
     /** Substrings that MUST appear across the parsed rows' (internal) categories. */
     categoryIncludes?: string[];
+    /** When true, every parsed row must carry a non-empty date (carry-forward check). */
+    rowsAllDated?: boolean;
     note?: string;
   };
 };
@@ -952,6 +954,46 @@ export const coordinateSamples: CoordSample[] = [
       descriptionIncludes: ["RANDYS PIZZA DARTMOUTH NS", "CIRCLE K IRVING DARTMOUTH NS"],
       categoryIncludes: ["Restaurants", "Transportation"],
       note: "category column present → leaked ambiguous labels stripped+captured; DARTMOUTH NS kept, merchant intact",
+    },
+  },
+
+  // AC. Bank table continued across pages where page 2's FIRST row is a same-day
+  // continuation that omits the printed date. The coordinate parser rebuilds rows
+  // per page (so that row has no date), but the post-selection carry-forward
+  // inherits the most recent valid date across the confirmed-continuous (stitched)
+  // table. Generic same-day repeated-date recovery, not bank-specific.
+  {
+    name: "AC-bank-continued-same-day-date-carryforward",
+    description: "Bank table continues on page 2; a dateless same-day row inherits the prior date",
+    rows: [
+      [["Some Bank Chequing", X.date]],
+      [["Opening Balance", X.date], ["1,000.00", X.balance]],
+      [["Date", X.date], ["Description", X.desc], ["Debit", X.debit], ["Credit", X.credit], ["Balance", X.balance]],
+      [["2024-05-02", X.date], ["GROCERY MART", X.desc], ["100.00", X.debit], ["900.00", X.balance]],
+      [["2024-05-02", X.date], ["COFFEE ROASTERS", X.desc], ["10.00", X.debit], ["890.00", X.balance]],
+    ],
+    morePages: [
+      [
+        [["Date", X.date], ["Description", X.desc], ["Debit", X.debit], ["Credit", X.credit], ["Balance", X.balance]],
+        // No date printed: a same-day continuation row that must inherit 2024-05-02.
+        [["PHARMACY PLUS", X.desc], ["40.00", X.debit], ["850.00", X.balance]],
+        [["2024-05-03", X.date], ["PAYROLL DEPOSIT", X.desc], ["1,150.00", X.credit], ["2,000.00", X.balance]],
+        [["Closing Balance", X.date], ["2,000.00", X.balance]],
+      ],
+    ],
+    expect: {
+      rows: 4,
+      opening: 1000,
+      closing: 2000,
+      totalCredits: 1150,
+      totalDebits: 150,
+      balancePasses: true,
+      columnOrder: "date|description|debit|credit|balance",
+      statementKind: "bank-account",
+      stitched: true,
+      regionsStitched: 2,
+      rowsAllDated: true,
+      note: "page-2 dateless same-day row inherits the carried date across the stitched table",
     },
   },
 ];

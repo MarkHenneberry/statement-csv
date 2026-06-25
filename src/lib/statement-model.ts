@@ -23,7 +23,11 @@ import {
   LOW_CONFIDENCE_THRESHOLD,
   isAggregateOrPlaceholderDescription,
 } from "./upload.ts";
-import { splitTrailingSpendCategory, isAmbiguousSpendCategory } from "./parser.ts";
+import {
+  splitTrailingSpendCategory,
+  isAmbiguousSpendCategory,
+  normalizeTransferDescription,
+} from "./parser.ts";
 import type { ParseResult, StatementKind, LayoutFamily, LayoutParseStats } from "./parser.ts";
 
 export type Transaction = {
@@ -412,6 +416,27 @@ export function buildParsedStatement(
       ).length;
     }
   }
+
+  // Canadian transfer (Interac e-Transfer / online transfer / autodeposit) cleanup:
+  // keep the human-readable transfer type + name and remove raw reference/hash
+  // fragments from the default Description when readable text remains. Applies to
+  // any statement kind, gated per row to transfer descriptions only. Never removes
+  // names/words and never blanks a description. Does not affect debit/credit/balance.
+  let transfersNormalized = 0;
+  let refFragmentsRemoved = 0;
+  for (const t of transactions) {
+    const norm = normalizeTransferDescription(t.description);
+    if (norm.removed) {
+      t.description = norm.description;
+      transfersNormalized += 1;
+      refFragmentsRemoved += 1;
+    }
+  }
+  if (result.parseStats) {
+    result.parseStats.eTransferDescriptionsNormalized = transfersNormalized;
+    result.parseStats.rawReferenceFragmentsRemoved = refFragmentsRemoved;
+  }
+
   const validation = buildValidation(result, transactions);
   return {
     institution: meta.institution,

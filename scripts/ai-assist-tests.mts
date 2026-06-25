@@ -30,7 +30,10 @@ import {
   parsedStatementToRows,
   type ParsedStatement,
 } from "../src/lib/statement-model.ts";
-import { detectCategoryColumnContext, type ParseResult } from "../src/lib/parser.ts";
+import { detectCategoryColumnContext, carryForwardRowDates, normalizeTransferDescription, type ParseResult } from "../src/lib/parser.ts";
+import { parseStatement } from "../src/lib/statement-pipeline.ts";
+import { buildSampleItems, coordinateSamples } from "../src/lib/coordinate-table-samples.ts";
+import { groupVisualLines } from "../src/lib/coordinate-table.ts";
 import type { TransactionRow } from "../src/lib/upload.ts";
 import { computeBalanceCheck, resolveBalanceStatus, getRowWarnings, deriveAmount, countRowWarningSeverity, rowsToCsv, CORE_CSV_HEADERS, CSV_HEADERS } from "../src/lib/upload.ts";
 import { conversionPresentation, resolveConversionState, type ConversionInputs } from "../src/lib/conversion-state.ts";
@@ -1551,6 +1554,64 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   const flagged = buildParsedStatement(flaggedResult);
   check("statement flag → ambiguous stripped via model path", flagged.transactions[0].description === "RANDYS PIZZA DARTMOUTH NS" && flagged.transactions[0].category === "Restaurants");
   check("diagnostic counts recorded (ambiguous stripped / captured)", (flaggedResult.parseStats!.ambiguousCategoriesStripped ?? 0) >= 1 && (flaggedResult.parseStats!.metadataCategoriesCaptured ?? 0) >= 1);
+}
+
+// ----- bank-account same-day date carry-forward -----
+{
+  // Within one table context, a dateless row inherits the most recent valid date;
+  // a leading dateless row (no previous date) stays empty; existing dates are kept.
+  const rs = [
+    row({ date: "", description: "LEADING (no prior date)", debit: 1 }),
+    row({ date: "2024-01-05", description: "DATED", debit: 1 }),
+    row({ date: "", description: "SAME-DAY CONT 1", debit: 1 }),
+    row({ date: "", description: "SAME-DAY CONT 2", debit: 1 }),
+    row({ date: "2024-01-06", description: "NEXT DAY", debit: 1 }),
+  ];
+  const inherited = carryForwardRowDates(rs);
+  check("carry-forward fills dateless continuation rows", rs[2].date === "2024-01-05" && rs[3].date === "2024-01-05");
+  check("carry-forward leaves a leading dateless row empty (no prior date)", rs[0].date === "");
+  check("carry-forward does not overwrite existing dates", rs[1].date === "2024-01-05" && rs[4].date === "2024-01-06");
+  check("carry-forward count is accurate", inherited === 2, String(inherited));
+
+  // End-to-end (full pipeline): a bank table continued across a page with a dateless
+  // same-day row reconciles, every row ends up dated, and it verifies + skips AI.
+  const ac = coordinateSamples.find((s) => s.name === "AC-bank-continued-same-day-date-carryforward")!;
+  const acItems = buildSampleItems(ac);
+  const acText = groupVisualLines(acItems).map((l) => l.text).join("\n");
+  const acOut = parseStatement({ text: acText, items: acItems });
+  check("carry-forward (pipeline): every row is dated", acOut.statement.transactions.every((t) => (t.transactionDate ?? "").trim() !== ""));
+  check("carry-forward (pipeline): statement validates passed", acOut.statement.validation.status === "passed", acOut.statement.validation.status);
+  check("carry-forward (pipeline): reconciling bank verifies + skips AI", evaluateAiEligibility(acOut.statement).eligible === false);
+  check("carry-forward (pipeline): rowsDateInherited diagnostic recorded", (acOut.result.parseStats?.rowsDateInherited ?? 0) >= 1);
+  check("carry-forward (pipeline): no rows still missing date", (acOut.result.parseStats?.rowsStillMissingDate ?? -1) === 0);
+}
+
+// ----- Canadian e-Transfer / Interac description cleanup -----
+{
+  // Raw reference/hash fragments are removed when readable transfer text remains.
+  const a = normalizeTransferDescription("e-Transfer sent Robert G Currie Inc CA8a3f9c2d1e");
+  check("transfer cleanup: hash fragment removed, type + name kept", a.description === "e-Transfer sent Robert G Currie Inc" && a.removed === true, a.description);
+  const b = normalizeTransferDescription("e-Transfer - Autodeposit KEVIN G WALSH 0099887766554433");
+  check("transfer cleanup: long digit reference removed, direction (Autodeposit) kept", /Autodeposit KEVIN G WALSH$/.test(b.description) && !/0099887766554433/.test(b.description) && b.removed);
+
+  // Clean transfer descriptions are left exactly as-is (no over-stripping).
+  check("transfer cleanup: clean 'Online transfer received' kept intact", normalizeTransferDescription("Online transfer received J MARK HENNEBERRY").removed === false);
+  check("transfer cleanup: 'Interac e-Transfer Received' kept intact", normalizeTransferDescription("Interac e-Transfer Received").removed === false);
+  check("transfer cleanup: 'e-Transfer - Autodeposit KEVIN G WALSH' (no ref) kept", normalizeTransferDescription("e-Transfer - Autodeposit KEVIN G WALSH").removed === false);
+
+  // Names and city/province are never removed.
+  const c = normalizeTransferDescription("Interac e-Transfer received JOHN SMITH HALIFAX NS");
+  check("transfer cleanup: names + city/province preserved", c.description === "Interac e-Transfer received JOHN SMITH HALIFAX NS" && c.removed === false);
+
+  // NON-transfer descriptions are never touched (merchant reference codes kept).
+  check("transfer cleanup: non-transfer merchant ref untouched", normalizeTransferDescription("AMAZON MARKETPLACE AB1234567890").removed === false);
+
+  // Through the model build: the default Description is cleaned and the default CSV
+  // is unchanged (no ref fragment, still Date..Balance columns).
+  const stmt = bank([row({ description: "e-Transfer sent Robert G Currie Inc CA8a3f9c2d1e", debit: 50, balance: 150 })], 200, 150);
+  check("model build normalizes the transfer description", stmt.transactions[0].description === "e-Transfer sent Robert G Currie Inc");
+  const csv = rowsToCsv(parsedStatementToRows(stmt));
+  check("transfer cleanup: default CSV unchanged + no ref fragment", csv.split("\r\n")[0] === "Date,Description,Debit,Credit,Amount,Balance" && !/CA8a3f9c2d1e/.test(csv));
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

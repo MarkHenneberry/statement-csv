@@ -125,6 +125,14 @@ export type LayoutParseStats = {
   ambiguousCategoriesStripped: number;
   /** Rows carrying an internal statement-provided category after build (count only). */
   metadataCategoriesCaptured: number;
+  /** Dateless rows that inherited the most recent valid date in the table (count). */
+  rowsDateInherited: number;
+  /** Rows still missing a date after carry-forward (review signal; count only). */
+  rowsStillMissingDate: number;
+  /** Transfer (e-Transfer/Interac/online) descriptions normalized (count only). */
+  eTransferDescriptionsNormalized: number;
+  /** Raw reference/hash fragments removed from transfer descriptions (count only). */
+  rawReferenceFragmentsRemoved: number;
 };
 
 /** Per-candidate aggregate comparison (dev diagnostics only; no row content). */
@@ -422,6 +430,95 @@ export function detectCategoryColumnContext(lines: string[]): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Carry the most recent valid transaction date forward onto dateless rows WITHIN a
+ * single selected transaction-table context (the chosen candidate's row sequence).
+ *
+ * Many bank statements omit the printed date on same-day continuation rows. By the
+ * time a candidate is selected, its rows are ALL transaction rows from one table
+ * context (summary / legal / footer / page-furniture rows have already been
+ * excluded, and section/stitch boundaries decided), so inheriting the previous
+ * row's date is the same-day-continuation recovery — never a cross-section guess.
+ *
+ * Safety: only fills EMPTY dates, never overwrites; only inherits when a previous
+ * row in the SAME sequence had a valid date (no previous date ⇒ left empty so the
+ * row stays a review signal); operates only on the rows handed to it. Returns the
+ * number of rows whose date was inherited.
+ */
+export function carryForwardRowDates(rows: TransactionRow[]): number {
+  let last: string | null = null;
+  let inherited = 0;
+  for (const row of rows) {
+    if (row.date && row.date.trim()) {
+      last = row.date;
+      continue;
+    }
+    if (last) {
+      row.date = last;
+      inherited += 1;
+      // The row is no longer missing a date — drop a stale "date unknown" note so
+      // it is not falsely flagged for review after a safe inheritance.
+      if (row.warning) {
+        const cleaned = row.warning
+          .replace(/date could not be determined\.?/i, "")
+          .replace(/\s{2,}/g, " ")
+          .trim();
+        row.warning = cleaned.length > 0 ? cleaned : undefined;
+      }
+    }
+  }
+  return inherited;
+}
+
+// Canadian transfer descriptions (Interac e-Transfer, online transfer/banking,
+// autodeposit). Used to gate reference-noise cleanup so only transfer rows are
+// touched. Generic across institutions — wording families, not bank names.
+const TRANSFER_DESC_RE =
+  /e-?transfer|interac|autodeposit|online (?:transfer|banking)(?: payment)?|transfer (?:sent|received|in|out)/i;
+
+/**
+ * A raw reference / confirmation / hash fragment that pollutes a transfer
+ * description (e.g. "8a3f9c2d1e", "CA00123ABC45", a 12+ digit reference). Names,
+ * initials, transfer-type words and city/province tokens never match (no token
+ * with letters AND >= 2 digits, or a 12+ digit run).
+ */
+function isReferenceNoiseToken(token: string): boolean {
+  const t = token.replace(/^[#:*-]+|[#:*-]+$/g, "");
+  if (t.length < 8) return false;
+  const hasLetter = /[A-Za-z]/.test(t);
+  const digitCount = (t.match(/\d/g) ?? []).length;
+  // Mixed-alphanumeric confirmation/hash code (letters + >= 2 digits, all alnum).
+  if (hasLetter && digitCount >= 2 && /^[A-Za-z0-9]+$/.test(t)) return true;
+  // Long pure-digit reference number.
+  if (!hasLetter && digitCount >= 12) return true;
+  return false;
+}
+
+/**
+ * Normalize a Canadian transfer (Interac e-Transfer / online transfer / autodeposit)
+ * description: keep the human-readable transfer type + recipient/sender name and
+ * remove raw reference/hash fragments — but ONLY when readable text remains. Never
+ * touches non-transfer descriptions, never removes names/words, and never reduces a
+ * description to empty (if only a raw token exists, it is left as-is). Returns the
+ * cleaned description and whether any reference fragment was removed.
+ */
+export function normalizeTransferDescription(description: string): {
+  description: string;
+  removed: boolean;
+} {
+  if (!description || !TRANSFER_DESC_RE.test(description)) {
+    return { description, removed: false };
+  }
+  const tokens = description.split(/\s+/).filter(Boolean);
+  const kept = tokens.filter((t) => !isReferenceNoiseToken(t));
+  if (kept.length === tokens.length) return { description, removed: false };
+  const cleaned = cleanDescription(kept.join(" "));
+  // Require meaningful human-readable text (a word) to remain; otherwise keep the
+  // original so we never blank out or over-strip a description.
+  if (!/[A-Za-z]{2,}/.test(cleaned)) return { description, removed: false };
+  return { description: cleaned, removed: true };
 }
 
 export type MoneyMatch = { raw: string; value: number; index: number; end: number };
@@ -2505,6 +2602,17 @@ export function parseStatementText(text: string, items?: PdfTextItem[]): ParseRe
   const openingBalance = chosen.openingBalance;
   const closingBalance = chosen.closingBalance;
 
+  // Stage G follow-up: same-day continuation rows in a bank-account table often
+  // omit the printed date. The chosen candidate's rows are a single, already-
+  // bounded transaction-table context (summaries/legal/page-furniture excluded,
+  // section/stitch boundaries decided), so inheriting the most recent valid date is
+  // a safe carry-forward — it fixes the coordinate stitched path (which rebuilds
+  // rows per page and otherwise drops the date on a continued page's first rows)
+  // and is a no-op where dates are already present. Credit-card rows are excluded
+  // (each CC transaction prints its own date; dateless CC amounts are rejected).
+  const rowsDateInherited =
+    statementKind === "bank-account" ? carryForwardRowDates(rows) : 0;
+
   const candidateComparison: CandidateComparison[] = candidates.map((c) => ({
     name: c.name,
     score: Math.round(c.score),
@@ -2599,6 +2707,11 @@ export function parseStatementText(text: string, items?: PdfTextItem[]): ParseRe
       detectCategoryColumnContext(lines),
     ambiguousCategoriesStripped: 0,
     metadataCategoriesCaptured: 0,
+    rowsDateInherited,
+    rowsStillMissingDate: rows.filter((r) => !r.date.trim()).length,
+    // Populated by the model-build description normalization (buildParsedStatement).
+    eTransferDescriptionsNormalized: 0,
+    rawReferenceFragmentsRemoved: 0,
   };
 
   const warnings: string[] = [];
