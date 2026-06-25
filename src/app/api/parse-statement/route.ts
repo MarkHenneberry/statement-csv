@@ -304,11 +304,26 @@ export async function POST(request: Request): Promise<NextResponse> {
         if (process.env.AI_VISION_DEBUG_SAVE_CROPS === "true") {
           await saveVisionCropsForDebug(rendered.images, regions);
         }
-        // Blinders: focus the model on the itemized table; supply summary totals as
-        // TEXT anchors (never as images). Built from the SAME deterministic signals.
+        // Blinders: guide the model to the itemized table and supply parser context +
+        // residual as LOOSENED guidance (context/clues, not truth or tunnel vision).
+        // Summary totals are TEXT anchors (never images) used only for validation.
+        const blindersMode = statement.statementKind === "credit-card" ? "credit-card" : "bank-account";
+        const parserDebitsTotal =
+          Math.round(statement.transactions.reduce((a, t) => a + (t.debit ?? 0), 0) * 100) / 100;
+        const parserCreditsTotal =
+          Math.round(statement.transactions.reduce((a, t) => a + (t.credit ?? 0), 0) * 100) / 100;
+        const residual = statement.validation.difference ?? null;
+        // Balance identity → which side of activity the residual implies is missing.
+        let likelyMissingDirection: "debit" | "credit" | "either" | null = null;
+        if (residual !== null && Math.abs(residual) >= 0.01) {
+          likelyMissingDirection =
+            blindersMode === "credit-card"
+              ? residual > 0 ? "credit" : "debit"
+              : residual > 0 ? "debit" : "credit";
+        }
         blinders = buildBlindersPacket({
           statementKind: statement.statementKind,
-          balanceMode: statement.statementKind === "credit-card" ? "credit-card" : "bank-account",
+          balanceMode: blindersMode,
           openingAnchor: statement.openingBalance ?? null,
           closingAnchor: statement.closingBalance ?? null,
           totalCreditsTarget: statement.summaryTotals?.totalCredits ?? null,
@@ -319,6 +334,17 @@ export async function POST(request: Request): Promise<NextResponse> {
           summaryPages: pageAnalysis.summaryPages,
           tableHeaderPages: pageAnalysis.transactionHeaderPages,
           visionEvidenceOrder: rendered.images.map((img) => ({ id: img.id, kind: img.kind, page: img.page })),
+          parserContext: {
+            rowCount: statement.transactions.length,
+            totalCredits: parserCreditsTotal,
+            totalDebits: parserDebitsTotal,
+            confidence: statement.validation.confidence,
+            validationStatus: statement.validation.status,
+          },
+          residual,
+          likelyMissingDirection,
+          expectedCredits: statement.summaryTotals?.totalCredits ?? null,
+          expectedDebits: statement.summaryTotals?.totalDebits ?? null,
         });
       } catch {
         // Never fail the conversion because rendering failed; degrade to text-layout.

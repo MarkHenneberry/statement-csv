@@ -172,6 +172,18 @@ export function ParserDiagnosticsPanel({
             <Metric label="Parser candidate rows" value={d.aiAssist.parserCandidateRowCount === null ? "—" : String(d.aiAssist.parserCandidateRowCount)} />
             <Metric label="AI candidate rows" value={d.aiAssist.aiCandidateRowCount === null ? "—" : String(d.aiAssist.aiCandidateRowCount)} />
             <Metric label="AI unreconciled difference" value={d.aiAssist.aiCandidateUnreconciledDifference === null ? "—" : d.aiAssist.aiCandidateUnreconciledDifference.toFixed(2)} />
+            <Metric label="AI mode" value={d.aiAssist.aiMode} />
+            <Metric label="AI reconstruction rows" value={d.aiAssist.aiReconstructionRows === null ? "—" : String(d.aiAssist.aiReconstructionRows)} />
+            <Metric label="AI reconstruction difference" value={d.aiAssist.aiReconstructionDifference === null ? "—" : d.aiAssist.aiReconstructionDifference.toFixed(2)} />
+            <Metric label="AI reconciled" value={yesNo(d.aiAssist.aiReconciled)} />
+            <Metric label="AI adopted" value={yesNo(d.aiAssist.aiAdopted)} />
+            <Metric label="AI adopted reason" value={d.aiAssist.aiAdoptedReason ?? "—"} />
+            <Metric label="AI dropped parser rows" value={d.aiAssist.aiDroppedParserRowsCount === null ? "—" : String(d.aiAssist.aiDroppedParserRowsCount)} />
+            <Metric label="AI added rows vs parser" value={d.aiAssist.aiAddedRowsVsParserCount === null ? "—" : String(d.aiAssist.aiAddedRowsVsParserCount)} />
+            <Metric label="AI corrected rows vs parser" value={d.aiAssist.aiCorrectedRowsVsParserCount === null ? "—" : String(d.aiAssist.aiCorrectedRowsVsParserCount)} />
+            <Metric label="AI evidence pages" value={d.aiAssist.aiEvidencePages.length ? d.aiAssist.aiEvidencePages.join(", ") : "—"} />
+            <Metric label="AI evidence regions" value={d.aiAssist.aiEvidenceRegions === null ? "—" : String(d.aiAssist.aiEvidenceRegions)} />
+            <Metric label="AI input image count" value={d.aiAssist.aiInputImageCount === null ? "—" : String(d.aiAssist.aiInputImageCount)} />
             <Metric
               label="Quality reasons"
               value={d.aiAssist.aiCandidateQualityReasons.length ? d.aiAssist.aiCandidateQualityReasons.join(", ") : "—"}

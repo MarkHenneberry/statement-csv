@@ -19,6 +19,7 @@ import {
   repairCreditCardInterestFees,
   evaluateCandidateQuality,
   buildBlindersPacket,
+  notAttemptedOutcome,
   SYSTEM_PROMPT,
   type AiAssistConfig,
   type ChatResult,
@@ -1703,21 +1704,24 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   // Parser has several rows but is badly off; AI improves the difference a lot but
   // is STILL meaningfully unreconciled — it must NOT be auto-applied; parser kept.
   const parser = bank([row({ debit: 10 }), row({ debit: 10 }), row({ debit: 10 })], 1000, 100); // diff 870, 3 rows
+  // AI KEEPS the 3 parser rows and adds one more (so it improves the gap without
+  // dropping rows) but is still ~100 off → must NOT be adopted (strict policy).
   const r = await run(parser, reply({
     candidate: {
       statementKind: "bank-account", openingBalance: 1000, closingBalance: 100,
       transactions: [
-        { description: "A", debit: 800, amount: -800 },
-        { description: "B", debit: 80, amount: -80 },
+        { description: "A", debit: 10, amount: -10 },
+        { description: "B", debit: 10, amount: -10 },
         { description: "C", debit: 10, amount: -10 },
+        { description: "D", debit: 860, amount: -860 },
       ],
       confidence: 0.9, issues: [],
     },
-  }));
+  })); // debits 890 → 1000-890=110 vs 100 → diff 10 (still unreconciled)
   check("still-unreconciled AI candidate is NOT applied", r.outcome.adoptedCandidateSource === "parser" && r.outcome.improved === false && r.statement === undefined, `${r.outcome.status} adopted=${r.outcome.adoptedCandidateSource}`);
   check("aiImprovedButNotAppliedStillUnreconciled diagnostic set", r.outcome.aiImprovedButNotAppliedStillUnreconciled === true);
   check("aiImprovedButStillUnreconciled diagnostic set", r.outcome.aiImprovedButStillUnreconciled === true);
-  check("parser-vs-AI comparison diagnostics recorded", (r.outcome.parserCandidateRowCount ?? 0) === 3 && (r.outcome.aiCandidateRowCount ?? 0) === 3 && r.outcome.parserCandidateDifference !== null && r.outcome.aiCandidateUnreconciledDifference !== null);
+  check("parser-vs-AI comparison diagnostics recorded", (r.outcome.parserCandidateRowCount ?? 0) === 3 && (r.outcome.aiCandidateRowCount ?? 0) === 4 && r.outcome.parserCandidateDifference !== null && r.outcome.aiCandidateUnreconciledDifference !== null);
   check("not-applied reason is explicit", r.outcome.aiRejectedReason === "ai-unreconciled-not-adopted");
 
   // A NEARLY-reconciled AI candidate (within the strict residual) that keeps rows IS adopted.
@@ -1802,6 +1806,70 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
     ], confidence: 0.9, issues: [] },
   }));
   check("full AI repair (reconciles) is applied", full.outcome.status === "reconciled" && full.outcome.adoptedCandidateSource === "ai-candidate", `${full.outcome.status} diff=${full.outcome.postDifference}`);
+}
+
+// ----- Full-reconstruction AI fallback strategy -----
+{
+  // Loosened Blinders: full-reconstruction mode + parser context + residual clue,
+  // and they carry NO private row text.
+  const bl = buildBlindersPacket({
+    statementKind: "bank-account", balanceMode: "bank-account",
+    openingAnchor: 1000, closingAnchor: 500, totalCreditsTarget: 0, totalDebitsTarget: 500,
+    parserFailureReasons: ["validation-not-passed"], transactionTablePages: [0, 1], summaryPages: [],
+    tableHeaderPages: [0], visionEvidenceOrder: [{ id: "table-body-p0", kind: "table-body", page: 0 }],
+    parserContext: { rowCount: 12, totalCredits: 0, totalDebits: 100, confidence: 0.5, validationStatus: "needs-review" },
+    residual: 400, likelyMissingDirection: "debit", expectedCredits: 0, expectedDebits: 500,
+  });
+  check("blinders are full-reconstruction mode", bl.mode === "full-reconstruction");
+  check("blinders carry parser context (not as truth)", bl.parserContext.rowCount === 12 && bl.residual === 400 && bl.likelyMissingDirection === "debit");
+  check("blinders requirements emphasize full reconstruction + residual-as-clue", bl.validationRequirements.some((r) => /reconstruct the FULL/i.test(r)) && bl.validationRequirements.some((r) => /residual is a validation CLUE/i.test(r)));
+  check("blinders serialization contains only safe anchors/labels (no row descriptions)", (() => {
+    const s = JSON.stringify(bl);
+    // Only safe tokens: page indexes, region kinds, anchors, label phrases. No
+    // merchant/description strings are ever placed on the packet.
+    return s.includes("full-reconstruction") && !/grocery|payroll|cheque -|interac|e-transfer/i.test(s);
+  })());
+
+  // parseAiResponse accepts the reconstructedTransactions alias and noSafeReconstruction.
+  check("parseAiResponse accepts reconstructedTransactions alias", Boolean(parseAiResponse(JSON.stringify({ statementKind: "bank-account", openingBalance: 100, closingBalance: 200, reconstructedTransactions: [{ description: "D", credit: 100, amount: 100 }] }))?.candidate));
+  check("parseAiResponse accepts noSafeReconstruction", parseAiResponse(JSON.stringify({ noSafeReconstruction: "rows-not-legible" }))?.noSafeReconstruction === "rows-not-legible");
+
+  // Unverified parser → AI call runs in full-reconstruction mode.
+  const broken = bank([row({ credit: 10 })], 100, 200);
+  const mode = await run(broken, reply({ candidate: { statementKind: "bank-account", openingBalance: 100, closingBalance: 200, transactions: [{ description: "Deposit", credit: 100, amount: 100 }] } }));
+  check("AI fallback runs in full-reconstruction mode", mode.outcome.aiMode === "full-reconstruction" && mode.outcome.called === true);
+  check("adopted full reconstruction sets aiAdopted + reason + reconciled", mode.outcome.aiAdopted === true && mode.outcome.aiReconciled === true && mode.outcome.aiAdoptedReason === "ai-full-reconstruction-reconciled");
+
+  // reconstructedTransactions that reconciles is adopted via the alias path.
+  const alias = await run(broken, reply({ statementKind: "bank-account", openingBalance: 100, closingBalance: 200, reconstructedTransactions: [{ description: "Deposit", credit: 100, amount: 100 }] }));
+  check("reconstructedTransactions alias reconciles + adopted", alias.outcome.status === "reconciled" && alias.outcome.adoptedCandidateSource === "ai-candidate");
+
+  // noSafeReconstruction → parser kept, Needs review, explicit reason.
+  const nsr = await run(broken, reply({ noSafeReconstruction: "rows-not-legible" }));
+  check("noSafeReconstruction keeps parser (no usable result)", nsr.outcome.status === "no-usable-result" && nsr.outcome.adoptedCandidateSource === "parser" && nsr.statement === undefined);
+  check("noSafeReconstruction reason surfaced", nsr.outcome.aiRejectedReason === "no-safe-reconstruction");
+
+  // AI drops a real parser row and stays unreconciled → rejected (drop-gate).
+  const pMulti = bank([row({ debit: 100 }), row({ debit: 200 }), row({ debit: 300 })], 1000, 350); // diff 50
+  const dropped = await run(pMulti, reply({ candidate: { statementKind: "bank-account", openingBalance: 1000, closingBalance: 350, transactions: [
+    { description: "A", debit: 100, amount: -100 }, { description: "B", debit: 200, amount: -200 }, { description: "C2", debit: 360, amount: -360 },
+  ] } })); // replaces 300→360: improves to diff 10 but drops a parser row and stays unreconciled
+  check("AI that drops a parser row + stays unreconciled is rejected", dropped.outcome.adoptedCandidateSource === "parser" && dropped.outcome.aiRejectedReason === "ai-drops-parser-rows-without-reconciling");
+  check("drop/add comparison diagnostics recorded", (dropped.outcome.aiDroppedParserRowsCount ?? 0) >= 1 && (dropped.outcome.aiAddedRowsVsParserCount ?? 0) >= 1);
+
+  // Parser clearly missed the table (≤1 row) → a larger reconciling reconstruction is adopted.
+  const pMissed = bank([row({ credit: 5 })], 100, 400); // 1 row, way off
+  const rebuilt = await run(pMissed, reply({ candidate: { statementKind: "bank-account", openingBalance: 100, closingBalance: 400, transactions: [
+    { description: "Dep1", credit: 150, amount: 150 }, { description: "Dep2", credit: 150, amount: 150 },
+  ] } })); // credits 300 → 100+300=400 = closing → reconciles
+  check("parser-missed-table → reconciling reconstruction adopted", rebuilt.outcome.status === "reconciled" && rebuilt.outcome.adoptedCandidateSource === "ai-candidate");
+
+  // Token control: a verified parser is not eligible (the route makes zero AI calls,
+  // so zero AI tokens), and the not-attempted outcome reports aiMode "none".
+  const verified = bank([row({ credit: 100, balance: 200 })], 100, 200);
+  check("verified parser → not AI-eligible (zero AI tokens)", isAiAssistEligible(verified) === false);
+  const na = notAttemptedOutcome(ON, "not-eligible");
+  check("not-attempted outcome reports aiMode none + zero tokens", na.aiMode === "none" && na.called === false && na.aiTotalTokenCount === null && na.aiInputImageCount === null);
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

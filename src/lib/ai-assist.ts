@@ -153,6 +153,35 @@ export type AiAssistOutcome = {
   aiCandidateRowCount: number | null;
   /** True when the parser result was kept because an AI candidate would have dropped rows. */
   parserRowsPreservedOverAiRows: boolean;
+  // ----- Full-reconstruction strategy diagnostics (safe aggregates only) -----
+  /** AI fallback mode actually used. */
+  aiMode: "none" | "full-reconstruction";
+  /** Rows in the (best) AI full reconstruction. */
+  aiReconstructionRows: number | null;
+  /** Parser candidate row count (alias surfaced alongside the reconstruction). */
+  parserRows: number | null;
+  /** Parser rows (by amount) the AI reconstruction dropped. */
+  aiDroppedParserRowsCount: number | null;
+  /** Rows (by amount) the AI reconstruction added vs the parser. */
+  aiAddedRowsVsParserCount: number | null;
+  /** Rows where the AI reconstruction flipped the debit/credit side vs the parser. */
+  aiCorrectedRowsVsParserCount: number | null;
+  /** The AI reconstruction's reconciliation difference. */
+  aiReconstructionDifference: number | null;
+  /** The parser candidate's reconciliation difference (alias). */
+  parserDifference: number | null;
+  /** True when the AI reconstruction fully reconciled. */
+  aiReconciled: boolean;
+  /** True when the AI reconstruction was adopted as the final result. */
+  aiAdopted: boolean;
+  /** Safe label for why the AI reconstruction was (not) adopted. */
+  aiAdoptedReason: string | null;
+  /** Evidence page indexes sent to the model (no pixels/text). */
+  aiEvidencePages: number[];
+  /** Number of evidence regions sent to the model. */
+  aiEvidenceRegions: number | null;
+  /** Number of input images sent to the model. */
+  aiInputImageCount: number | null;
   /** Safe per-image vision evidence metadata, in send order (no pixels/text). */
   aiVisionEvidence: VisionImageMeta[];
 };
@@ -323,6 +352,8 @@ export type InterestFeeDetection = {
  * merchants, account numbers, names, prompts, AI responses, images, or base64.
  */
 export type BlindersPacket = {
+  /** AI fallback mode. "full-reconstruction" = rebuild the WHOLE itemized table. */
+  mode: "full-reconstruction";
   statementKind: string;
   balanceMode: "bank-account" | "credit-card";
   openingAnchor: number | null;
@@ -339,6 +370,22 @@ export type BlindersPacket = {
   /** Ordered list of the images the model is being sent (kind + page, no pixels). */
   visionEvidenceOrder: { id: string; kind: string; page: number }[];
   validationRequirements: string[];
+  // ----- Loosened guidance: parser output is CONTEXT, not truth -----
+  /** Parser context the AI may use to VALIDATE its own reconstruction (not copy). */
+  parserContext: {
+    rowCount: number;
+    totalCredits: number | null;
+    totalDebits: number | null;
+    confidence: number | null;
+    validationStatus: string | null;
+  };
+  /** Reconciliation residual (a validation clue, NOT the only thing to look for). */
+  residual: number | null;
+  /** Which side of activity the residual implies is missing/misread, if derivable. */
+  likelyMissingDirection: "debit" | "credit" | "either" | null;
+  /** Expected credit/debit totals derivable from the balance identity, if any. */
+  expectedCredits: number | null;
+  expectedDebits: number | null;
 };
 
 /** Build the Blinders packet from safe primitives (pure + testable). */
@@ -355,8 +402,20 @@ export function buildBlindersPacket(input: {
   summaryPages: number[];
   tableHeaderPages: number[];
   visionEvidenceOrder: { id: string; kind: string; page: number }[];
+  parserContext?: {
+    rowCount: number;
+    totalCredits: number | null;
+    totalDebits: number | null;
+    confidence: number | null;
+    validationStatus: string | null;
+  };
+  residual?: number | null;
+  likelyMissingDirection?: "debit" | "credit" | "either" | null;
+  expectedCredits?: number | null;
+  expectedDebits?: number | null;
 }): BlindersPacket {
   return {
+    mode: "full-reconstruction",
     statementKind: input.statementKind,
     balanceMode: input.balanceMode,
     openingAnchor: input.openingAnchor,
@@ -380,15 +439,31 @@ export function buildBlindersPacket(input: {
       "year-to-date",
       "legal",
       "warning",
+      "marketing",
     ],
     visionEvidenceOrder: input.visionEvidenceOrder,
     validationRequirements: [
-      "Every row must be an itemized transaction visible in the transaction-table images.",
-      "Do not create summary, total, aggregate, or placeholder rows.",
+      "PRIMARY OBJECTIVE: independently reconstruct the FULL itemized transaction table from the evidence — return EVERY visible itemized row, not just a residual patch.",
+      "Parser context is CONTEXT, not truth: do not copy parser rows and do not over-trust them; re-extract from the images.",
+      "Every row must be an itemized transaction visible in the transaction-table images, including page bottoms and continuation regions.",
+      "Do not create summary, total, aggregate, balancing, placeholder, or 'miscellaneous' rows.",
       "Use the opening/closing anchors and credit/debit targets only to VALIDATE totals, never as transaction rows.",
-      "If dozens of itemized rows are visible, return dozens of rows.",
-      "Return needs-review issues if the table rows are not legible enough to extract.",
+      "The residual is a validation CLUE, not the only thing to search for: first reconstruct the full table, then check whether it explains the residual.",
+      "Keep category/reference metadata OUT of the description when it is a structurally separate column.",
+      "Use a missing date only when a row is clearly a continuation of a dated transaction block.",
+      "If the rows are not legible enough to extract safely, return noSafeReconstruction with a reason instead of guessing.",
     ],
+    parserContext: input.parserContext ?? {
+      rowCount: 0,
+      totalCredits: null,
+      totalDebits: null,
+      confidence: null,
+      validationStatus: null,
+    },
+    residual: input.residual ?? null,
+    likelyMissingDirection: input.likelyMissingDirection ?? null,
+    expectedCredits: input.expectedCredits ?? null,
+    expectedDebits: input.expectedDebits ?? null,
   };
 }
 
@@ -534,9 +609,15 @@ export function parseAiTransactions(jsonText: string): Transaction[] | null {
 export type AiResponse = {
   candidate?: Record<string, unknown>;
   repairPlan?: Record<string, unknown>;
+  /** Safe reason string when AI declares it cannot safely reconstruct the table. */
+  noSafeReconstruction?: string;
 };
 
-/** Parse the dual-mode response: an independent candidate and/or a repair plan. */
+/**
+ * Parse the response. Full-reconstruction mode: the model returns an independent
+ * candidate (as `candidate` OR a top-level `reconstructedTransactions` array), may
+ * optionally include a secondary `repairPlan`, or may declare `noSafeReconstruction`.
+ */
 export function parseAiResponse(jsonText: string): AiResponse | null {
   let data: unknown;
   try {
@@ -545,10 +626,30 @@ export function parseAiResponse(jsonText: string): AiResponse | null {
     return null;
   }
   if (!isObj(data)) return null;
-  const candidate = isObj(data.candidate) ? data.candidate : undefined;
+  let candidate = isObj(data.candidate) ? data.candidate : undefined;
+  // Accept a top-level full-reconstruction array as an alias for candidate.transactions.
+  if (!candidate && Array.isArray((data as Record<string, unknown>).reconstructedTransactions)) {
+    candidate = {
+      statementKind: data.statementKind,
+      selectedSectionIndex: data.selectedSectionIndex,
+      openingBalance: data.openingBalance,
+      closingBalance: data.closingBalance,
+      summaryTotals: data.summaryTotals,
+      transactions: (data as Record<string, unknown>).reconstructedTransactions,
+      confidence: data.confidence,
+      issues: data.issues,
+    };
+  }
   const repairPlan = isObj(data.repairPlan) ? data.repairPlan : undefined;
-  if (!candidate && !repairPlan) return null;
-  return { candidate, repairPlan };
+  const nsr = (data as Record<string, unknown>).noSafeReconstruction;
+  const noSafeReconstruction =
+    typeof nsr === "string"
+      ? nsr
+      : isObj(nsr) && typeof nsr.reason === "string"
+        ? nsr.reason
+        : undefined;
+  if (!candidate && !repairPlan && !noSafeReconstruction) return null;
+  return { candidate, repairPlan, noSafeReconstruction };
 }
 
 const KINDS: StatementKind[] = ["bank-account", "credit-card", "unknown"];
@@ -944,6 +1045,38 @@ export type CandidateMetrics = {
   issueCount: number;
 };
 
+/**
+ * Safe, count-only structural comparison of an AI candidate's rows against the
+ * parser's rows (by signed/absolute amount multisets — never row text). Powers the
+ * "did AI drop/add/correct rows" diagnostics and adoption safety.
+ */
+export function compareRowsToParser(
+  parser: ParsedStatement,
+  cand: ParsedStatement,
+): { dropped: number; added: number; corrected: number } {
+  const signedCents = (t: Transaction) => Math.round((t.amount ?? 0) * 100);
+  const absCents = (t: Transaction) => Math.abs(Math.round((t.amount ?? 0) * 100));
+  const multiset = (xs: number[]) => {
+    const m = new Map<number, number>();
+    for (const x of xs) m.set(x, (m.get(x) ?? 0) + 1);
+    return m;
+  };
+  const pSigned = multiset(parser.transactions.map(signedCents));
+  const aSigned = multiset(cand.transactions.map(signedCents));
+  const aAbs = multiset(cand.transactions.map(absCents));
+  let dropped = 0;
+  for (const [k, c] of pSigned) dropped += Math.max(0, c - (aSigned.get(k) ?? 0));
+  let added = 0;
+  for (const [k, c] of aSigned) added += Math.max(0, c - (pSigned.get(k) ?? 0));
+  // Side/amount correction: a parser row whose ABS amount appears in the AI rows but
+  // whose SIGNED amount does not (the side was flipped or the amount adjusted).
+  let corrected = 0;
+  for (const t of parser.transactions) {
+    if ((aSigned.get(signedCents(t)) ?? 0) === 0 && (aAbs.get(absCents(t)) ?? 0) > 0) corrected += 1;
+  }
+  return { dropped, added, corrected };
+}
+
 export function candidateMetrics(s: ParsedStatement): CandidateMetrics {
   const d = s.validation.difference;
   return {
@@ -1117,7 +1250,18 @@ export const SYSTEM_PROMPT =
   "targets ONLY to check your extraction adds up — never turn an anchor or target into a " +
   "row. Return strict JSON only. The only acceptable reason to return few rows is that " +
   "the table rows are genuinely not legible in the images; in that case return " +
-  "needs-review issues, not a short reconciled summary.";
+  "needs-review issues, not a short reconciled summary. " +
+  "FULL-RECONSTRUCTION MODE (the only mode): your PRIMARY objective is to rebuild the " +
+  "WHOLE itemized transaction table independently from the evidence — NOT to patch a " +
+  "single residual. evidence.blinders.parserContext (row count, totals, confidence, " +
+  "validation status) is CONTEXT, not truth: do not copy the parser's rows and do not " +
+  "over-trust them; re-extract from the images. evidence.blinders.residual (with " +
+  "likelyMissingDirection / expectedCredits / expectedDebits) is a VALIDATION CLUE " +
+  "only: first reconstruct the full table, THEN check whether your reconstruction " +
+  "explains the residual; never tunnel-vision on one missing amount. You may return " +
+  'the array as "candidate.transactions" or equivalently "reconstructedTransactions"; ' +
+  'if you genuinely cannot safely reconstruct the table, return "noSafeReconstruction" ' +
+  "with a short reason instead of a partial or fabricated candidate.";
 
 export async function callOpenAiChat(
   messages: ChatMessage[],
@@ -1280,6 +1424,20 @@ function baseOutcome(statement: ParsedStatement, config: AiAssistConfig): AiAssi
     parserCandidateRowCount: null,
     aiCandidateRowCount: null,
     parserRowsPreservedOverAiRows: false,
+    aiMode: "none",
+    aiReconstructionRows: null,
+    parserRows: null,
+    aiDroppedParserRowsCount: null,
+    aiAddedRowsVsParserCount: null,
+    aiCorrectedRowsVsParserCount: null,
+    aiReconstructionDifference: null,
+    parserDifference: null,
+    aiReconciled: false,
+    aiAdopted: false,
+    aiAdoptedReason: null,
+    aiEvidencePages: [],
+    aiEvidenceRegions: null,
+    aiInputImageCount: null,
     aiVisionEvidence: [],
   };
 }
@@ -1317,6 +1475,11 @@ export async function runAiAssist(
   out.aiImageCropsCount = images.filter((i) => i.crop).length;
   out.aiFullPageImagesCount = images.filter((i) => !i.crop).length;
   out.aiRenderedPagesCount = new Set(images.map((i) => i.page)).size;
+  // Full-reconstruction strategy: the single fallback call rebuilds the whole table.
+  out.aiMode = "full-reconstruction";
+  out.aiInputImageCount = images.length;
+  out.aiEvidencePages = opts.visionSelection?.selectedPageIndexes ?? [];
+  out.aiEvidenceRegions = opts.visionSelection?.selectedRegionCount ?? null;
 
   const call = opts.call ?? defaultCaller;
   const callStart = Date.now();
@@ -1410,28 +1573,43 @@ export async function runAiAssist(
     }
   }
 
+  const parserMetricsEarly = candidateMetrics(statement);
+  out.parserRows = parserMetricsEarly.rowCount;
+  out.parserDifference = parserMetricsEarly.difference;
+
   out.candidateComparisonCount = 1 + candidates.length;
   if (candidates.length === 0) {
     out.status = "no-usable-result";
-    // When the parser itself missed the table and AI produced nothing usable, say so.
+    out.aiAdopted = false;
+    // When AI declared it cannot safely reconstruct, surface that explicitly.
     if (!out.aiRejectedReason) {
-      out.aiRejectedReason = evidence.parserLikelyMissedTransactions
-        ? "no-transaction-table-candidate"
-        : "no-usable-rows";
+      out.aiRejectedReason = parsed.noSafeReconstruction
+        ? "no-safe-reconstruction"
+        : evidence.parserLikelyMissedTransactions
+          ? "no-transaction-table-candidate"
+          : "no-usable-rows";
     }
+    out.aiAdoptedReason = out.aiRejectedReason;
     return { outcome: out };
   }
 
   const best = rankAi(candidates)!;
   const bestMetrics = candidateMetrics(best.statement);
-  const parserMetrics = candidateMetrics(statement);
+  const parserMetrics = parserMetricsEarly;
 
   // Safe parser-vs-AI comparison diagnostics (counts/differences only — no row text).
   out.parserCandidateDifference = parserMetrics.difference;
   out.parserCandidateRowCount = parserMetrics.rowCount;
   out.aiCandidateRowCount = bestMetrics.rowCount;
+  out.aiReconstructionRows = bestMetrics.rowCount;
+  out.aiReconstructionDifference = bestMetrics.difference;
+  out.aiReconciled = bestMetrics.status === "passed";
   out.aiCandidateUnreconciledDifference =
     bestMetrics.status !== "passed" ? bestMetrics.difference : null;
+  const comparison = compareRowsToParser(statement, best.statement);
+  out.aiDroppedParserRowsCount = comparison.dropped;
+  out.aiAddedRowsVsParserCount = comparison.added;
+  out.aiCorrectedRowsVsParserCount = comparison.corrected;
 
   const aiReducedDifference =
     parserMetrics.difference !== null &&
@@ -1453,15 +1631,26 @@ export async function runAiAssist(
     bestMetrics.rowCount >= parserMetrics.rowCount;
   const parserMissedTable = parserMetrics.rowCount <= 1;
   const aiRebuiltMuchMore = bestMetrics.rowCount >= parserMetrics.rowCount + 3;
+  // A reconstruction that DROPS parser rows is only safe if it recovers the balance
+  // (fully or within the strict residual) or the parser clearly missed the table.
+  // Otherwise it may be discarding real activity, so keep the parser result.
+  const recoversBalance =
+    fullyReconciled || (bestMetrics.difference !== null && bestMetrics.difference <= STRICT_RESIDUAL);
+  const droppedRowsUnexplained =
+    comparison.dropped > 0 && !recoversBalance && !parserMissedTable;
   const strictSafe =
-    fullyReconciled || nearlyReconciledKeepsRows || (parserMissedTable && aiRebuiltMuchMore);
+    (fullyReconciled || nearlyReconciledKeepsRows || (parserMissedTable && aiRebuiltMuchMore)) &&
+    !droppedRowsUnexplained;
 
   const beats = candidateBeatsParser(statement, best.statement);
   const adopt = beats && strictSafe;
   if (!adopt) {
     out.applied = true; // a usable candidate was built and validated, just not adopted
     out.status = "no-improvement";
-    if (bestMetrics.rowCount < parserMetrics.rowCount) out.parserRowsPreservedOverAiRows = true;
+    out.aiAdopted = false;
+    if (bestMetrics.rowCount < parserMetrics.rowCount || comparison.dropped > 0) {
+      out.parserRowsPreservedOverAiRows = true;
+    }
     if (aiReducedDifference && aiStillUnreconciled) {
       out.aiImprovedButStillUnreconciled = true;
       // AI helped the arithmetic but was NOT applied: still unreconciled and it did
@@ -1470,8 +1659,13 @@ export async function runAiAssist(
     }
     // Prefer a specific reason already set by the builder; otherwise say why.
     if (!out.aiRejectedReason) {
-      out.aiRejectedReason = beats ? "ai-unreconciled-not-adopted" : "candidate-worse-than-parser";
+      out.aiRejectedReason = !beats
+        ? "candidate-worse-than-parser"
+        : droppedRowsUnexplained
+          ? "ai-drops-parser-rows-without-reconciling"
+          : "ai-unreconciled-not-adopted";
     }
+    out.aiAdoptedReason = out.aiRejectedReason;
     return { outcome: out };
   }
 
@@ -1482,6 +1676,12 @@ export async function runAiAssist(
   if (bm.status !== "passed") out.aiImprovedButStillUnreconciled = true;
   out.applied = true;
   out.improved = true;
+  out.aiAdopted = true;
+  out.aiAdoptedReason = fullyReconciled
+    ? "ai-full-reconstruction-reconciled"
+    : parserMissedTable
+      ? "parser-missed-table-ai-rebuilt"
+      : "ai-nearly-reconciled-keeps-rows";
   // A candidate was adopted; any rejection reason recorded for the OTHER (unused)
   // candidate is no longer the outcome and would be misleading in diagnostics.
   out.aiRejectedReason = null;
@@ -1564,6 +1764,20 @@ export function notAttemptedOutcome(
     parserCandidateRowCount: null,
     aiCandidateRowCount: null,
     parserRowsPreservedOverAiRows: false,
+    aiMode: "none",
+    aiReconstructionRows: null,
+    parserRows: null,
+    aiDroppedParserRowsCount: null,
+    aiAddedRowsVsParserCount: null,
+    aiCorrectedRowsVsParserCount: null,
+    aiReconstructionDifference: null,
+    parserDifference: null,
+    aiReconciled: false,
+    aiAdopted: false,
+    aiAdoptedReason: null,
+    aiEvidencePages: [],
+    aiEvidenceRegions: null,
+    aiInputImageCount: null,
     aiVisionEvidence: [],
   };
 }
