@@ -1743,5 +1743,66 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   check("fully-reconciled AI candidate still adopted", r3.outcome.status === "reconciled" && r3.outcome.adoptedCandidateSource === "ai-candidate");
 }
 
+// ----- Goal: itemized cheque rows recovered; cheque SUMMARY lines still rejected -----
+{
+  const RBC_TEXT = [
+    "Royal Bank of Canada", "Account Activity Details", "Opening balance 302,242.50",
+    "01 Dec Online Banking transfer - 5026 379.02", "Bill Payment PAY-FILE FEES 2.00",
+    "Cheque - 122 3,500.00 298,361.48", "Monthly fee 7.00",
+    "Regular transaction fee 2 Drs @ 1.25 2.50", "Paper statement with images fee 1 @ 5.00",
+    "Electronic transaction fee 1 Dr @ 0.75", "1 Cr @ 0.75 1.50 298,345.48",
+    "09 Dec Canada Carbon Rebate CANADA 312.00 298,657.48",
+    "10 Dec Interac purchase - 1415 B002 SQ *TAL ALZAYTO 1,495.00",
+    "COMMERCIAL TAXES EMPTX 8290555 341.15 296,821.33",
+    "12 Dec Interac purchase - 0694 B001 OREGANS NISSAN 4,141.06", "Cheque - 123 945.47",
+    "12 Dec Cheque - 124 100,000.00 191,734.80", "23 Dec Cheque - 125 945.45 190,789.35",
+    "24 Dec Cheque - 126 20,000.00 170,789.35", "29 Dec e-Transfer sent Robert Currie 1,282.50",
+    "INTERAC e-Transfer fee 1.50 169,505.35", "Online Banking transfer - 3512 1,235.95 168,269.40",
+    "Closing balance 168,269.40", "Account Fees: $17.50",
+  ].join("\n");
+  const out = parseStatement({ text: RBC_TEXT });
+  check("real-structure statement recovers all itemized cheque rows", out.statement.transactions.length === 18, String(out.statement.transactions.length));
+  check("real-structure statement reconciles + verifies", out.statement.validation.status === "passed");
+  check("verified statement is parser-verified (AI skipped)", evaluateAiEligibility(out.statement).eligible === false);
+  check("Cheque-122 (with balance) and Cheque-123 (no balance) both present", out.statement.transactions.some((t) => t.description.includes("122")) && out.statement.transactions.some((t) => t.description.includes("123")));
+
+  // A cheque SUMMARY line ("Cheques 7 26,111.25") is still rejected (not a row).
+  const sum = parseStatement({ text: [
+    "BANK", "Account Activity Details", "Opening balance 1000.00",
+    "01 Jan Deposit Payroll 500.00 1500.00",
+    "Cheques 7 26,111.25",
+    "Closing balance 1500.00",
+  ].join("\n") });
+  check("cheque SUMMARY line is not treated as a transaction", sum.statement.transactions.length === 1 && sum.statement.transactions.every((t) => Math.abs((t.debit ?? 0) - 26111.25) > 0.001));
+}
+
+// ----- Goal: AI residual repair must fully reconcile (partial repair not applied) -----
+{
+  // Parser is off by 4,445.47 (missing two rows). Use itemized AI candidates.
+  const parser = bank([row({ description: "Big debits", debit: 129839.63 }), row({ description: "Rebate", credit: 312 })], 302242.5, 168269.4);
+  check("parser candidate is off by 4,445.47", Math.abs((parser.validation.difference ?? 0) - 4445.47) < 0.01, String(parser.validation.difference));
+
+  // AI finds only ONE missing row (3,500) → residual 945.47, still unreconciled → NOT applied.
+  const partial = await run(parser, reply({
+    candidate: { statementKind: "bank-account", openingBalance: 302242.5, closingBalance: 168269.4, transactions: [
+      { description: "Cheque - A", debit: 100000, amount: -100000 },
+      { description: "Cheque - B", debit: 33339.63, amount: -33339.63 },
+      { description: "Rebate", credit: 312, amount: 312 },
+    ], confidence: 0.9, issues: [] },
+  }));
+  check("partial AI residual repair (still 945.47 off) is NOT applied", partial.outcome.adoptedCandidateSource === "parser" && partial.outcome.improved === false, `${partial.outcome.status} diff=${partial.outcome.aiCandidateUnreconciledDifference}`);
+  check("partial repair flagged improved-but-not-applied", partial.outcome.aiImprovedButNotAppliedStillUnreconciled === true);
+
+  // AI finds BOTH missing rows → fully reconciles → applied.
+  const full = await run(parser, reply({
+    candidate: { statementKind: "bank-account", openingBalance: 302242.5, closingBalance: 168269.4, transactions: [
+      { description: "Cheque - A", debit: 100000, amount: -100000 },
+      { description: "Cheque - B", debit: 34285.10, amount: -34285.10 },
+      { description: "Rebate", credit: 312, amount: 312 },
+    ], confidence: 0.9, issues: [] },
+  }));
+  check("full AI repair (reconciles) is applied", full.outcome.status === "reconciled" && full.outcome.adoptedCandidateSource === "ai-candidate", `${full.outcome.status} diff=${full.outcome.postDifference}`);
+}
+
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

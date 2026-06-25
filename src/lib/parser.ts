@@ -1817,6 +1817,14 @@ const BANK_STOP_RE =
 // real dated transaction such as "Jan 31 Interest Paid 5.00" is never dropped.
 const BANK_SUMMARY_ROW_RE =
   /^(?:total|sub-?total|interest\b|service charge|deposits?\b|withdrawals?\b|credits?\b|debits?\b|cheques?\b|chqs?\b|number of|no\.? of items|monthly (?:aver|min|average|minimum)|average (?:cr|dr|daily)?\.? ?bal|minimum (?:cr|dr)?\.? ?bal|cash content|next statement|statement date|items? (?:processed|enclosed|deposited)|transaction totals?)\b/i;
+// A dateless line that matches a summary keyword can STILL be an itemized
+// transaction when a serial/reference number follows the keyword (e.g. "Cheque -
+// 122", "Chq #4051", "Item No. 7783", "Draft 0091"). Statistical summaries use the
+// plural/total/count forms ("Cheques 7 26,111.25", "Total cheques") and never carry
+// a "- ###" / "#" / "No." reference. Generic across issuers, not bank-specific —
+// this keeps real cheque/draft/item rows that omit their own date or balance.
+const BANK_ITEMIZED_REF_RE =
+  /\b(?:cheque|chq|ch[eè]que|draft|voucher|item|ref(?:erence)?|serial)\b\s*(?:[-#:]\s*|no\.?\s*|number\s*)\d{2,}/i;
 // Lines that are never transactions: headers, addresses, phone, control numbers,
 // and "From <date> to <date>, <year>" statement-period lines.
 const BANK_IGNORE_LINE_RE =
@@ -1867,11 +1875,14 @@ export function feeFormulaRates(text: string): number[] {
 }
 
 /**
- * A money value that is a RATE inside a fee formula (immediately preceded by "@",
- * e.g. the 0.75 in "1 Dr @ 0.75"). Such values are NOT the posted transaction
- * amount and must never be selected as the amount or a running balance.
+ * A money value that is a RATE inside a COUNT/RATE fee formula (immediately preceded
+ * by "@" AND the line actually contains a "N Dr/Cr @ rate" formula), e.g. the 0.75
+ * in "1 Dr @ 0.75". Such values are NOT the posted amount. A bare "1 @ 5.00" (a
+ * count with no Dr/Cr) is NOT a rate — there the 5.00 IS the posted amount — so we
+ * require a real Dr/Cr formula on the line before excluding an "@"-preceded value.
  */
 function isRateMoney(line: string, m: MoneyMatch): boolean {
+  if (!hasFeeFormula(line)) return false;
   return /@\s*\$?\s*$/.test(line.slice(Math.max(0, m.index - 4), m.index));
 }
 
@@ -2045,7 +2056,7 @@ export function parseBankAccountTable(
     // balance ± amount). Section totals also carry two figures but their balance
     // does NOT continue the running balance, so they remain summaries. This keeps
     // real end-of-statement fee charges without absorbing totals — generically.
-    if (!date && BANK_SUMMARY_ROW_RE.test(line)) {
+    if (!date && BANK_SUMMARY_ROW_RE.test(line) && !BANK_ITEMIZED_REF_RE.test(line)) {
       let runningFeeRow = false;
       if (moneys.length >= 2 && lastBalance !== null) {
         const amt = Math.abs(moneys[moneys.length - 2].value);

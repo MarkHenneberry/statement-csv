@@ -879,4 +879,56 @@ export const parserSamples: ParserSample[] = [
       note: "wrapped fee resolves to posted 1.50 (one row); page-bottom balance-less cheque 945.47 recovered; reconciles",
     },
   },
+
+  // 8) Full RBC-business-style layout: itemized cheque rows that omit their own date
+  // (date carried) and sometimes a running balance must NOT be dropped as cheque
+  // SUMMARY lines. "Cheque - 122" (has balance) and page-bottom "Cheque - 123" (no
+  // balance) were both being dropped because "cheque" matched the summary regex.
+  // Generalized cheque/itemized-reference recovery; reconciles end-to-end.
+  {
+    name: "bank-itemized-cheques-not-summary-rows",
+    description:
+      "Dateless itemized cheque rows (with and without a running balance) are recovered, not treated as cheque summary lines",
+    text: [
+      "Royal Bank of Canada",
+      "Account Activity Details",
+      "Opening balance 302,242.50",
+      "01 Dec Online Banking transfer - 5026 379.02",
+      "Bill Payment PAY-FILE FEES 2.00",
+      "Cheque - 122 3,500.00 298,361.48",
+      "Monthly fee 7.00",
+      "Regular transaction fee 2 Drs @ 1.25 2.50",
+      "Paper statement with images fee 1 @ 5.00",
+      "Electronic transaction fee 1 Dr @ 0.75",
+      "1 Cr @ 0.75 1.50 298,345.48",
+      "09 Dec Canada Carbon Rebate CANADA 312.00 298,657.48",
+      "10 Dec Interac purchase - 1415 B002 SQ *TAL ALZAYTO 1,495.00",
+      "COMMERCIAL TAXES EMPTX 8290555 341.15 296,821.33",
+      "12 Dec Interac purchase - 0694 B001 OREGANS NISSAN 4,141.06",
+      "Cheque - 123 945.47",
+      "12 Dec Cheque - 124 100,000.00 191,734.80",
+      "23 Dec Cheque - 125 945.45 190,789.35",
+      "24 Dec Cheque - 126 20,000.00 170,789.35",
+      "29 Dec e-Transfer sent Robert Currie 1,282.50",
+      "INTERAC e-Transfer fee 1.50 169,505.35",
+      "Online Banking transfer - 3512 1,235.95 168,269.40",
+      "Closing balance 168,269.40",
+      "Account Fees: $17.50",
+    ].join("\n"),
+    expect: {
+      kind: "bank-account",
+      family: "bank-account-table",
+      candidate: "bank-account",
+      minRows: 18,
+      maxRows: 18,
+      creditRows: 1,
+      debitRows: 17,
+      opening_: 302242.5,
+      closing_: 168269.4,
+      totalCredits: 312.0,
+      totalDebits: 134285.1,
+      balancePasses: true,
+      note: "Cheque - 122 (3,500.00, has balance) and page-bottom Cheque - 123 (945.47, no balance) both recovered; reconciles to 0.00",
+    },
+  },
 ];
