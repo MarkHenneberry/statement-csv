@@ -13,7 +13,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { extractPdfText } from "../src/lib/pdf-extract-core.ts";
-import { parseStatementText } from "../src/lib/parser.ts";
+import { parseStatement } from "../src/lib/statement-pipeline.ts";
 import { computeBalanceCheck } from "../src/lib/upload.ts";
 
 type ManifestEntry = {
@@ -66,7 +66,24 @@ for (const entry of manifest.statements ?? []) {
   try {
     const bytes = new Uint8Array(readFileSync(entry.path));
     const extracted = await extractPdfText(bytes);
-    const parsed = parseStatementText(extracted.pages.join("\n"), extracted.items);
+    // Run the FULL pipeline (text/coordinate parse → model build → validation) so
+    // the model-level cleanup (e.g. metadata/category separation) is reflected,
+    // exactly as the app produces the displayed/exported rows.
+    const { statement, result } = parseStatement({
+      text: extracted.pages.join("\n"),
+      items: extracted.items,
+    });
+    const parsed = {
+      statementKind: statement.statementKind,
+      layoutFamily: result.layoutFamily,
+      rows: statement.transactions.map((t) => ({
+        description: t.description,
+        debit: t.debit ?? null,
+        credit: t.credit ?? null,
+      })),
+      openingBalance: statement.openingBalance ?? null,
+      closingBalance: statement.closingBalance ?? null,
+    };
 
     const mode = parsed.statementKind === "credit-card" ? "credit-card" : "bank-account";
     const check = computeBalanceCheck(
@@ -76,6 +93,20 @@ for (const entry of manifest.statements ?? []) {
       mode,
     );
     const status = !check.available ? "limited" : check.passed ? "passed" : "needs-review";
+
+    // Content-safe metadata-leak check: a credit-card description that ENDS with a
+    // known ambiguous spend-category label (after real merchant text) means a
+    // statement-provided category leaked into Description. Counts only — no text.
+    const TRAILING_CATEGORY_LEAK_RE =
+      /\b(restaurants|transportation|transport|groceries|merchandise|healthcare)\s*$/i;
+    const categoryLeaks =
+      parsed.statementKind === "credit-card"
+        ? parsed.rows.filter(
+            (r) =>
+              TRAILING_CATEGORY_LEAK_RE.test(r.description) &&
+              r.description.trim().split(/\s+/).length >= 2,
+          ).length
+        : 0;
 
     const actual = {
       statementKind: parsed.statementKind,
@@ -105,6 +136,7 @@ for (const entry of manifest.statements ?? []) {
       mismatches.push(`debits ${actual.totalDebits}≠${entry.expectedTotalDebits}`);
     if (entry.expectedBalanceStatus && actual.balanceStatus !== entry.expectedBalanceStatus)
       mismatches.push(`status ${actual.balanceStatus}≠${entry.expectedBalanceStatus}`);
+    if (categoryLeaks > 0) mismatches.push(`category-leaks ${categoryLeaks}`);
 
     if (mismatches.length === 0) {
       console.log(`PASS  ${label}`);

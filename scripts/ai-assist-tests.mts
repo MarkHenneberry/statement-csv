@@ -26,9 +26,11 @@ import {
 import { detectCreditCardInterestFees } from "../src/lib/parser.ts";
 import {
   buildStatementFromRows,
+  buildParsedStatement,
   parsedStatementToRows,
   type ParsedStatement,
 } from "../src/lib/statement-model.ts";
+import { detectCategoryColumnContext, type ParseResult } from "../src/lib/parser.ts";
 import type { TransactionRow } from "../src/lib/upload.ts";
 import { computeBalanceCheck, resolveBalanceStatus, getRowWarnings, deriveAmount, countRowWarningSeverity, rowsToCsv, CORE_CSV_HEADERS, CSV_HEADERS } from "../src/lib/upload.ts";
 import { conversionPresentation, resolveConversionState, type ConversionInputs } from "../src/lib/conversion-state.ts";
@@ -1486,6 +1488,69 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   // (no parseStats) must NOT strip ambiguous labels — structure isn't confirmed.
   const noCtx = cc([row({ description: "RANDYS PIZZA DARTMOUTH NS Restaurants", debit: 45 })], 0, 45);
   check("model build: ambiguous kept when no category column detected", noCtx.transactions[0].description === "RANDYS PIZZA DARTMOUTH NS Restaurants");
+}
+
+// ----- category-column CONTEXT survives to the final model path (text/sectioned) -----
+{
+  // detectCategoryColumnContext: header-level signal (statement-level, path-agnostic).
+  check("category header context: 'Spend Categories' header detected", detectCategoryColumnContext(["Trans Date Post Date Description Spend Categories Amount"]) === true);
+  check("category header context: bare 'Category' header with other columns", detectCategoryColumnContext(["Date Description Category Amount"]) === true);
+  check("category header context: prose 'category' is not a column", detectCategoryColumnContext(["Spending in each category is summarized below"]) === false);
+  check("category header context: no category column", detectCategoryColumnContext(["Date Description Amount"]) === false);
+
+  // SELF-CONTAINED structural evidence at model build: when >= 2 descriptions carry
+  // DISTINCTIVE category phrases, a category column is inferred and ambiguous labels
+  // ("Restaurants", "Transportation") are ALSO stripped — even with no parseStats
+  // flag and no coordinate column order (the text/sectioned-CC winning path).
+  const withCtx = cc(
+    [
+      row({ description: "WAL-MART #1176 DARTMOUTH NS Retail and Grocery", debit: 50 }),
+      row({ description: "GOOGLE *Google One HALIFAX NS Professional and Financial Services", debit: 10 }),
+      row({ description: "RANDYS PIZZA - COLE HA DARTMOUTH NS Restaurants", debit: 20 }),
+      row({ description: "CIRCLE K / IRVING # 25 DARTMOUTH NS Transportation", debit: 5 }),
+      row({ description: "PAYMENT THANK YOU", credit: 85 }),
+    ],
+    0,
+    0,
+  );
+  const byDesc = (frag: string) => withCtx.transactions.find((t) => t.description.includes(frag));
+  check("context inferred from distinctive endings → ambiguous 'Restaurants' stripped", withCtx.transactions.some((t) => t.description === "RANDYS PIZZA - COLE HA DARTMOUTH NS" && t.category === "Restaurants"));
+  check("context inferred → ambiguous 'Transportation' stripped", withCtx.transactions.some((t) => t.description === "CIRCLE K / IRVING # 25 DARTMOUTH NS" && t.category === "Transportation"));
+  check("distinctive phrase still stripped + captured", Boolean(byDesc("WAL-MART") && byDesc("WAL-MART")!.description === "WAL-MART #1176 DARTMOUTH NS" && byDesc("WAL-MART")!.category === "Retail and Grocery"));
+  check("city/province retained after ambiguous strip", withCtx.transactions.every((t) => !/Restaurants|Transportation/.test(t.description)) && withCtx.transactions.some((t) => /DARTMOUTH NS/.test(t.description)));
+  // Default CSV still excludes the captured categories.
+  const csv = rowsToCsv(parsedStatementToRows(withCtx));
+  check("default CSV excludes captured categories (context path)", csv.split("\r\n")[0] === "Date,Description,Debit,Credit,Amount,Balance" && !/Restaurants|Transportation|Retail and Grocery/.test(csv));
+
+  // NEGATIVE: the same ambiguous descriptions WITHOUT category-column context are
+  // left intact (only 2 ambiguous rows, no distinctive evidence, no flag).
+  const noCtx = cc(
+    [
+      row({ description: "RANDYS PIZZA - COLE HA DARTMOUTH NS Restaurants", debit: 20 }),
+      row({ description: "CIRCLE K / IRVING # 25 DARTMOUTH NS Transportation", debit: 5 }),
+      row({ description: "PAYMENT THANK YOU", credit: 25 }),
+    ],
+    0,
+    0,
+  );
+  check("no context → ambiguous labels NOT stripped", noCtx.transactions.some((t) => t.description === "RANDYS PIZZA - COLE HA DARTMOUTH NS Restaurants"));
+
+  // The explicit statement-level flag also drives stripping through the model path.
+  const flaggedResult = {
+    statementKind: "credit-card",
+    layoutFamily: "credit-card-table",
+    rows: [
+      { id: "x1", date: "2024-01-05", description: "RANDYS PIZZA DARTMOUTH NS Restaurants", debit: 20, credit: null, balance: null, category: "", confidence: 0.95 },
+    ],
+    openingBalance: 0,
+    closingBalance: 20,
+    summary: { credits: null, debits: null },
+    warnings: [],
+    parseStats: { categoryColumnContextDetected: true, coordColumnOrder: null, ambiguousCategoriesStripped: 0, metadataCategoriesCaptured: 0 },
+  } as unknown as ParseResult;
+  const flagged = buildParsedStatement(flaggedResult);
+  check("statement flag → ambiguous stripped via model path", flagged.transactions[0].description === "RANDYS PIZZA DARTMOUTH NS" && flagged.transactions[0].category === "Restaurants");
+  check("diagnostic counts recorded (ambiguous stripped / captured)", (flaggedResult.parseStats!.ambiguousCategoriesStripped ?? 0) >= 1 && (flaggedResult.parseStats!.metadataCategoriesCaptured ?? 0) >= 1);
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

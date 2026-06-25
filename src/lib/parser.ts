@@ -114,6 +114,17 @@ export type LayoutParseStats = {
   rowsMissingDateAfterNormalization: number;
   /** Rows whose date is non-empty but not valid YYYY-MM-DD (should be 0). */
   malformedDatesAfterNormalization: number;
+  /**
+   * True when ANY detected transaction table/section in this statement structurally
+   * contains a category / spend-category / merchant-category column (header), even
+   * if that section was not the winning candidate. Gates ambiguous-category
+   * stripping in the final cleanup. Safe boolean (no row text).
+   */
+  categoryColumnContextDetected: boolean;
+  /** Rows whose trailing AMBIGUOUS category label was stripped (count only). */
+  ambiguousCategoriesStripped: number;
+  /** Rows carrying an internal statement-provided category after build (count only). */
+  metadataCategoriesCaptured: number;
 };
 
 /** Per-candidate aggregate comparison (dev diagnostics only; no row content). */
@@ -378,6 +389,39 @@ export function splitTrailingSpendCategory(
     return { description, category: "" };
   }
   return { description: head, category: m[1].trim() };
+}
+
+/** True when a captured category label is one of the AMBIGUOUS single-word labels. */
+export function isAmbiguousSpendCategory(label: string): boolean {
+  return AMBIGUOUS_SET.has(label.trim().toLowerCase());
+}
+
+// A transaction-table header that names a category column. The distinctive
+// multi-word phrases ("Spend Categories", "Merchant Category", …) are detected
+// directly; a bare "Category"/"Categories" only counts when it co-occurs with other
+// transaction-table headers on the same line (so prose containing the word "category"
+// is never mistaken for a column). Structure-aware and statement-level.
+const CATEGORY_COLUMN_HEADER_RE = /\b(?:spend|merchant|transaction|purchase)\s+categor(?:y|ies)\b/i;
+
+/**
+ * Did ANY header line in the statement declare a category column? Used as a
+ * statement/section-level signal so ambiguous-category stripping can be enabled for
+ * the final selected rows even when the winning candidate is the text-parser path
+ * (whose column order does not carry the coordinate "category" marker). Safe: reads
+ * header lines only and returns a boolean.
+ */
+export function detectCategoryColumnContext(lines: string[]): boolean {
+  for (const l of lines) {
+    if (CATEGORY_COLUMN_HEADER_RE.test(l)) return true;
+    if (
+      /\bcategor(?:y|ies)\b/i.test(l) &&
+      /\bdescription\b/i.test(l) &&
+      /\b(?:amount|debit|credit|balance|trans(?:action)?\.?\s*date|post(?:ing)?\.?\s*date|date)\b/i.test(l)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export type MoneyMatch = { raw: string; value: number; index: number; end: number };
@@ -2545,6 +2589,16 @@ export function parseStatementText(text: string, items?: PdfTextItem[]): ParseRe
     malformedDatesAfterNormalization: rows.filter(
       (r) => r.date.trim() !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(r.date),
     ).length,
+    // Statement-level category-column context: true when ANY coordinate region
+    // detected a category column OR a header line names one (covers the text-parser
+    // / sectioned-CC winning paths whose own column order omits the coordinate
+    // "category" marker). This is what survives to the final cleanup. The two
+    // counts are populated by the model-build cleanup (buildParsedStatement).
+    categoryColumnContextDetected:
+      candidates.some((c) => (c.coord?.columnOrder ?? "").includes("category")) ||
+      detectCategoryColumnContext(lines),
+    ambiguousCategoriesStripped: 0,
+    metadataCategoriesCaptured: 0,
   };
 
   const warnings: string[] = [];

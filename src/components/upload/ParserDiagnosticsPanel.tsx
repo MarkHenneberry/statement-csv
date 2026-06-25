@@ -438,6 +438,9 @@ export function ParserDiagnosticsPanel({
             <Metric label="Rows missing date" value={String(d.parseStats.rowsMissingDateAfterNormalization)} />
             <Metric label="Malformed dates" value={String(d.parseStats.malformedDatesAfterNormalization)} />
             <Metric label="CC optional columns ignored" value={String(d.parseStats.coordCcOptionalColumnsIgnored)} />
+            <Metric label="Category column context" value={yesNo(d.parseStats.categoryColumnContextDetected)} />
+            <Metric label="Ambiguous categories stripped" value={String(d.parseStats.ambiguousCategoriesStripped)} />
+            <Metric label="Metadata categories captured" value={String(d.parseStats.metadataCategoriesCaptured)} />
           </dl>
 
           {d.parseStats.candidateComparison.length > 0 ? (

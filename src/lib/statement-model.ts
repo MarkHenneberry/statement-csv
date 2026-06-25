@@ -23,7 +23,7 @@ import {
   LOW_CONFIDENCE_THRESHOLD,
   isAggregateOrPlaceholderDescription,
 } from "./upload.ts";
-import { splitTrailingSpendCategory } from "./parser.ts";
+import { splitTrailingSpendCategory, isAmbiguousSpendCategory } from "./parser.ts";
 import type { ParseResult, StatementKind, LayoutFamily, LayoutParseStats } from "./parser.ts";
 
 export type Transaction = {
@@ -367,18 +367,49 @@ export function buildParsedStatement(
   // in the coordinate parser already handles most rows (those already have a
   // category, so this is a no-op there) — this primarily cleans the text-parser
   // path. DISTINCTIVE multi-word taxonomy phrases are always stripped; shorter
-  // AMBIGUOUS labels ("Restaurants", "Transportation") only when the chosen parse
-  // STRUCTURALLY detected a category column (its column order includes "category"),
-  // so genuine merchant names and city/province text are never touched otherwise.
+  // AMBIGUOUS labels ("Restaurants", "Transportation") only when the statement
+  // STRUCTURALLY declared a category column ANYWHERE in a transaction section
+  // (categoryColumnContextDetected) — which survives regardless of the winning
+  // candidate path — so genuine merchant names and city/province text are never
+  // touched otherwise.
   if (result.statementKind === "credit-card") {
-    const categoryColumnDetected = (result.parseStats?.coordColumnOrder ?? "").includes("category");
+    // Category-column context, established from the strongest available signal:
+    //  (a) a structurally detected category column/header anywhere in the statement
+    //      (parseStats flag), or the chosen coordinate candidate's column order; or
+    //  (b) SELF-CONTAINED structural evidence: two or more rows already carry a
+    //      captured category (separated structurally or via a distinctive strip
+    //      earlier in the pipeline) OR end with a DISTINCTIVE (unambiguous) category
+    //      taxonomy phrase. Distinctive phrases are never real merchant-name
+    //      endings, so >= 2 such rows prove a category column exists whose values
+    //      leaked into Description — even when no header was matched and the winning
+    //      candidate is the text/coordinate/sectioned-CC path.
+    // Only when context is established are SHORT/AMBIGUOUS labels also stripped.
+    const categoryEvidence = transactions.filter(
+      (t) =>
+        (t.category ?? "").trim().length > 0 ||
+        splitTrailingSpendCategory(t.description).category !== "",
+    ).length;
+    const categoryColumnContext =
+      (result.parseStats?.categoryColumnContextDetected ?? false) ||
+      (result.parseStats?.coordColumnOrder ?? "").includes("category") ||
+      categoryEvidence >= 2;
+    let ambiguousStripped = 0;
     for (const t of transactions) {
       if (t.category && t.category.trim()) continue;
-      const split = splitTrailingSpendCategory(t.description, { allowAmbiguous: categoryColumnDetected });
+      const split = splitTrailingSpendCategory(t.description, { allowAmbiguous: categoryColumnContext });
       if (split.category) {
         t.description = split.description;
         t.category = split.category;
+        if (isAmbiguousSpendCategory(split.category)) ambiguousStripped += 1;
       }
+    }
+    if (result.parseStats) {
+      result.parseStats.categoryColumnContextDetected = categoryColumnContext;
+      result.parseStats.ambiguousCategoriesStripped =
+        (result.parseStats.ambiguousCategoriesStripped ?? 0) + ambiguousStripped;
+      result.parseStats.metadataCategoriesCaptured = transactions.filter(
+        (t) => (t.category ?? "").trim().length > 0,
+      ).length;
     }
   }
   const validation = buildValidation(result, transactions);
