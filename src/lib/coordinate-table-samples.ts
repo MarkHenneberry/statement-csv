@@ -996,4 +996,40 @@ export const coordinateSamples: CoordSample[] = [
       note: "page-2 dateless same-day row inherits the carried date across the stitched table",
     },
   },
+
+  // AD. Coordinate bank table with a WRAPPED fee formula (rate on line 1, posted
+  // total on the continuation line) and a page-bottom cheque with NO running
+  // balance. The fee must be the posted 1.50 as ONE clean row ("Electronic
+  // transaction fee"), and the balance-less cheque must be recovered.
+  {
+    name: "AD-bank-wrapped-fee-and-page-bottom-cheque",
+    description: "Wrapped fee (1 Dr @ 0.75 / 1 Cr @ 0.75 → posted 1.50) + balance-less page-bottom cheque",
+    rows: [
+      [["Some Bank Chequing", X.date]],
+      [["Opening Balance", X.date], ["1,000.00", X.balance]],
+      [["Date", X.date], ["Description", X.desc], ["Debit", X.debit], ["Credit", X.credit], ["Balance", X.balance]],
+      [["2025-12-01", X.date], ["Customer Deposit", X.desc], ["500.00", X.credit], ["1,500.00", X.balance]],
+      // Wrapped fee: line 1 carries only the rate (in the description), line 2 the
+      // posted total 1.50 in the Debit column + the running balance.
+      [["2025-12-01", X.date], ["Electronic transaction fee 1 Dr @ 0.75", X.desc]],
+      [["1 Cr @ 0.75", X.desc], ["1.50", X.debit], ["1,498.50", X.balance]],
+      // Page-bottom cheque with NO running balance printed.
+      [["2025-12-02", X.date], ["Cheque - 123", X.desc], ["945.47", X.debit]],
+      [["Closing Balance", X.date], ["553.03", X.balance]],
+    ],
+    expect: {
+      rows: 3,
+      opening: 1000,
+      closing: 553.03,
+      totalCredits: 500,
+      totalDebits: 946.97,
+      balancePasses: true,
+      columnOrder: "date|description|debit|credit|balance",
+      statementKind: "bank-account",
+      noDescriptionIncludes: ["@", "1 Dr", "1 Cr"],
+      descriptionIncludes: ["Electronic transaction fee", "Cheque - 123"],
+      rowsAllDated: true,
+      note: "wrapped fee → posted 1.50 as one clean row; balance-less page-bottom cheque recovered; reconciles",
+    },
+  },
 ];

@@ -1698,5 +1698,50 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   check("unreconciled AI that keeps rows + improves diff is adopted", candidateBeatsParser(parserOne, aiMore) === true);
 }
 
+// ----- Goal 4: strict AI adoption (do not apply still-unreconciled AI) -----
+{
+  // Parser has several rows but is badly off; AI improves the difference a lot but
+  // is STILL meaningfully unreconciled — it must NOT be auto-applied; parser kept.
+  const parser = bank([row({ debit: 10 }), row({ debit: 10 }), row({ debit: 10 })], 1000, 100); // diff 870, 3 rows
+  const r = await run(parser, reply({
+    candidate: {
+      statementKind: "bank-account", openingBalance: 1000, closingBalance: 100,
+      transactions: [
+        { description: "A", debit: 800, amount: -800 },
+        { description: "B", debit: 80, amount: -80 },
+        { description: "C", debit: 10, amount: -10 },
+      ],
+      confidence: 0.9, issues: [],
+    },
+  }));
+  check("still-unreconciled AI candidate is NOT applied", r.outcome.adoptedCandidateSource === "parser" && r.outcome.improved === false && r.statement === undefined, `${r.outcome.status} adopted=${r.outcome.adoptedCandidateSource}`);
+  check("aiImprovedButNotAppliedStillUnreconciled diagnostic set", r.outcome.aiImprovedButNotAppliedStillUnreconciled === true);
+  check("aiImprovedButStillUnreconciled diagnostic set", r.outcome.aiImprovedButStillUnreconciled === true);
+  check("parser-vs-AI comparison diagnostics recorded", (r.outcome.parserCandidateRowCount ?? 0) === 3 && (r.outcome.aiCandidateRowCount ?? 0) === 3 && r.outcome.parserCandidateDifference !== null && r.outcome.aiCandidateUnreconciledDifference !== null);
+  check("not-applied reason is explicit", r.outcome.aiRejectedReason === "ai-unreconciled-not-adopted");
+
+  // A NEARLY-reconciled AI candidate (within the strict residual) that keeps rows IS adopted.
+  const parser2 = bank([row({ debit: 10 }), row({ debit: 10 }), row({ debit: 10 })], 1000, 100); // diff 870, 3 rows
+  const r2 = await run(parser2, reply({
+    candidate: {
+      statementKind: "bank-account", openingBalance: 1000, closingBalance: 100,
+      transactions: [
+        { description: "A", debit: 800, amount: -800 },
+        { description: "B", debit: 99.5, amount: -99.5 },
+        { description: "C", debit: 0.9, amount: -0.9 },
+      ],
+      confidence: 0.9, issues: [],
+    },
+  })); // debits 900.4 → 1000-900.4=99.6 vs 100 → diff 0.40 (within strict residual)
+  check("nearly-reconciled AI candidate (≤ strict residual) is adopted", r2.outcome.adoptedCandidateSource === "ai-candidate" && r2.outcome.improved === true, `${r2.outcome.status} diff=${r2.outcome.postDifference}`);
+
+  // A fully-reconciled AI candidate is always adopted (unchanged behavior).
+  const parser3 = bank([row({ credit: 10 })], 100, 200); // not reconciled
+  const r3 = await run(parser3, reply({
+    candidate: { statementKind: "bank-account", openingBalance: 100, closingBalance: 200, transactions: [{ description: "Deposit", credit: 100, amount: 100 }], confidence: 0.9, issues: [] },
+  }));
+  check("fully-reconciled AI candidate still adopted", r3.outcome.status === "reconciled" && r3.outcome.adoptedCandidateSource === "ai-candidate");
+}
+
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

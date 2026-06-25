@@ -1839,7 +1839,7 @@ type BankEntry = {
 const FEE_COUNT_RATE_RE = /(\d+)\s*(?:drs?|crs?)\b\s*@\s*\$?\s*(\d+(?:\.\d{1,2})?)/gi;
 
 /** Sum of count × rate across "N Dr/Cr @ rate" clauses, or null if none. */
-function feeCountRateTotal(line: string): number | null {
+export function feeCountRateTotal(line: string): number | null {
   if (!/@/.test(line)) return null;
   FEE_COUNT_RATE_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
@@ -1853,8 +1853,17 @@ function feeCountRateTotal(line: string): number | null {
 }
 
 /** True when the text contains a fee count/rate formula (a "N Dr/Cr @ rate" clause). */
-function hasFeeFormula(text: string): boolean {
+export function hasFeeFormula(text: string): boolean {
   return feeCountRateTotal(text) !== null;
+}
+
+/** The RATE values (the "@ rate" amounts) in a fee count/rate formula. */
+export function feeFormulaRates(text: string): number[] {
+  FEE_COUNT_RATE_RE.lastIndex = 0;
+  const rates: number[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = FEE_COUNT_RATE_RE.exec(text)) !== null) rates.push(Number(m[2]));
+  return rates;
 }
 
 /**
@@ -1871,7 +1880,7 @@ function isRateMoney(line: string, m: MoneyMatch): boolean {
  * description so the default Description reads as the fee label (e.g. "Electronic
  * transaction fee"). Conservative: only the formula fragments are removed.
  */
-function stripFeeFormula(desc: string): string {
+export function stripFeeFormula(desc: string): string {
   const cleaned = desc
     .replace(/\b\d+\s*(?:drs?|crs?)\b\s*@\s*\$?\s*\d+(?:\.\d{1,2})?/gi, " ")
     .replace(/@\s*\$?\s*\d+(?:\.\d{1,2})?/g, " ")

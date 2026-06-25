@@ -141,6 +141,16 @@ export type AiAssistOutcome = {
   aiLargestRowShareOfDebits: number | null;
   /** True when AI reduced the reconciliation difference but did NOT fully reconcile. */
   aiImprovedButStillUnreconciled: boolean;
+  /** True when AI improved the difference but was NOT applied (still unreconciled, strict policy). */
+  aiImprovedButNotAppliedStillUnreconciled: boolean;
+  /** The AI candidate's residual difference when it did not fully reconcile (else null). */
+  aiCandidateUnreconciledDifference: number | null;
+  /** The parser candidate's reconciliation difference (for parser-vs-AI comparison). */
+  parserCandidateDifference: number | null;
+  /** The parser candidate's row count (for parser-vs-AI comparison). */
+  parserCandidateRowCount: number | null;
+  /** The (best) AI candidate's row count (for parser-vs-AI comparison). */
+  aiCandidateRowCount: number | null;
   /** True when the parser result was kept because an AI candidate would have dropped rows. */
   parserRowsPreservedOverAiRows: boolean;
   /** Safe per-image vision evidence metadata, in send order (no pixels/text). */
@@ -1264,6 +1274,11 @@ function baseOutcome(statement: ParsedStatement, config: AiAssistConfig): AiAssi
     aiItemizedRowCount: null,
     aiLargestRowShareOfDebits: null,
     aiImprovedButStillUnreconciled: false,
+    aiImprovedButNotAppliedStillUnreconciled: false,
+    aiCandidateUnreconciledDifference: null,
+    parserCandidateDifference: null,
+    parserCandidateRowCount: null,
+    aiCandidateRowCount: null,
     parserRowsPreservedOverAiRows: false,
     aiVisionEvidence: [],
   };
@@ -1410,32 +1425,57 @@ export async function runAiAssist(
   const best = rankAi(candidates)!;
   const bestMetrics = candidateMetrics(best.statement);
   const parserMetrics = candidateMetrics(statement);
-  // Did AI reduce the difference but still not reconcile? (Used for diagnostics in
-  // both the adopt and no-adopt branches so a partial improvement is never shown as
-  // if it solved the reconciliation.)
+
+  // Safe parser-vs-AI comparison diagnostics (counts/differences only — no row text).
+  out.parserCandidateDifference = parserMetrics.difference;
+  out.parserCandidateRowCount = parserMetrics.rowCount;
+  out.aiCandidateRowCount = bestMetrics.rowCount;
+  out.aiCandidateUnreconciledDifference =
+    bestMetrics.status !== "passed" ? bestMetrics.difference : null;
+
   const aiReducedDifference =
     parserMetrics.difference !== null &&
     bestMetrics.difference !== null &&
     bestMetrics.difference < parserMetrics.difference - 0.005;
   const aiStillUnreconciled = bestMetrics.status !== "passed";
 
-  const adopt = candidateBeatsParser(statement, best.statement);
+  // STRICT adoption policy: NEVER auto-apply an AI candidate that is still
+  // MEANINGFULLY unreconciled (improving 4445→946 off is still wrong). Adopt only
+  // when the candidate (a) fully reconciles, (b) is within a strict residual AND
+  // keeps all parser rows, or (c) the parser clearly MISSED the table (near-empty)
+  // and AI rebuilt a materially larger itemized set. Otherwise the parser result is
+  // kept as the final, honest Needs-review outcome and AI is a suggestion only.
+  const STRICT_RESIDUAL = 1.0;
+  const fullyReconciled = bestMetrics.status === "passed";
+  const nearlyReconciledKeepsRows =
+    bestMetrics.difference !== null &&
+    bestMetrics.difference <= STRICT_RESIDUAL &&
+    bestMetrics.rowCount >= parserMetrics.rowCount;
+  const parserMissedTable = parserMetrics.rowCount <= 1;
+  const aiRebuiltMuchMore = bestMetrics.rowCount >= parserMetrics.rowCount + 3;
+  const strictSafe =
+    fullyReconciled || nearlyReconciledKeepsRows || (parserMissedTable && aiRebuiltMuchMore);
+
+  const beats = candidateBeatsParser(statement, best.statement);
+  const adopt = beats && strictSafe;
   if (!adopt) {
-    out.applied = true; // a usable candidate was built and validated, just not better
+    out.applied = true; // a usable candidate was built and validated, just not adopted
     out.status = "no-improvement";
-    // If AI improved the gap but we kept the parser because the candidate would have
-    // dropped valid rows, record that explicitly so diagnostics are honest.
-    if (aiReducedDifference && bestMetrics.rowCount < parserMetrics.rowCount) {
-      out.parserRowsPreservedOverAiRows = true;
+    if (bestMetrics.rowCount < parserMetrics.rowCount) out.parserRowsPreservedOverAiRows = true;
+    if (aiReducedDifference && aiStillUnreconciled) {
+      out.aiImprovedButStillUnreconciled = true;
+      // AI helped the arithmetic but was NOT applied: still unreconciled and it did
+      // not clear the strict adoption policy. Keep the parser result.
+      if (beats) out.aiImprovedButNotAppliedStillUnreconciled = true;
     }
-    if (aiReducedDifference && aiStillUnreconciled) out.aiImprovedButStillUnreconciled = true;
-    // Prefer a specific reason already set by the builder; otherwise the candidate
-    // simply did not beat the parser under the same validation engine.
-    if (!out.aiRejectedReason) out.aiRejectedReason = "candidate-worse-than-parser";
+    // Prefer a specific reason already set by the builder; otherwise say why.
+    if (!out.aiRejectedReason) {
+      out.aiRejectedReason = beats ? "ai-unreconciled-not-adopted" : "candidate-worse-than-parser";
+    }
     return { outcome: out };
   }
 
-  const bm = candidateMetrics(best.statement);
+  const bm = bestMetrics;
   // Adopted, but if it did not fully reconcile, flag it so the final state stays
   // Needs review with a clear "improved but not reconciled" signal (the validation
   // status is already non-passed, so the UI never presents it as solved).
@@ -1518,6 +1558,11 @@ export function notAttemptedOutcome(
     aiItemizedRowCount: null,
     aiLargestRowShareOfDebits: null,
     aiImprovedButStillUnreconciled: false,
+    aiImprovedButNotAppliedStillUnreconciled: false,
+    aiCandidateUnreconciledDifference: null,
+    parserCandidateDifference: null,
+    parserCandidateRowCount: null,
+    aiCandidateRowCount: null,
     parserRowsPreservedOverAiRows: false,
     aiVisionEvidence: [],
   };

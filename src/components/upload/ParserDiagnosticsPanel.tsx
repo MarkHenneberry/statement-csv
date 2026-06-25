@@ -166,7 +166,12 @@ export function ParserDiagnosticsPanel({
             <Metric label="Candidate quality" value={d.aiAssist.aiCandidateQualityStatus} />
             <Metric label="Rejected for quality" value={yesNo(d.aiAssist.aiCandidateRejectedForQuality)} />
             <Metric label="AI improved but unreconciled" value={yesNo(d.aiAssist.aiImprovedButStillUnreconciled)} />
+            <Metric label="AI improved but NOT applied" value={yesNo(d.aiAssist.aiImprovedButNotAppliedStillUnreconciled)} />
             <Metric label="Parser rows preserved over AI" value={yesNo(d.aiAssist.parserRowsPreservedOverAiRows)} />
+            <Metric label="Parser candidate difference" value={d.aiAssist.parserCandidateDifference === null ? "—" : d.aiAssist.parserCandidateDifference.toFixed(2)} />
+            <Metric label="Parser candidate rows" value={d.aiAssist.parserCandidateRowCount === null ? "—" : String(d.aiAssist.parserCandidateRowCount)} />
+            <Metric label="AI candidate rows" value={d.aiAssist.aiCandidateRowCount === null ? "—" : String(d.aiAssist.aiCandidateRowCount)} />
+            <Metric label="AI unreconciled difference" value={d.aiAssist.aiCandidateUnreconciledDifference === null ? "—" : d.aiAssist.aiCandidateUnreconciledDifference.toFixed(2)} />
             <Metric
               label="Quality reasons"
               value={d.aiAssist.aiCandidateQualityReasons.length ? d.aiAssist.aiCandidateQualityReasons.join(", ") : "—"}

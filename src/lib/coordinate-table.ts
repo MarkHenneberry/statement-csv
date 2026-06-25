@@ -25,6 +25,10 @@ import {
   detectCreditCardSummary,
   cleanDescription,
   splitTrailingSpendCategory,
+  hasFeeFormula,
+  feeCountRateTotal,
+  feeFormulaRates,
+  stripFeeFormula,
   type StatementKind,
   type StatementDateContext,
 } from "./parser.ts";
@@ -958,10 +962,21 @@ function buildRegionRows(
     }
     if (!hasAmount && isReferenceText(text)) continue;
 
-    // A dateless line that carries money but NOT in a money column is a
-    // misaligned page-statistics / summary row (e.g. "Credits 7  26,111.25"),
-    // never a transaction and never a wrapped description.
+    // A line that carries money but NOT in a money column is normally a misaligned
+    // page-statistics / summary row (e.g. "Credits 7  26,111.25") — never a
+    // transaction. EXCEPTION: a fee count/rate fragment ("1 Dr @ 0.75") whose only
+    // money is a RATE is a WRAPPED part of a real fee row, so fold it into the
+    // pending description instead of dropping it (the posted total arrives on the
+    // continuation line and the formula is cleaned out later).
     if (!hasAmount && hasAnyMoney && pendingDesc.length === 0) {
+      if (hasFeeFormula(text)) {
+        if (dateVal) {
+          pendingDate = dateVal;
+          carriedDate = dateVal;
+        }
+        if (descCell) pendingDesc.push(descCell);
+        continue;
+      }
       diag.summaryRowsIgnored += 1;
       continue;
     }
@@ -1010,6 +1025,26 @@ function buildRegionRows(
         row.debit = debitInfo.value;
       } else if (creditInfo) {
         row.credit = creditInfo.value;
+      }
+
+      // Bank fee count/rate correction: when this row carries a "N Dr/Cr @ rate"
+      // formula, the captured column amount may be a RATE (e.g. 0.75) rather than the
+      // posted fee total (e.g. 1.50). Prefer the computed Σ(count×rate) total when
+      // the captured amount equals a formula rate (or is absent), and clean the
+      // formula out of the description. A fee is a debit/charge. Generic, not
+      // bank-specific. (Credit-card amount handling is unaffected.)
+      if (region.statementKind === "bank-account" && hasFeeFormula(text)) {
+        const ft = feeCountRateTotal(text);
+        if (ft !== null && ft > 0) {
+          const amt = Math.max(Math.abs(row.debit ?? 0), Math.abs(row.credit ?? 0));
+          const rates = feeFormulaRates(text);
+          const amtIsRate = rates.some((r) => Math.abs(r - amt) < 0.005);
+          if (amt < 0.005 || (amtIsRate && Math.abs(amt - ft) > 0.005)) {
+            row.debit = ft;
+            row.credit = null;
+          }
+          row.description = stripFeeFormula(row.description) || row.description;
+        }
       }
 
       // A zero-amount line is not a transaction (e.g. an itemized "$0.00" fee or
