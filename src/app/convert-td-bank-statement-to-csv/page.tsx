@@ -71,7 +71,7 @@ export default function TdPage() {
             </ButtonLink>
           </div>
           <p className="mt-4 text-sm text-slate-500">
-            No bank login. No ads. No stored statement data.
+            No bank login. Not used for marketing.
           </p>
         </div>
       </Section>
@@ -145,10 +145,10 @@ export default function TdPage() {
                   mentioned here rely on the parser and validation pipeline, which
                   are not built yet. Verify before launch. */}
               <p>
-                AI-assisted extraction helps untangle TD&apos;s multi-line entries, while
-                balance checks compare the running total against the statement so a missing
-                or misread transaction is flagged before you export. You review everything
-                first, and we do not claim perfect accuracy.
+                Parser-first extraction with guided AI verification helps untangle TD&apos;s
+                multi-line entries, while balance checks compare the running total against the
+                statement so you can review highlighted rows before you export. You review
+                everything first, and we do not claim perfect accuracy.
               </p>
             </div>
           </div>
@@ -191,11 +191,11 @@ export default function TdPage() {
       </Section>
 
       {/*
-        TODO(launch-blocker): The "we do not keep your bank statement data"
-        message is a launch-blocker claim. Verify deletion and logging in the
-        production pipeline before launch.
+        TODO(launch-blocker): any retention/deletion wording remains a
+        launch-blocker claim. Verify deletion and logging in the production
+        pipeline before launch.
       */}
-      <DataRetentionTrustBlock body="There is no TD account linking and no online banking password to hand over — you simply upload the statement PDF. Your statement is used only to create your spreadsheet file. We do not keep your statement, store your extracted transactions for marketing, sell your data, or use it for ads." />
+      <DataRetentionTrustBlock body="There is no TD account linking and no online banking password to hand over — you simply upload the statement PDF. Your statement is processed to create your spreadsheet file and is not sold or used for marketing or ads. When guided AI verification is used, it works from rendered statement images, not your original PDF." />
 
       <Section>
         <div className="mx-auto max-w-3xl">
@@ -226,10 +226,10 @@ export default function TdPage() {
       <RelatedPagesLinks
         muted
         links={[
+          { label: "Canadian bank statements", href: "/canadian-bank-statement-to-csv", description: "All bank guides and common formats." },
           { label: "RBC statements", href: "/convert-rbc-bank-statement-to-csv", description: "Designed for digital RBC PDFs." },
           { label: "PDF to CSV", href: "/pdf-bank-statement-to-csv", description: "The general conversion guide." },
           { label: "PDF to Excel", href: "/pdf-bank-statement-to-excel", description: "Open the data in Excel." },
-          { label: "Bank statement parser", href: "/bank-statement-parser", description: "How extraction works." },
           { label: "Security", href: "/security", description: "How your statement data is handled." },
           { label: "Sample output", href: "/sample", description: "See the cleaned data." },
         ]}

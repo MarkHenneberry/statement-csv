@@ -16,7 +16,7 @@ const path = "/security";
 export const metadata: Metadata = {
   title: "Security and Privacy for Bank Statement Conversion",
   description:
-    "A secure, private bank statement converter: no bank login, no ads, no selling of transaction data, and no unnecessary storage. Read how files are handled and what we still need to verify before launch.",
+    "A privacy-conscious bank statement converter: no bank login, no selling of transaction data, and no use of your statement data for marketing. Read how files are handled and what we still need to verify before launch.",
   alternates: { canonical: absoluteUrl(path) },
 };
 
@@ -36,11 +36,11 @@ const faqs = generalFaqs.filter((faq) =>
 
 function DoNotStore() {
   const items = [
-    "We do not keep your uploaded bank statement after processing.",
-    "We do not keep extracted transaction rows for marketing.",
-    "We do not sell or share transaction data for ads.",
     "We do not require bank login credentials.",
     "We do not connect to your bank account.",
+    "We do not sell or share your transaction data.",
+    "We do not use your statement data for ads or marketing.",
+    "We avoid using your original PDF as the AI input — guided AI verification works from rendered statement images.",
   ];
   return (
     <ul className="mt-8 space-y-3">
@@ -65,7 +65,7 @@ function VerifyBeforeLaunch() {
     "No transaction descriptions in logs",
     "No account numbers in logs",
     "No stored extracted rows",
-    "Third-party AI disclosure, if AI-assisted extraction is used",
+    "Third-party AI provider disclosure (guided AI verification sends rendered statement images to an external AI service)",
     "Privacy policy review before public launch",
   ];
   return (
@@ -96,12 +96,12 @@ export default function SecurityPage() {
           </h1>
           <p className="mt-6 text-lg leading-relaxed text-slate-600">
             Bank statements are sensitive. StatementCSV is designed to handle them with
-            care: no bank login, no ads, no selling of transaction data, and no
-            unnecessary storage. Your statement is used only to create your spreadsheet
-            file.
+            care: no bank login, no selling of transaction data, and no use of your
+            statement data for marketing. Your statement is processed to create your
+            spreadsheet file.
           </p>
           <p className="mt-4 text-sm font-medium text-slate-500">
-            No bank login. No ads. No stored statement data.
+            No bank login. Not used for marketing.
           </p>
         </div>
       </Section>
@@ -127,10 +127,10 @@ export default function SecurityPage() {
               anyone to misuse.
             </p>
             <p>
-              StatementCSV is designed so your statement is used only to create your
-              spreadsheet file. We do not keep your statement, store your extracted
-              transactions for marketing, sell your data, or use your financial information
-              for ads.
+              Your statement is processed to create your spreadsheet file and is not sold
+              or used for marketing or ads. We avoid using your original PDF directly as the
+              AI input — when guided AI verification is used, it works from rendered
+              statement images sent to a third-party AI provider, not your original PDF.
             </p>
           </div>
         </div>
@@ -138,7 +138,7 @@ export default function SecurityPage() {
 
       <Section>
         <div className="mx-auto max-w-3xl">
-          <SectionHeading title="What we do not store" />
+          <SectionHeading title="Our data commitments" />
           <DoNotStore />
         </div>
       </Section>
@@ -194,7 +194,7 @@ export default function SecurityPage() {
 
       <CTASection
         title="Convert a statement, privately"
-        description="No bank login, no ads, and balance checks to help you review before export."
+        description="No bank login, with balance checks to help you review before export."
       />
     </>
   );

@@ -65,7 +65,7 @@ export default function PdfToExcelPage() {
             </ButtonLink>
           </div>
           <p className="mt-4 text-sm text-slate-500">
-            No bank login. No ads. No stored statement data.
+            No bank login. Not used for marketing.
           </p>
         </div>
       </Section>

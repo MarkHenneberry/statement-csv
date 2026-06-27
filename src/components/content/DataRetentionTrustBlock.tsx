@@ -1,10 +1,12 @@
 import { Container } from "@/components/Container";
 
 /*
-  Core trust message: "We do not keep your bank statement data."
+  Core trust message: your statement is processed only to create your
+  conversion, and is not sold or used for marketing/ads. Guided AI verification
+  works from rendered statement images, not your original PDF.
 
-  TODO(launch-blocker): every claim in this block is a launch-blocker until the
-  real upload/parser pipeline verifies ALL of the following in production:
+  TODO(launch-blocker): any retention/deletion wording is a launch-blocker until
+  the real upload/parser pipeline verifies ALL of the following in production:
     - uploaded files are not permanently stored
     - extracted transaction text is not stored
     - generated rows are not stored
@@ -15,8 +17,8 @@ import { Container } from "@/components/Container";
   deleted" until the above are implemented and verified.
 */
 export function DataRetentionTrustBlock({
-  heading = "We do not keep your bank statement data",
-  body = "Your bank statement is used only to create your spreadsheet file. We do not keep your statement, store your extracted transactions for marketing, sell your data, or use your financial information for ads.",
+  heading = "Your statement is used only to create your conversion",
+  body = "Your statement is processed to create your spreadsheet file and is not sold or used for marketing or ads. We avoid using your original PDF directly as the AI input — when guided AI verification is used, it works from rendered statement evidence. Review our privacy and security pages for how uploads and conversion data are handled.",
   dark = true,
 }: {
   heading?: string;
@@ -33,7 +35,7 @@ export function DataRetentionTrustBlock({
             </h2>
             <p className="mt-4 text-lg leading-relaxed text-slate-300">{body}</p>
             <p className="mt-6 text-sm font-medium text-slate-400">
-              No bank login. No ads. No stored statement data.
+              No bank login. Not used for marketing.
             </p>
           </div>
         </Container>
@@ -50,7 +52,7 @@ export function DataRetentionTrustBlock({
           </h2>
           <p className="mt-4 text-lg leading-relaxed text-slate-600">{body}</p>
           <p className="mt-6 text-sm font-medium text-slate-500">
-            No bank login. No ads. No stored statement data.
+            No bank login. Not used for marketing.
           </p>
         </div>
       </Container>

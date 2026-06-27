@@ -71,7 +71,7 @@ export default function RbcPage() {
             </ButtonLink>
           </div>
           <p className="mt-4 text-sm text-slate-500">
-            No bank login. No ads. No stored statement data.
+            No bank login. Not used for marketing.
           </p>
         </div>
       </Section>
@@ -145,9 +145,10 @@ export default function RbcPage() {
                   referenced here depend on the unbuilt parser and validation
                   pipeline. Verify before launch. */}
               <p>
-                AI-assisted extraction helps make sense of RBC&apos;s wrapped descriptions and
-                split debit and credit columns, while balance checks compare the totals
-                against the statement to flag a missing or misread line before you export.
+                Parser-first extraction with guided AI verification helps make sense of
+                RBC&apos;s wrapped descriptions and split debit and credit columns, while balance
+                checks compare the totals against the statement so you can review highlighted
+                rows before you export.
               </p>
             </div>
           </div>
@@ -190,11 +191,11 @@ export default function RbcPage() {
       </Section>
 
       {/*
-        TODO(launch-blocker): The "we do not keep your bank statement data"
-        message is a launch-blocker claim. Verify deletion and logging in the
-        production pipeline before launch.
+        TODO(launch-blocker): any retention/deletion wording remains a
+        launch-blocker claim. Verify deletion and logging in the production
+        pipeline before launch.
       */}
-      <DataRetentionTrustBlock body="You never connect your RBC account or share your online banking login — you only upload the statement PDF. Your statement is used only to create your spreadsheet file. We do not keep your statement, store your extracted transactions for marketing, sell your data, or use it for ads." />
+      <DataRetentionTrustBlock body="You never connect your RBC account or share your online banking login — you only upload the statement PDF. Your statement is processed to create your spreadsheet file and is not sold or used for marketing or ads. When guided AI verification is used, it works from rendered statement images, not your original PDF." />
 
       <Section>
         <div className="mx-auto max-w-3xl">
@@ -225,10 +226,10 @@ export default function RbcPage() {
       <RelatedPagesLinks
         muted
         links={[
+          { label: "Canadian bank statements", href: "/canadian-bank-statement-to-csv", description: "All bank guides and common formats." },
           { label: "TD statements", href: "/convert-td-bank-statement-to-csv", description: "Designed for digital TD PDFs." },
           { label: "PDF to CSV", href: "/pdf-bank-statement-to-csv", description: "The general conversion guide." },
           { label: "PDF to Excel", href: "/pdf-bank-statement-to-excel", description: "Open the data in Excel." },
-          { label: "Bank statement parser", href: "/bank-statement-parser", description: "How extraction works." },
           { label: "Security", href: "/security", description: "How your statement data is handled." },
           { label: "Sample output", href: "/sample", description: "See the cleaned data." },
         ]}

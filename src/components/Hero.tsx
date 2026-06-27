@@ -35,11 +35,11 @@ export function Hero({
               </ButtonLink>
             ) : null}
           </div>
-          {/* TODO(launch-blocker): "Balance checks" and "no stored statement data"
-              advertised here depend on the validation and deletion/logging
-              pipeline, which is not fully verified yet. Verify before launch. */}
+          {/* TODO(launch-blocker): "Balance checks before export" depends on the
+              validation pipeline, which is not fully verified yet. Verify before
+              launch. */}
           <p className="mt-6 text-sm text-slate-500">
-            No bank login &middot; Balance checks &middot; No stored statement data
+            No bank login &middot; Balance checks before export
           </p>
         </div>
       </Container>

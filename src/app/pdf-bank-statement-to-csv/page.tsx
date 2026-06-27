@@ -77,7 +77,7 @@ export default function PdfToCsvPage() {
             </ButtonLink>
           </div>
           <p className="mt-4 text-sm text-slate-500">
-            No bank login. No ads. No stored statement data.
+            No bank login. Not used for marketing.
           </p>
         </div>
       </Section>
@@ -166,9 +166,10 @@ export default function PdfToCsvPage() {
                   described below depend on the parser and validation pipeline,
                   which are not built yet. Verify before launch. */}
               <p>
-                AI-assisted extraction helps handle messy statement layouts, while balance
-                checks help catch missing or misread transactions before you export. You
-                review the results yourself, so you stay in control of the final file.
+                Parser-first extraction with guided AI verification helps handle messy
+                statement layouts, while balance checks help catch missing or misread
+                transactions before you export. You review the results yourself, so you stay
+                in control of the final file.
               </p>
             </div>
           </div>
@@ -225,9 +226,9 @@ export default function PdfToCsvPage() {
       <WhoUsesThisTool />
 
       {/*
-        TODO(launch-blocker): The "we do not keep your bank statement data"
-        message below is a launch-blocker claim. The deletion and logging
-        pipeline must be implemented and verified before launch.
+        TODO(launch-blocker): any retention/deletion wording below remains a
+        launch-blocker claim. The deletion and logging pipeline must be
+        implemented and verified before launch.
       */}
       <DataRetentionTrustBlock />
 

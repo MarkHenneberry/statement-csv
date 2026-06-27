@@ -1,13 +1,14 @@
 import Link from "next/link";
 
 // Compact, repeatable trust line for placing inside other sections/pages.
-// Default copy is intentionally careful ("designed to") because the deletion
-// and logging pipeline is not finished yet.
-// TODO(launch-blocker): the "designed so your statement is used only to create
-// your spreadsheet file" claim depends on verified deletion and logging in the
-// production parser pipeline. Verify before launch.
+// Default copy is intentionally careful: it claims only what the implementation
+// supports (no bank login, not used for marketing) and avoids any
+// retention/deletion guarantee.
+// TODO(launch-blocker): any retention/deletion wording added here depends on
+// verified deletion and logging in the production parser pipeline. Verify
+// before launch.
 export function PrivacyMiniBlock({
-  line = "StatementCSV is designed so your bank statement is used only to create your spreadsheet file. We do not keep your statement data.",
+  line = "StatementCSV processes your statement to create your spreadsheet file, and your statement data is not sold or used for marketing or ads.",
   showLink = true,
   className = "",
 }: {
@@ -21,7 +22,7 @@ export function PrivacyMiniBlock({
     >
       <p>
         <span className="font-semibold text-slate-900">
-          No bank login. No ads. No stored statement data.
+          No bank login. Not used for marketing.
         </span>{" "}
         {line}{" "}
         {showLink ? (

@@ -10,11 +10,20 @@ const routes = [
   "/security",
   "/faq",
   "/sample",
+  "/bank-statement-to-csv",
+  "/canadian-bank-statement-to-csv",
+  "/compare-bank-statement-converters",
+  "/help/how-to-convert-bank-statement-pdf-to-csv",
+  "/blog/import-bank-statements-quickbooks",
   "/pdf-bank-statement-to-csv",
   "/pdf-bank-statement-to-excel",
   "/bank-statement-parser",
   "/convert-rbc-bank-statement-to-csv",
   "/convert-td-bank-statement-to-csv",
+  "/convert-bmo-bank-statement-to-csv",
+  "/convert-cibc-bank-statement-to-csv",
+  "/convert-scotiabank-statement-to-csv",
+  "/convert-credit-union-statement-to-csv-canada",
 ];
 
 export default function sitemap(): MetadataRoute.Sitemap {

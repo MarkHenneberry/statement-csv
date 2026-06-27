@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "ai:force": "node --experimental-strip-types scripts/force-ai-reconstruction.mts",
+    "ai:force:smoke": "node --experimental-strip-types scripts/ai-force-smoke.mts"
   },
   "dependencies": {
     "next": "15.5.19",

@@ -13,7 +13,7 @@ import { OutputColumnsExample } from "@/components/content/OutputColumnsExample"
 import { BuiltForBankStatementsBlock } from "@/components/content/BuiltForBankStatementsBlock";
 import { DataRetentionTrustBlock } from "@/components/content/DataRetentionTrustBlock";
 import { RelatedPagesLinks } from "@/components/content/RelatedPagesLinks";
-import { generalFaqs } from "@/lib/faq";
+import { homeFaqs } from "@/lib/faq";
 import { pricingFooter } from "@/lib/pricing";
 import { absoluteUrl } from "@/lib/site";
 import {
@@ -21,12 +21,10 @@ import {
   faqPageJsonLd,
 } from "@/lib/structured-data";
 
-const homeFaqs = generalFaqs.slice(0, 6);
-
 export const metadata: Metadata = {
-  title: "Canadian Bank Statement to CSV and Excel Converter",
+  title: "Convert Bank Statements to CSV & Excel",
   description:
-    "Convert Canadian bank and credit card statements to clean CSV and Excel. Built for statements from RBC, TD, BMO, CIBC, Scotiabank, credit unions, and more, with parser-first extraction, guided AI verification, and balance checks. No bank login.",
+    "Convert bank and credit-card statement PDFs into clean CSV or Excel exports. StatementCSV uses parser-first extraction, guided AI verification, and balance checks for bookkeeping-ready spreadsheets.",
   alternates: {
     canonical: absoluteUrl("/"),
   },
@@ -73,29 +71,29 @@ export default function HomePage() {
       <JsonLd data={faqPageJsonLd(homeFaqs)} />
 
       <Hero
-        title="Convert Canadian bank statements to clean CSV and Excel"
-        secondaryCta={{ label: "See pricing", href: "/pricing" }}
+        title="Convert Bank Statement PDFs to CSV and Excel"
+        primaryCta={{ label: "Convert a statement", href: "/upload" }}
+        secondaryCta={{ label: "See sample export", href: "/sample" }}
       >
         <p>
-          Upload statements from RBC, TD, BMO, CIBC, Scotiabank, credit unions, and more.
-          StatementCSV uses parser-first extraction, guided AI verification when needed,
-          and balance checks to help create spreadsheet-ready files faster.
+          Upload a bank or credit-card statement PDF and export clean, balance-checked CSV
+          or Excel files for bookkeeping, accounting, and spreadsheet review.
         </p>
         <p>
-          Built for Canadian statements first. It handles common patterns like Interac
-          e-Transfers, credits, debits, fees, and credit-card payments, then lets you
-          review the rows before you export.
+          StatementCSV uses parser-first extraction with guided AI verification to turn PDF
+          statements into structured rows you can review, edit, and export.
         </p>
         <p className="font-medium text-slate-700">
-          No bank login. Balance checks before export. No stored statement data.
+          Built for common Canadian bank and credit-card statement formats. No bank login.
+          Balance checks before export.
         </p>
       </Hero>
 
       <Section>
         <SectionHeading
-          eyebrow="What it does"
-          title="Turn Canadian statements into clean transaction data"
-          description="Upload a Canadian bank or credit card statement and turn it into a clean table of transactions. The converter extracts dates, descriptions, debits, credits, balances, and amounts, then exports the result as CSV or Excel. It is built for bank statements, not generic PDFs, so it focuses on transaction rows and common Canadian statement patterns like Interac e-Transfers."
+          eyebrow="PDF bank statement to CSV"
+          title="Turn bank statement PDFs into clean spreadsheet rows"
+          description="Upload a bank or credit-card statement PDF and convert it into a clean table of transactions with Date, Description, Debit, Credit, Amount, and Balance. Export the result as CSV or Excel. It is built for bank statements, not generic PDFs, so it focuses on transaction rows — including common Canadian patterns like Interac e-Transfers."
           centered
         />
         <div className="mx-auto mt-10 max-w-4xl">
@@ -119,29 +117,29 @@ export default function HomePage() {
       </Section>
 
       <Section>
-        {/* TODO(launch-blocker): AI-assisted extraction and balance checks are
-            described here as how the product works, but the parser and validation
-            pipeline do not exist yet. Both must be built and verified before launch. */}
+        {/* TODO(launch-blocker): balance checks and the deletion/logging guarantees
+            referenced across the site depend on the production pipeline being fully
+            verified. Confirm before launch. */}
         <SectionHeading
           eyebrow="How the conversion works"
-          title="Parser-first extraction, with guided AI verification when needed"
-          description="A dedicated statement parser does the extraction first. When a statement is harder to read, guided AI verification helps fill the gaps, and balance checks compare the result against the statement totals before you export."
+          title="Parser-first extraction with guided AI verification"
+          description="A dedicated statement parser reads the layout and pulls transactions into clean columns. Guided AI verification works from rendered statement evidence to help structure harder layouts, and balance checks compare the result against the statement totals before you export."
           centered
         />
         <div className="mt-12">
           <FeatureCards
             items={[
               {
-                title: "Parser-first extraction",
-                body: "A statement-specific parser reads the layout and pulls transactions into clean columns before any AI is involved.",
+                title: "Balance-checked exports",
+                body: "Extracted rows are checked against the statement's opening and closing balances where possible, so a balance gap is never presented as a verified conversion.",
               },
               {
                 title: "Guided AI verification",
-                body: "When the parser needs help, AI is guided with limited, relevant statement evidence rather than the full document, and the result is re-checked.",
+                body: "Parser-first extraction with guided AI verification works from rendered statement evidence to structure the rows, and the result is re-checked against the balances.",
               },
               {
-                title: "Balance checks before export",
-                body: "We compare the extracted totals against the statement's opening and closing balances and flag anything that does not line up.",
+                title: "Review highlighted rows",
+                body: "Uncertain rows are highlighted before export. If a balance gap remains, you review and edit the rows instead of receiving a falsely balanced result.",
               },
             ]}
             columns={3}
@@ -276,12 +274,12 @@ DEPOSIT 2,000.00 3,240.10`}
       <RelatedPagesLinks
         heading="Explore StatementCSV"
         links={[
-          { label: "PDF to CSV", href: "/pdf-bank-statement-to-csv", description: "Convert a PDF bank statement to a clean CSV." },
+          { label: "Bank statement to CSV", href: "/bank-statement-to-csv", description: "Convert bank and credit-card PDFs to CSV or Excel." },
+          { label: "Canadian bank statement to CSV", href: "/canadian-bank-statement-to-csv", description: "Built for common Canadian statement formats." },
+          { label: "RBC statement to CSV", href: "/convert-rbc-bank-statement-to-csv", description: "Convert RBC bank and card statement PDFs." },
+          { label: "How to convert a PDF to CSV", href: "/help/how-to-convert-bank-statement-pdf-to-csv", description: "Step-by-step help guide." },
+          { label: "Import into QuickBooks", href: "/blog/import-bank-statements-quickbooks", description: "Prepare a CSV for QuickBooks import." },
           { label: "PDF to Excel", href: "/pdf-bank-statement-to-excel", description: "Open your transactions in Excel or Google Sheets." },
-          { label: "Bank statement parser", href: "/bank-statement-parser", description: "How structured extraction works." },
-          { label: "Sample output", href: "/sample", description: "See the cleaned data before you upload." },
-          { label: "Security", href: "/security", description: "How your statement data is handled." },
-          { label: "RBC & TD guides", href: "/convert-rbc-bank-statement-to-csv", description: "Designed for digital RBC and TD PDFs." },
         ]}
       />
 

@@ -7,7 +7,7 @@ import { absoluteUrl } from "@/lib/site";
 export const metadata: Metadata = {
   title: "Privacy",
   description:
-    "How StatementCSV handles your data: no bank login, no ads, no stored statement data, and no selling or ad-targeting of your transaction data. We do not keep your bank statement data.",
+    "How StatementCSV handles your data: no bank login, and no selling or ad-targeting of your transaction data. Your statement is processed to create your conversion; retention and deletion behavior is being finalized before launch.",
   alternates: {
     canonical: absoluteUrl("/privacy"),
   },
@@ -34,15 +34,15 @@ export default function PrivacyPage() {
           <div className="mt-10 space-y-8 text-base leading-relaxed text-slate-700">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6">
               <h2 className="text-xl font-semibold text-slate-900">
-                We do not keep your bank statement data
+                Your statement is used only to create your conversion
               </h2>
               <p className="mt-3">
-                Your bank statement is used only to create your spreadsheet file. We do not
-                keep your statement, store your extracted transactions for marketing, sell
-                your data, or use your financial information for ads.
+                Your statement is processed to create your spreadsheet file and is not sold
+                or used for marketing or ads. A formal retention and deletion guarantee is
+                being finalized and must be verified before launch.
               </p>
               <p className="mt-3 text-sm font-medium text-slate-500">
-                No bank login. No ads. No stored statement data.
+                No bank login. Not used for marketing.
               </p>
             </div>
 
@@ -75,21 +75,26 @@ export default function PrivacyPage() {
 
             <div>
               <h2 className="text-xl font-semibold text-slate-900">
+                How guided AI verification handles your statement
+              </h2>
+              <p className="mt-3">
+                StatementCSV is parser-first. We avoid using your original PDF directly as
+                the AI input — when guided AI verification is used, it works from rendered
+                statement images. Those images are sent to a third-party AI provider to help
+                structure the conversion, and the result is balance-checked before you
+                review it. We do not claim AI never receives your statement contents; it
+                receives rendered statement images, not your original PDF.
+              </p>
+            </div>
+
+            <div>
+              <h2 className="text-xl font-semibold text-slate-900">
                 We do not sell or profile your data
               </h2>
               <p className="mt-3">
                 We do not sell your transaction data, use it for ads, or keep financial
                 records for marketing. Because we charge a small fee for conversions, we
                 never need to monetize the contents of your statements.
-              </p>
-            </div>
-
-            <div>
-              <h2 className="text-xl font-semibold text-slate-900">No ads</h2>
-              <p className="mt-3">
-                The site is not ad-supported. An ad-supported model creates an incentive
-                to track and profile users, which is the opposite of what a tool handling
-                financial documents should do.
               </p>
             </div>
 
@@ -110,7 +115,7 @@ export default function PrivacyPage() {
 
       <CTASection
         title="Convert a statement, privately"
-        description="No bank login, no ads, and balance checks on every conversion."
+        description="No bank login, with balance checks on every conversion."
       />
     </>
   );

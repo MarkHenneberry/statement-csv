@@ -3,6 +3,46 @@ export type FaqItem = {
   answer: string;
 };
 
+// Homepage FAQ cluster — the high-intent conversion questions. Kept honest: no
+// "when needed" phrasing, outcome-based result wording, and no unverified claims.
+export const homeFaqs: FaqItem[] = [
+  {
+    question: "How do I convert a bank statement PDF to CSV?",
+    answer:
+      "Upload your PDF bank or credit-card statement, let StatementCSV extract the transactions, review the rows, and download a CSV with Date, Description, Debit, Credit, Amount, and Balance. It uses parser-first extraction with guided AI verification, then balance checks the result before you export.",
+  },
+  {
+    question: "Can I convert a bank statement PDF to Excel?",
+    answer:
+      "Yes. You can export your reviewed transactions as CSV (opens in Excel, Google Sheets, and Numbers) or as an Excel (.xlsx) file, so you can sort, filter, and total the data for bookkeeping and review.",
+  },
+  {
+    question: "Can I convert credit card statements to CSV?",
+    answer:
+      "Yes. StatementCSV handles credit-card statements as well as chequing and savings statements, pulling purchases, payments, fees, and interest into the same clean CSV or Excel structure.",
+  },
+  {
+    question: "Does StatementCSV support Canadian bank statements?",
+    answer:
+      "It is designed for common Canadian bank and credit-card statement formats, including patterns like Interac e-Transfers, debits, credits, fees, and card payments. It works best with digital, text-based PDFs downloaded from your bank. We do not claim every bank or format, so anything uncertain is highlighted for review before export.",
+  },
+  {
+    question: "What happens if the balance check does not reconcile?",
+    answer:
+      "A balance gap is never shown as a verified conversion. When extracted totals do not match the statement's opening and closing balances, StatementCSV asks you to review highlighted rows rather than producing a falsely balanced result. It does not invent balancing rows to force a match.",
+  },
+  {
+    question: "Can I review transactions before exporting?",
+    answer:
+      "Yes. Every conversion is shown for review first. You can edit any cell, delete rows, or add a missing transaction, and uncertain rows are highlighted so you can check them before downloading the CSV or Excel file.",
+  },
+  {
+    question: "Can I import the CSV into QuickBooks or Xero?",
+    answer:
+      "StatementCSV produces a standard, spreadsheet-ready CSV that you can prepare for import into accounting tools like QuickBooks, Xero, or Wave. It is not an official integration or partner; it gives you a clean file that you map to your accounting tool's import format.",
+  },
+];
+
 export const generalFaqs: FaqItem[] = [
   {
     question: "Can I convert a PDF bank statement to CSV?",
@@ -17,7 +57,7 @@ export const generalFaqs: FaqItem[] = [
   {
     question: "Is my bank statement stored?",
     answer:
-      "StatementCSV is designed so your statement is used only to create your spreadsheet file. We do not keep your uploaded statement, store your extracted transactions for marketing, sell your data, or use it for ads. This deletion and logging behavior must be verified in the production parser pipeline before launch.",
+      "Your statement is processed to create your spreadsheet file and is not sold or used for marketing or ads. A formal retention, deletion, and logging policy is being finalized and must be verified in the production parser pipeline before launch.",
   },
   {
     question: "What columns are included in the CSV?",
@@ -45,9 +85,9 @@ export const generalFaqs: FaqItem[] = [
       "You can run a free preview of up to 3 pages, with no account required, to see how your statement converts. Full conversions use a monthly plan: Starter is $5/month for 50 pages, Plus is $10/month for 150 pages, and Pro is $20/month for 500 pages.",
   },
   {
-    question: "Why is there no ad-supported version?",
+    question: "How does StatementCSV make money?",
     answer:
-      "Bank statements contain sensitive financial data. An ad-supported model creates pressure to track and monetize that data. We charge a small, transparent monthly fee instead so we never need to sell or profile your transactions.",
+      "StatementCSV charges a small, transparent monthly fee for conversions. Because bank statements contain sensitive financial data, a paid model means we never need to sell, profile, or monetize your transactions.",
   },
   {
     question: "What are balance checks?",
@@ -57,7 +97,7 @@ export const generalFaqs: FaqItem[] = [
   {
     question: "How does AI fit into the conversion?",
     answer:
-      "StatementCSV is parser-first. A statement-specific parser does the extraction, and guided AI verification is used only when a statement is harder to read. Your original PDF is never handed directly to AI. When AI assistance is needed, it is guided with limited, relevant statement evidence instead of the full document, and the result is re-checked with balance validation. AI is used to help structure your conversion, not to train models or target ads, and you always review the rows before downloading.",
+      "StatementCSV is parser-first. A statement-specific parser does the extraction, and guided AI verification helps structure the result. We avoid using your original PDF directly as the AI input. When guided AI verification is used, it works from rendered statement images sent to a third-party AI provider, and the result is re-checked with balance validation. AI is used to help structure your conversion, not to train models or target ads, and you always review the rows before downloading.",
   },
   {
     question: "Are scanned statements supported?",
@@ -97,16 +137,16 @@ export const generalFaqs: FaqItem[] = [
   {
     question: "Is this safe for bank statements?",
     answer:
-      "StatementCSV is designed for handling sensitive financial documents: there is no bank login, no ads, and no selling of transaction data. Your statement is used only to create your spreadsheet file. The deletion and logging behavior of the production pipeline must be verified before launch. See the security page for details.",
+      "StatementCSV is designed for handling sensitive financial documents: there is no bank login and no selling of transaction data. Your statement is processed to create your spreadsheet file and is not used for marketing. The retention, deletion, and logging behavior of the production pipeline must be verified before launch. See the security page for details.",
   },
   {
     question: "Do you keep my bank statement data?",
     answer:
-      "No. StatementCSV is designed so your statement is used only to create your spreadsheet file. We do not sell transaction data, use it for ads, or keep financial records for marketing. Before launch, this deletion and logging behavior must be verified in the production parser pipeline.",
+      "Your statement is processed to create your spreadsheet file; it is not sold, used for ads, or kept for marketing. A formal retention and deletion guarantee is being finalized and must be verified in the production parser pipeline before launch.",
   },
   {
     question: "Do you use my statement data for ads or training?",
     answer:
-      "No. StatementCSV does not use your transaction data for ads or model training. Your original PDF is never handed directly to AI. When guided AI verification is needed, it receives limited, relevant statement evidence to help structure your conversion, not the full document. This handling must be clearly disclosed and verified before launch.",
+      "No. StatementCSV does not use your transaction data for ads or model training. We avoid using your original PDF directly as the AI input. When guided AI verification is used, it works from rendered statement images sent to a third-party AI provider to help structure your conversion. This handling must be clearly disclosed and verified before launch.",
   },
 ];

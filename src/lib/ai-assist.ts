@@ -40,7 +40,13 @@ import {
 } from "./statement-model.ts";
 import type { StatementKind } from "./parser.ts";
 import type { TransactionRow } from "./upload.ts";
-import type { VisionImage, VisionImageMeta } from "./pdf-render.ts";
+import type {
+  VisionImage,
+  VisionImageMeta,
+  AiEvidenceMode,
+  AiEvidenceCoverageLevel,
+  EvidencePlanDiag,
+} from "./pdf-render.ts";
 
 export type AiAssistConfig = {
   enabled: boolean;
@@ -182,6 +188,48 @@ export type AiAssistOutcome = {
   aiEvidenceRegions: number | null;
   /** Number of input images sent to the model. */
   aiInputImageCount: number | null;
+  /** What visual evidence the model actually received. */
+  aiEvidenceMode: AiEvidenceMode;
+  /** How complete the evidence coverage was. */
+  aiEvidenceCoverageLevel: AiEvidenceCoverageLevel;
+  /** 0..1 completeness of the selected page evidence. */
+  aiEvidenceCompletenessScore: number | null;
+  /** Pages selected for evidence (page numbers only). */
+  selectedEvidencePages: number[];
+  selectedEvidencePageCount: number | null;
+  /** Selected pages / total pages. */
+  pageCoverageRatio: number | null;
+  /** True when ALL pages were sent (small-PDF / uncertain fallback). */
+  allPagesFallbackUsed: boolean;
+  transactionPagesSelected: number[];
+  summaryAnchorPagesSelected: number[];
+  pagesSkippedCount: number | null;
+  pagesSkippedReasonCounts: Record<string, number>;
+  /** True when ANY visual (image) evidence was sent — required for an independent visual rebuild. */
+  aiIndependentEvidenceAvailable: boolean;
+  /** True only when AI rebuilt from VISUAL evidence AND reconciled. */
+  aiIndependentVisualReconstruction: boolean;
+  /** Safe label when targeted crop regions could not be selected (fallback used). */
+  regionSelectionFailedReason: string | null;
+  /** True when full-page images were used (the default evidence mode). */
+  fullPageFallbackUsed: boolean;
+  /** Number of full-page images sent. */
+  fallbackImageCount: number | null;
+  /** Pages rendered as full-page images. */
+  fallbackEvidencePages: number[];
+  /** Best-guess safe label for why AI did not produce an adopted reconciliation. */
+  aiFailureLikelyReason:
+    | "insufficient-evidence"
+    | "model-missed-rows"
+    | "validation-mismatch"
+    | "render-failure"
+    | "quality-gate"
+    | "none"
+    | "unknown";
+  /** Parser row counts by page (counts only; empty when page info unavailable). */
+  parserRowsByPage: Record<number, number>;
+  /** AI reconstruction row counts by page (counts only; empty when unavailable). */
+  aiRowsByPage: Record<number, number>;
   /** Safe per-image vision evidence metadata, in send order (no pixels/text). */
   aiVisionEvidence: VisionImageMeta[];
 };
@@ -540,15 +588,12 @@ export function buildAiEvidence(
     accountSections: supplement.accountSections ?? [],
     candidateSummaries: supplement.candidateSummaries ?? [],
     regionLines: (supplement.regionLines ?? []).slice(0, 400),
-    transactions: statement.transactions.map((t) => ({
-      transactionDate: t.transactionDate ?? null,
-      postingDate: t.postingDate ?? null,
-      description: t.description,
-      debit: t.debit ?? null,
-      credit: t.credit ?? null,
-      amount: t.amount,
-      balance: t.balance ?? null,
-    })),
+    // FULL-RECONSTRUCTION MODE: the parser's full row list (descriptions/amounts) is
+    // intentionally NOT sent. Including it lets the model echo the parser instead of
+    // independently reconstructing from the visual evidence. Parser context is
+    // supplied as SAFE AGGREGATES only (parserSummary + blinders.parserContext);
+    // row-level parser comparison is done deterministically AFTER the model returns.
+    transactions: [],
   };
 }
 
@@ -1328,10 +1373,17 @@ const defaultCaller: ChatCaller = ({ evidence, images }, config) => {
     userContent.push({
       type: "text",
       text:
-        `The ${images.length} images below are transaction-table chunks, ordered transaction-table-first ` +
-        "(overlapping halves; a row may appear in two chunks — output it once). Extract EVERY itemized " +
-        "transaction row visible across all of them. Do not stop early; dozens of rows are expected for a " +
-        "full statement. Summary totals are provided as text anchors in evidence.blinders for validation only.",
+        `The ${images.length} images below are RENDERED STATEMENT PAGE IMAGES (full pages and/or table ` +
+        "chunks), in page order. Reconstruct the COMPLETE itemized transaction table from this visual " +
+        "evidence. Return EVERY visible itemized transaction row across ALL images — do not summarize and " +
+        "do not stop early (dozens of rows are normal). Include rows without a running balance, page-bottom " +
+        "rows, and continuation rows; carry a date forward only when the table structure visually justifies " +
+        "it. Include fees, cheques, debit/card purchases, credits, deposits, e-Transfers, transfers, bill " +
+        "payments, loan payments, taxes, payroll, interest, refunds, and payments when shown as itemized " +
+        "rows. A row may appear in two overlapping chunks — output it once. Do NOT create balancing/summary " +
+        "rows and do NOT turn opening/closing balances or totals into rows (they are validation anchors in " +
+        "evidence.blinders). If the table cannot be read completely from the images, return " +
+        "noSafeReconstruction with a reason instead of inventing rows.",
     });
   }
   for (const img of images) userContent.push({ type: "image_url", image_url: { url: img.dataUrl } });
@@ -1355,8 +1407,18 @@ export type AiAssistOptions = {
   renderFailedReason?: string | null;
   /** Safe aggregate vision page/region selection diagnostics. */
   visionSelection?: VisionSelectionDiag | null;
+  /** Safe page-evidence plan diagnostics (rendered-page selection + completeness). */
+  evidencePlan?: EvidencePlanDiag | null;
   call?: ChatCaller;
   env?: NodeJS.ProcessEnv;
+  /**
+   * DEV-ONLY: force the AI fallback to run even when the parser result is verified
+   * (i.e. would normally skip AI). Used solely by the local forced-reconstruction
+   * test harness. The production route NEVER sets this, so normal "parser-verified
+   * skips AI" behavior is unchanged. Adoption rules are NOT bypassed — only the
+   * eligibility short-circuit is.
+   */
+  force?: boolean;
 };
 
 function baseOutcome(statement: ParsedStatement, config: AiAssistConfig): AiAssistOutcome {
@@ -1438,6 +1500,26 @@ function baseOutcome(statement: ParsedStatement, config: AiAssistConfig): AiAssi
     aiEvidencePages: [],
     aiEvidenceRegions: null,
     aiInputImageCount: null,
+    aiEvidenceMode: "none",
+    aiEvidenceCoverageLevel: "none",
+    aiEvidenceCompletenessScore: null,
+    selectedEvidencePages: [],
+    selectedEvidencePageCount: null,
+    pageCoverageRatio: null,
+    allPagesFallbackUsed: false,
+    transactionPagesSelected: [],
+    summaryAnchorPagesSelected: [],
+    pagesSkippedCount: null,
+    pagesSkippedReasonCounts: {},
+    aiIndependentEvidenceAvailable: false,
+    aiIndependentVisualReconstruction: false,
+    regionSelectionFailedReason: null,
+    fullPageFallbackUsed: false,
+    fallbackImageCount: null,
+    fallbackEvidencePages: [],
+    aiFailureLikelyReason: "none",
+    parserRowsByPage: {},
+    aiRowsByPage: {},
     aiVisionEvidence: [],
   };
 }
@@ -1459,6 +1541,13 @@ export async function runAiAssist(
   out.aiRenderFailedReason = opts.renderFailedReason ?? null;
   out.visionSelection = opts.visionSelection ?? null;
 
+  // DEV-ONLY force: bypass the eligibility short-circuit so the forced-reconstruction
+  // harness can exercise AI on a parser-verified statement. Adoption rules below are
+  // unchanged. Production never sets opts.force.
+  if (opts.force && !out.eligible) {
+    out.eligible = true;
+    out.aiEligibilityReasons = [...out.aiEligibilityReasons, "forced-dev-harness"];
+  }
   if (!out.eligible) return { outcome: out };
   if (!config.enabled) {
     out.status = env.ENABLE_AI_ASSIST === "false" ? "disabled" : "not-configured";
@@ -1480,6 +1569,46 @@ export async function runAiAssist(
   out.aiInputImageCount = images.length;
   out.aiEvidencePages = opts.visionSelection?.selectedPageIndexes ?? [];
   out.aiEvidenceRegions = opts.visionSelection?.selectedRegionCount ?? null;
+  // Evidence honesty: what visual evidence did the model actually receive? Only an
+  // image-bearing call can be an INDEPENDENT visual reconstruction; a zero-image
+  // call leans on text anchors and must not be presented as independent.
+  const fullPageImages = images.filter((i) => !i.crop);
+  out.aiIndependentEvidenceAvailable = images.length > 0;
+  out.fullPageFallbackUsed = fullPageImages.length > 0;
+  out.fallbackImageCount = fullPageImages.length;
+  out.fallbackEvidencePages = [...new Set(fullPageImages.map((i) => i.page))].sort((a, b) => a - b);
+  // Prefer the page-evidence PLAN diagnostics (rendered-page strategy) when present;
+  // otherwise derive a basic mode from the image crop flags (back-compat).
+  if (opts.evidencePlan) {
+    const p = opts.evidencePlan;
+    out.aiEvidenceMode = images.length === 0 ? "text-only" : p.aiEvidenceMode;
+    out.aiEvidenceCoverageLevel = p.aiEvidenceCoverageLevel;
+    out.aiEvidenceCompletenessScore = p.aiEvidenceCompletenessScore;
+    out.selectedEvidencePages = p.selectedEvidencePages;
+    out.selectedEvidencePageCount = p.selectedEvidencePageCount;
+    out.pageCoverageRatio = p.pageCoverageRatio;
+    out.allPagesFallbackUsed = p.allPagesFallbackUsed;
+    out.transactionPagesSelected = p.transactionPagesSelected;
+    out.summaryAnchorPagesSelected = p.summaryAnchorPagesSelected;
+    out.pagesSkippedCount = p.pagesSkippedCount;
+    out.pagesSkippedReasonCounts = p.pagesSkippedReasonCounts;
+  } else {
+    out.aiEvidenceMode =
+      images.length === 0 ? "text-only" : images.every((i) => i.crop) ? "region-crops" : "full-pages";
+  }
+  out.regionSelectionFailedReason =
+    images.length === 0
+      ? "no-visual-evidence-rendered"
+      : out.fullPageFallbackUsed && !opts.evidencePlan
+        ? "no-table-regions-detected-full-page-fallback"
+        : null;
+  // Safe per-page row counts (only when the row carries a page; never row text).
+  const rowsByPage = (txns: Transaction[]): Record<number, number> => {
+    const m: Record<number, number> = {};
+    for (const t of txns) if (typeof t.page === "number") m[t.page] = (m[t.page] ?? 0) + 1;
+    return m;
+  };
+  out.parserRowsByPage = rowsByPage(statement.transactions);
 
   const call = opts.call ?? defaultCaller;
   const callStart = Date.now();
@@ -1581,6 +1710,13 @@ export async function runAiAssist(
   if (candidates.length === 0) {
     out.status = "no-usable-result";
     out.aiAdopted = false;
+    out.aiFailureLikelyReason = !out.aiIndependentEvidenceAvailable
+      ? "insufficient-evidence"
+      : out.aiCandidateRejectedForQuality
+        ? "quality-gate"
+        : parsed.noSafeReconstruction
+          ? "model-missed-rows"
+          : "model-missed-rows";
     // When AI declared it cannot safely reconstruct, surface that explicitly.
     if (!out.aiRejectedReason) {
       out.aiRejectedReason = parsed.noSafeReconstruction
@@ -1604,8 +1740,13 @@ export async function runAiAssist(
   out.aiReconstructionRows = bestMetrics.rowCount;
   out.aiReconstructionDifference = bestMetrics.difference;
   out.aiReconciled = bestMetrics.status === "passed";
+  // Independent VISUAL reconstruction requires BOTH real visual evidence AND a
+  // reconciled rebuild. A reconciled rebuild with no images is NOT independent
+  // (it leaned on text anchors), so this stays false.
+  out.aiIndependentVisualReconstruction = out.aiIndependentEvidenceAvailable && out.aiReconciled;
   out.aiCandidateUnreconciledDifference =
     bestMetrics.status !== "passed" ? bestMetrics.difference : null;
+  out.aiRowsByPage = rowsByPage(best.statement.transactions);
   const comparison = compareRowsToParser(statement, best.statement);
   out.aiDroppedParserRowsCount = comparison.dropped;
   out.aiAddedRowsVsParserCount = comparison.added;
@@ -1666,6 +1807,20 @@ export async function runAiAssist(
           : "ai-unreconciled-not-adopted";
     }
     out.aiAdoptedReason = out.aiRejectedReason;
+    // Why did AI not succeed? Distinguish incomplete evidence from a model miss so a
+    // starved call is never blamed on the model. A candidate that fully reconciled
+    // and passed quality but simply was not adopted (e.g. the parser already verified
+    // with equal/higher confidence) is NOT a failure → "none".
+    out.aiFailureLikelyReason = out.aiCandidateRejectedForQuality
+      ? "quality-gate"
+      : !out.aiIndependentEvidenceAvailable
+        ? "insufficient-evidence"
+        : (out.aiEvidenceCompletenessScore !== null && out.aiEvidenceCompletenessScore < 1) ||
+            out.aiEvidenceCoverageLevel === "partial"
+          ? "insufficient-evidence"
+          : aiStillUnreconciled
+            ? "model-missed-rows"
+            : "none";
     return { outcome: out };
   }
 
@@ -1685,6 +1840,7 @@ export async function runAiAssist(
   // A candidate was adopted; any rejection reason recorded for the OTHER (unused)
   // candidate is no longer the outcome and would be misleading in diagnostics.
   out.aiRejectedReason = null;
+  out.aiFailureLikelyReason = "none";
   out.adoptedCandidateSource = best.source;
   if (best.interestFeeRowsAdded && best.interestFeeRowsAdded > 0) {
     out.interestFeeRepairApplied = true;
@@ -1778,6 +1934,26 @@ export function notAttemptedOutcome(
     aiEvidencePages: [],
     aiEvidenceRegions: null,
     aiInputImageCount: null,
+    aiEvidenceMode: "none",
+    aiEvidenceCoverageLevel: "none",
+    aiEvidenceCompletenessScore: null,
+    selectedEvidencePages: [],
+    selectedEvidencePageCount: null,
+    pageCoverageRatio: null,
+    allPagesFallbackUsed: false,
+    transactionPagesSelected: [],
+    summaryAnchorPagesSelected: [],
+    pagesSkippedCount: null,
+    pagesSkippedReasonCounts: {},
+    aiIndependentEvidenceAvailable: false,
+    aiIndependentVisualReconstruction: false,
+    regionSelectionFailedReason: null,
+    fullPageFallbackUsed: false,
+    fallbackImageCount: null,
+    fallbackEvidencePages: [],
+    aiFailureLikelyReason: "none",
+    parserRowsByPage: {},
+    aiRowsByPage: {},
     aiVisionEvidence: [],
   };
 }

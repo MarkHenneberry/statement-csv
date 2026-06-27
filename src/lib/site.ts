@@ -5,9 +5,9 @@ export const siteConfig = {
   // Core positioning: Canadian-first, parser-first extraction with balance checks.
   tagline: "Convert Canadian bank statements to clean CSV and Excel.",
   description:
-    "Convert Canadian bank and credit card statements into clean CSV and Excel files. " +
-    "StatementCSV uses parser-first extraction, guided AI verification when needed, and " +
-    "balance checks before export. Built for Canadian statements first, including " +
+    "Convert bank and credit-card statement PDFs into clean CSV and Excel files. " +
+    "StatementCSV uses parser-first extraction with guided AI verification and " +
+    "balance checks before export. Built for common Canadian statement formats, including " +
     "Interac e-Transfers, credits, debits, fees, and card payments. No bank login.",
 };
 
@@ -28,11 +28,20 @@ export const footerNav: { title: string; links: NavLink[] }[] = [
   {
     title: "Convert",
     links: [
-      { label: "Bank Statement Converter", href: "/" },
+      { label: "Bank Statement to CSV", href: "/bank-statement-to-csv" },
+      { label: "Canadian Statements", href: "/canadian-bank-statement-to-csv" },
       { label: "PDF to CSV", href: "/pdf-bank-statement-to-csv" },
       { label: "PDF to Excel", href: "/pdf-bank-statement-to-excel" },
-      { label: "Bank Statement Parser", href: "/bank-statement-parser" },
       { label: "Sample Output", href: "/sample" },
+    ],
+  },
+  {
+    title: "Guides",
+    links: [
+      { label: "How to convert PDF to CSV", href: "/help/how-to-convert-bank-statement-pdf-to-csv" },
+      { label: "Import into QuickBooks", href: "/blog/import-bank-statements-quickbooks" },
+      { label: "Compare converters", href: "/compare-bank-statement-converters" },
+      { label: "Bank Statement Parser", href: "/bank-statement-parser" },
     ],
   },
   {
@@ -40,6 +49,10 @@ export const footerNav: { title: string; links: NavLink[] }[] = [
     links: [
       { label: "RBC statement to CSV", href: "/convert-rbc-bank-statement-to-csv" },
       { label: "TD statement to CSV", href: "/convert-td-bank-statement-to-csv" },
+      { label: "BMO statement to CSV", href: "/convert-bmo-bank-statement-to-csv" },
+      { label: "CIBC statement to CSV", href: "/convert-cibc-bank-statement-to-csv" },
+      { label: "Scotiabank statement to CSV", href: "/convert-scotiabank-statement-to-csv" },
+      { label: "Credit unions (Canada)", href: "/convert-credit-union-statement-to-csv-canada" },
     ],
   },
   {

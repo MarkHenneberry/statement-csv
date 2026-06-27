@@ -59,11 +59,13 @@ import { generalFaqs } from "../src/lib/faq.ts";
 import { SCANNED_PDF_WARNING } from "../src/lib/parser.ts";
 import {
   selectVisionRegions,
+  planVisionEvidence,
   renderVisionEvidence,
   analyzeVisionPages,
   EXCLUDED_REGION_KINDS,
   type VisionImage,
   type RegionRenderer,
+  type EvidencePlanDiag,
 } from "../src/lib/pdf-render.ts";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -965,11 +967,12 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   // AI is available on every tier (not paid-only).
   check("every tier mentions guided AI verification", pricingPlans.every((p) => p.features.some((f) => /guided ai verification/i.test(f))));
 
-  // Privacy wording: never claim AI sees nothing; do claim PDF not handed directly.
+  // Privacy wording: never claim AI sees nothing; do claim the original PDF is
+  // not the direct AI input, and do disclose AI works from rendered images.
   const aiFaq = generalFaqs.find((f) => /how does ai fit/i.test(f.question));
   check("AI FAQ exists and is parser-first", Boolean(aiFaq) && /parser-first/i.test(aiFaq!.answer));
-  check("AI FAQ says original PDF not handed directly to AI", Boolean(aiFaq) && /never handed directly to ai/i.test(aiFaq!.answer));
-  check("AI FAQ mentions limited relevant evidence", Boolean(aiFaq) && /limited, relevant/i.test(aiFaq!.answer));
+  check("AI FAQ says original PDF is not the direct AI input", Boolean(aiFaq) && /avoid using your original pdf directly as the ai input/i.test(aiFaq!.answer));
+  check("AI FAQ discloses AI works from rendered statement images", Boolean(aiFaq) && /rendered statement images/i.test(aiFaq!.answer));
 }
 
 // ----- conversion-state copy honesty (verified vs needs-review) -----
@@ -1870,6 +1873,168 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   check("verified parser → not AI-eligible (zero AI tokens)", isAiAssistEligible(verified) === false);
   const na = notAttemptedOutcome(ON, "not-eligible");
   check("not-attempted outcome reports aiMode none + zero tokens", na.aiMode === "none" && na.called === false && na.aiTotalTokenCount === null && na.aiInputImageCount === null);
+}
+
+// ----- DEV-ONLY forced AI reconstruction harness (does not affect normal skip) -----
+{
+  const verified = bank([row({ credit: 100, balance: 200 })], 100, 200); // reconciles → verified
+  check("verified statement is not AI-eligible", isAiAssistEligible(verified) === false);
+
+  // DEFAULT (no force): a verified statement skips AI — no call, mode none. This is
+  // the normal app behavior and must be unchanged by the harness option.
+  let calledDefault = false;
+  const def = await runAiAssist(verified, ON, {}, {
+    call: async () => { calledDefault = true; return { ok: true, content: "{}", errorLabel: null }; },
+    env: {} as NodeJS.ProcessEnv,
+  });
+  check("verified statement skips AI by default (no force, no call)", def.outcome.status === "not-eligible" && calledDefault === false && def.outcome.aiMode === "none");
+
+  // FORCE: the harness option runs AI even on a verified statement (one call).
+  let calledForced = false;
+  const forced = await runAiAssist(verified, ON, {}, {
+    force: true,
+    call: async () => {
+      calledForced = true;
+      return { ok: true, content: JSON.stringify({ candidate: { statementKind: "bank-account", openingBalance: 100, closingBalance: 200, transactions: [{ description: "Deposit", credit: 100, amount: 100 }] } }), errorLabel: null };
+    },
+    env: {} as NodeJS.ProcessEnv,
+  });
+  check("force runs AI on a verified statement (one call)", calledForced === true && forced.outcome.called === true && forced.outcome.aiCallCount === 1);
+  check("forced run is full-reconstruction mode", forced.outcome.aiMode === "full-reconstruction");
+  check("forced run records the forced-dev-harness eligibility reason", forced.outcome.aiEligibilityReasons.includes("forced-dev-harness"));
+
+  // Force bypasses ONLY eligibility, not adoption: against an already-verified
+  // parser, an equal AI candidate is NOT adopted (parser kept) — adoption rules hold.
+  check("force does not bypass adoption rules", forced.outcome.adoptedCandidateSource === "parser");
+
+  // The harness script is dev-only and prints SAFE AGGREGATES ONLY.
+  const harness = readFileSync("scripts/force-ai-reconstruction.mts", "utf8");
+  check("harness documents its privacy stance (safe aggregates only)", /SAFE AGGREGATES ONLY/i.test(harness) && /NEVER prints transaction descriptions/i.test(harness));
+  check("harness never logs row descriptions / raw text", !/console\.log[^\n]*\.description/.test(harness) && !/console\.log[^\n]*\.rawText/.test(harness));
+  check("harness uses the shared force option (no duplicated AI path)", /force: true/.test(harness) && /resolveAiAssist\(/.test(harness));
+  // The harness exports a reusable function and guards its CLI so importing is safe.
+  check("harness exports runForcedReconstruction + returns safe summary", /export async function runForcedReconstruction/.test(harness) && /export type ForcedSummary/.test(harness));
+  check("harness CLI is guarded (no auto-run on import)", /invokedDirectly/.test(harness));
+
+  // The smoke runner reuses the harness, configures the regression set, and is safe.
+  const smoke = readFileSync("scripts/ai-force-smoke.mts", "utf8");
+  check("smoke runner imports the shared harness function", /runForcedReconstruction/.test(smoke) && /from "\.\/force-ai-reconstruction\.mts"/.test(smoke));
+  check("smoke runner configures the regression file set", /credit-union-credit-card-1\.pdf/.test(smoke) && /rbc-business-1\.pdf/.test(smoke) && /rbc-chequing-6\.pdf/.test(smoke));
+  check("smoke runner skips cleanly when files/config absent", /Skipping cleanly|skipped AI|Skipping AI/.test(smoke));
+  check("smoke runner prints safe aggregates only (no row text)", !/console\.log[^\n]*\.description/.test(smoke) && !/console\.log[^\n]*rawText/.test(smoke));
+}
+
+// ----- Evidence honesty: visual vs text-only reconstruction -----
+{
+  const broken = bank([row({ credit: 10 })], 100, 200); // not reconciled → AI-eligible
+  const reconcile = reply({ candidate: { statementKind: "bank-account", openingBalance: 100, closingBalance: 200, transactions: [{ description: "Deposit", credit: 100, amount: 100 }] } });
+  const img = (over: Partial<VisionImage>): VisionImage => ({ id: "table-body-p1-lower", kind: "table-body", page: 1, band: "lower", crop: true, dataUrl: "data:image/png;base64,AAAA", ...over });
+
+  // Zero images: even a reconciled rebuild is NOT an independent visual reconstruction.
+  const noImg = await runAiAssist(broken, ON, {}, { call: reconcile, env: {} as NodeJS.ProcessEnv, images: [] });
+  check("zero-image call is text-only evidence mode", noImg.outcome.aiEvidenceMode === "text-only");
+  check("zero-image call: no independent visual evidence", noImg.outcome.aiIndependentEvidenceAvailable === false);
+  check("zero-image reconciled rebuild is NOT independent visual reconstruction", noImg.outcome.aiReconciled === true && noImg.outcome.aiIndependentVisualReconstruction === false);
+  check("zero-image call records no-visual-evidence reason", noImg.outcome.regionSelectionFailedReason === "no-visual-evidence-rendered");
+
+  // Region crops: a reconciled rebuild IS an independent visual reconstruction.
+  const crops = await runAiAssist(broken, ON, {}, { call: reconcile, env: {} as NodeJS.ProcessEnv, images: [img({})], visionSelection: { selectedPageIndexes: [1], selectedRegionKinds: ["table-body"], selectedRegionCount: 1, transactionHeaderPagesDetected: 1, summaryPagesDetected: 0, excludedLegalPagesCount: 0, excludedWarningRewardPagesCount: 0 } });
+  check("region-crop call is region-crops evidence mode", crops.outcome.aiEvidenceMode === "region-crops");
+  check("region-crop reconciled rebuild IS independent visual reconstruction", crops.outcome.aiIndependentEvidenceAvailable === true && crops.outcome.aiIndependentVisualReconstruction === true);
+
+  // Full-page fallback images: flagged distinctly from region crops.
+  const fp = await runAiAssist(broken, ON, {}, { call: reconcile, env: {} as NodeJS.ProcessEnv, images: [img({ id: "full-page-p1-full", kind: "full-page", band: "full", crop: false }), img({ id: "full-page-p2-full", kind: "full-page", page: 2, band: "full", crop: false })] });
+  check("full-page evidence mode + fallback flags", fp.outcome.aiEvidenceMode === "full-pages" && fp.outcome.fullPageFallbackUsed === true && fp.outcome.fallbackImageCount === 2);
+  check("full-page fallback evidence pages recorded", fp.outcome.fallbackEvidencePages.join(",") === "1,2" && fp.outcome.aiIndependentEvidenceAvailable === true);
+}
+
+// ----- No-region full-page fallback in selectVisionRegions -----
+{
+  // Every page classified legal + no transaction-header pages → crops impossible →
+  // full-page fallback over the pages (so AI always gets visual evidence).
+  const fb = selectVisionRegions({ pageCount: 3, hasLowConfidence: true, transactionHeaderPages: [], summaryPages: [], legalPages: [1, 2, 3], maxRegions: 10 });
+  check("no-region case uses full-page fallback", fb.length >= 1 && fb.every((r) => r.band === "full") && fb.every((r) => r.id.startsWith("full-page")));
+  check("full-page fallback is capped", fb.length <= 5);
+
+  // Detected transaction pages are preferred for the full-page fallback when crops
+  // cannot be produced for them (here none are legal, but header detection failed).
+  const fb2 = selectVisionRegions({ pageCount: 4, hasLowConfidence: true, transactionHeaderPages: [], summaryPages: [], legalPages: [4], maxRegions: 10 });
+  check("fallback prefers non-legal pages", fb2.every((r) => r.page !== 4) && fb2.length >= 1);
+
+  // Normal case (header pages present) still yields targeted CROPS, not full pages.
+  const crops = selectVisionRegions({ pageCount: 2, hasLowConfidence: true, transactionHeaderPages: [1], summaryPages: [], legalPages: [], maxRegions: 10 });
+  check("header pages still produce targeted crops (no fallback)", crops.length >= 1 && crops.some((r) => r.band === "upper" || r.band === "lower"));
+}
+
+// ----- Privacy: full-reconstruction prompt excludes parser row text/descriptions -----
+{
+  const stmt = buildStatementFromRows(
+    [row({ description: "SECRETMERCHANTXYZ STORE #42", debit: 50 }), row({ description: "ANOTHERSECRETPAYEE", credit: 75 })],
+    { statementKind: "bank-account", openingBalance: 100, closingBalance: 125 },
+  );
+  const ev = buildAiEvidence(stmt);
+  check("full-reconstruction evidence sends NO parser row list", ev.transactions.length === 0);
+  const serialized = JSON.stringify(ev);
+  check("serialized evidence contains no parser row descriptions", !/SECRETMERCHANTXYZ|ANOTHERSECRETPAYEE/.test(serialized));
+  check("evidence still supplies safe parser aggregates", ev.parserSummary.rowCount === 2 && typeof ev.parserSummary.totalDebits === "number" && typeof ev.parserSummary.totalCredits === "number");
+}
+
+// ----- Rendered-page evidence planner (full pages by default) -----
+{
+  const dense = ["01 Dec A 10.00 90.00", "02 Dec B 20.00 70.00", "03 Dec C 30.00 40.00", "04 Dec D 5.00 35.00"].join("\n");
+  const denseWithFooter = `${dense}\nHow to reach us 1-800-555-1234\nimportant information about your account`;
+  const legalOnly = "important information about your account. trademarks. cardholder agreement. how to reach us.";
+  const anchorPage = "Opening balance 100.00 Closing balance 50.00 Total deposits 0.00";
+
+  // Small PDF, transaction density (no header) → all transaction pages selected.
+  const fourPage = planVisionEvidence({ pageCount: 4, perPageText: [denseWithFooter, dense, dense, anchorPage] });
+  check("4-page chequing-style: all relevant pages selected (not just 2)", fourPage.diag.selectedEvidencePages.length >= 3 && fourPage.diag.aiEvidenceMode === "full-pages");
+  check("transaction density beats footer/legal classification", fourPage.diag.transactionPagesSelected.includes(1));
+  check("summary anchor page is included", fourPage.diag.selectedEvidencePages.includes(4));
+  check("4-page plan reports complete coverage", fourPage.diag.aiEvidenceCompletenessScore === 1 && fourPage.diag.aiEvidenceCoverageLevel === "all-pages");
+
+  // tx+footer page kept; pure-legal page excluded with a safe reason.
+  const mixed = planVisionEvidence({ pageCount: 2, perPageText: [denseWithFooter, legalOnly] });
+  check("tx+footer page kept, pure-legal page excluded", mixed.diag.selectedEvidencePages.includes(1) && !mixed.diag.selectedEvidencePages.includes(2) && mixed.diag.pagesSkippedReasonCounts["legal-only"] === 1);
+
+  // Small PDF with NO clearly transaction-bearing page → uncertainty → send ALL pages.
+  const uncertain = planVisionEvidence({ pageCount: 3, perPageText: ["line one with 12.00", "another 5.00 page", "footer maybe"] });
+  check("small uncertain pdf sends ALL pages (full-page fallback)", uncertain.diag.selectedEvidencePages.length === 3 && uncertain.diag.allPagesFallbackUsed === true && uncertain.diag.aiEvidenceMode === "full-pages");
+
+  // Large PDF → transaction pages + summary anchor page, legal/rewards excluded.
+  const eight = planVisionEvidence({ pageCount: 8, perPageText: [dense, dense, dense, legalOnly, legalOnly, legalOnly, "rewards points balance", anchorPage] });
+  check("large pdf selects transaction pages + anchor page", eight.diag.transactionPagesSelected.length >= 3 && eight.diag.summaryAnchorPagesSelected.includes(8) && eight.diag.aiEvidenceMode === "transaction-pages");
+  check("large pdf excludes legal/rewards pages", eight.diag.pagesSkippedCount >= 3);
+}
+
+// ----- Evidence plan flows to the outcome; completeness gates failure attribution -----
+{
+  const broken = bank([row({ debit: 10 }), row({ debit: 10 })], 1000, 500); // 2 rows, diff 480
+  const fpImg = (p: number): VisionImage => ({ id: `full-page-p${p}-full`, kind: "full-page", page: p, band: "full", crop: false, dataUrl: "data:image/png;base64,AAAA" });
+  const completePlan: EvidencePlanDiag = { aiEvidenceMode: "full-pages", aiEvidenceCoverageLevel: "all-pages", aiEvidenceCompletenessScore: 1, selectedEvidencePages: [1, 2], selectedEvidencePageCount: 2, pageCoverageRatio: 1, allPagesFallbackUsed: true, fullPageFallbackUsed: true, transactionPagesSelected: [1, 2], summaryAnchorPagesSelected: [], pagesSkippedCount: 0, pagesSkippedReasonCounts: {} };
+  const reconcile = reply({ candidate: { statementKind: "bank-account", openingBalance: 1000, closingBalance: 500, transactions: [{ description: "X", debit: 250, amount: -250 }, { description: "Y", debit: 250, amount: -250 }] } });
+
+  const okPlan = await runAiAssist(broken, ON, {}, { call: reconcile, env: {} as NodeJS.ProcessEnv, images: [fpImg(1), fpImg(2)], evidencePlan: completePlan });
+  check("evidence plan flows to outcome (mode/coverage/completeness/pages)", okPlan.outcome.aiEvidenceMode === "full-pages" && okPlan.outcome.aiEvidenceCoverageLevel === "all-pages" && okPlan.outcome.aiEvidenceCompletenessScore === 1 && okPlan.outcome.selectedEvidencePageCount === 2);
+  check("complete-evidence reconciled rebuild is adopted + independent", okPlan.outcome.aiAdopted === true && okPlan.outcome.aiIndependentVisualReconstruction === true && okPlan.outcome.aiFailureLikelyReason === "none");
+
+  // Complete evidence but UNRECONCILED → rejected, blamed on the MODEL (not evidence).
+  const unrec = reply({ candidate: { statementKind: "bank-account", openingBalance: 1000, closingBalance: 500, transactions: [{ description: "P", debit: 100, amount: -100 }, { description: "Q", debit: 100, amount: -100 }, { description: "R", debit: 100, amount: -100 }] } }); // diff 200
+  const rUnrec = await runAiAssist(broken, ON, {}, { call: unrec, env: {} as NodeJS.ProcessEnv, images: [fpImg(1), fpImg(2)], evidencePlan: completePlan });
+  check("complete evidence + unreconciled is rejected safely", rUnrec.outcome.aiAdopted === false && rUnrec.statement === undefined);
+  check("complete-evidence failure is attributed to the model, not evidence", rUnrec.outcome.aiFailureLikelyReason === "model-missed-rows");
+
+  // INCOMPLETE evidence + unreconciled → NOT blamed on the model (insufficient evidence).
+  const partialPlan: EvidencePlanDiag = { ...completePlan, aiEvidenceCoverageLevel: "partial", aiEvidenceCompletenessScore: 0.5 };
+  const rPartial = await runAiAssist(broken, ON, {}, { call: unrec, env: {} as NodeJS.ProcessEnv, images: [fpImg(1)], evidencePlan: partialPlan });
+  check("incomplete evidence is not presented as a model failure", rPartial.outcome.aiFailureLikelyReason === "insufficient-evidence");
+
+  // A FULLY RECONCILED, quality-passing AI rebuild that simply was not adopted because
+  // the parser already verified is NOT a failure → aiFailureLikelyReason "none".
+  const verified = bank([row({ credit: 100, balance: 200 })], 100, 200);
+  const reconV = reply({ candidate: { statementKind: "bank-account", openingBalance: 100, closingBalance: 200, transactions: [{ description: "Deposit", credit: 100, amount: 100 }] } });
+  const rv = await runAiAssist(verified, ON, {}, { force: true, call: reconV, env: {} as NodeJS.ProcessEnv, images: [fpImg(1)], evidencePlan: completePlan });
+  check("reconciled-but-not-adopted (parser already good) reports no failure", rv.outcome.aiReconciled === true && rv.outcome.adoptedCandidateSource === "parser" && rv.outcome.aiFailureLikelyReason === "none");
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

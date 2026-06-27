@@ -25,13 +25,14 @@ import {
 import { parsedStatementToRows } from "@/lib/statement-model";
 import { buildSafeParseSummary } from "@/lib/parser-diagnostics";
 import {
-  selectVisionRegions,
+  planVisionEvidence,
   renderVisionEvidence,
   analyzeVisionPages,
   probeRenderBackend,
   type VisionImage,
   type VisionImageMeta,
   type VisionRegion,
+  type EvidencePlanDiag,
 } from "@/lib/pdf-render";
 import {
   FREE_PREVIEW_MAX_PAGES,
@@ -251,6 +252,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   let visionImages: VisionImage[] = [];
   let renderFailedReason: string | null = null;
   let visionSelection: VisionSelectionDiag | null = null;
+  let evidencePlan: EvidencePlanDiag | null = null;
   let renderDurationMs: number | null = null;
   let rendererBackendAvailable: boolean | null = null;
   let rendererBackendName: string | null = null;
@@ -271,23 +273,21 @@ export async function POST(request: Request): Promise<NextResponse> {
         rendererBackendAvailable = probe.available;
         rendererBackendName = probe.backend;
         rendererProbeReason = probe.reason;
-        const hasLowConfidence =
-          statement.validation.confidence < 0.7 ||
-          statement.transactions.some((t) => t.confidence < 0.7);
-        // Classify preview pages so we PRIORITIZE TRANSACTIONS pages (which can
-        // follow summary/legal pages) and EXCLUDE legal/warning/reward pages.
+        // Classify preview pages (kept for Blinders page hints).
         const pageAnalysis = analyzeVisionPages(previewPages);
-        const regions = selectVisionRegions({
+        // EVIDENCE STRATEGY: render whole document pages so the model can parse the
+        // statement itself — full pages by default (small PDFs send everything when
+        // uncertain), transaction + anchor pages for large PDFs. Transaction density
+        // beats footer/legal classification, so a rows+footer page is never dropped.
+        const plan = planVisionEvidence({
           pageCount: previewPages.length,
-          hasLowConfidence,
-          transactionHeaderPages: pageAnalysis.transactionHeaderPages,
-          summaryPages: pageAnalysis.summaryPages,
-          legalPages: pageAnalysis.legalPages,
-          // Allow enough regions to cover summary + several full transaction pages.
-          maxRegions: 10,
+          perPageText: previewPages,
+          maxImages: 12,
         });
+        const regions = plan.regions;
+        evidencePlan = plan.diag;
         visionSelection = {
-          selectedPageIndexes: [...new Set(regions.map((r) => r.page))].sort((a, b) => a - b),
+          selectedPageIndexes: plan.diag.selectedEvidencePages,
           selectedRegionKinds: [...new Set(regions.map((r) => r.kind))],
           selectedRegionCount: regions.length,
           transactionHeaderPagesDetected: pageAnalysis.transactionHeaderPages.length,
@@ -296,7 +296,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           excludedWarningRewardPagesCount: pageAnalysis.warningRewardPages.length,
         };
         const renderStart = Date.now();
-        const rendered = await renderVisionEvidence(pdfBytes, regions, { enabled: true, maxImages: 10 });
+        const rendered = await renderVisionEvidence(pdfBytes, regions, { enabled: true, maxImages: 12 });
         renderDurationMs = Date.now() - renderStart;
         visionImages = rendered.images;
         visionEvidenceMeta = rendered.meta;
@@ -364,6 +364,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       images: visionImages,
       renderFailedReason,
       visionSelection,
+      evidencePlan,
     },
   );
   let finalStatement = resolved.statement;

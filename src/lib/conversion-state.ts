@@ -116,7 +116,7 @@ export function conversionPresentation(input: ConversionInputs): ConversionPrese
         badgeLabel: "Verified",
         badgeTone: "green",
         bannerVariant: "success",
-        bannerTitle: "Conversion verified",
+        bannerTitle: "Verified conversion",
         bannerBody: "Totals matched. You can export now.",
         secondaryCopy: "Spot-checking is optional but recommended for important records.",
         showTopExport: hasRows,
@@ -130,7 +130,7 @@ export function conversionPresentation(input: ConversionInputs): ConversionPrese
         badgeLabel: "Review recommended",
         badgeTone: "amber",
         bannerVariant: "warning",
-        bannerTitle: "Review recommended",
+        bannerTitle: "Review highlighted rows",
         // Totals reconciled, so never imply the conversion could not be verified.
         bannerBody:
           highlightCount > 0
@@ -163,10 +163,10 @@ export function conversionPresentation(input: ConversionInputs): ConversionPrese
     case "unsupported":
       return {
         state,
-        badgeLabel: "Unsupported",
+        badgeLabel: "Could not extract",
         badgeTone: "red",
         bannerVariant: "error",
-        bannerTitle: "This PDF can’t be converted",
+        bannerTitle: "Could not extract statement",
         bannerBody:
           "We couldn’t read transactions from this file. Scanned/image-only or protected PDFs aren’t supported yet.",
         secondaryCopy: null,
@@ -194,7 +194,7 @@ export function conversionPresentation(input: ConversionInputs): ConversionPrese
         badgeLabel: noTable ? "No transactions found" : "Needs review",
         badgeTone: "amber",
         bannerVariant: "warning",
-        bannerTitle: noTable ? "No usable transaction table" : "Needs review",
+        bannerTitle: noTable ? "No usable transaction table" : "Review highlighted rows",
         bannerBody,
         secondaryCopy: null,
         showTopExport: hasRows,
