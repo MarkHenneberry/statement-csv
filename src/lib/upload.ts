@@ -1,10 +1,15 @@
-// Domain model and pure helpers for the /upload preview flow.
+// Domain model and pure helpers for the /upload preview flow: row types, money
+// math, balance checks, row-warning severity, and CSV export. These are the REAL
+// helpers on the live conversion path — the API route's parsed rows flow through
+// computeBalanceCheck / rowsToCsv here, and the private regression harness reuses
+// them too.
 //
-// TODO(launch-blocker): Everything here operates on MOCK data. There is no real
-// PDF parser, AI-assisted extraction, OCR, or backend. Before launch the mock
-// statement must be replaced by real extraction output, and the "files are
-// deleted after conversion" promise made elsewhere must be implemented and
-// verified.
+// createMockStatement() at the bottom is the ONLY mock in this file: it powers the
+// clearly labelled "Load sample preview" fallback, never a real conversion.
+//
+// TODO(launch-blocker): the "files are deleted after conversion" promise made in
+// privacy/marketing copy must still be implemented and verified in the deployment
+// target before launch (see pdf-extract.ts and the route's privacy notes).
 
 export type TransactionRow = {
   id: string;

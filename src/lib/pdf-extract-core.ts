@@ -84,13 +84,23 @@ function itemsToStructured(items: TextItem[], page: number): PdfTextItem[] {
   return out;
 }
 
+// Hard safety cap on how many pages we will extract per request. A small PDF can
+// still declare thousands of pages, so an unbounded loop is a hang/DoS vector.
+// This sits far above any realistic monthly statement and above the free-preview
+// page cap, so normal conversions are never affected. The reported `pageCount`
+// stays truthful (the real page total from the document).
+export const MAX_EXTRACT_PAGES = 100;
+
 export async function extractPdfText(bytes: Uint8Array): Promise<ExtractedPdf> {
   const pdf = await getDocumentProxy(bytes);
   const pageCount = pdf.numPages ?? null;
   const pages: string[] = [];
   const items: PdfTextItem[] = [];
 
-  for (let i = 1; i <= (pageCount ?? 0); i += 1) {
+  // Bound the work: extract at most MAX_EXTRACT_PAGES pages even when the document
+  // declares more. pageCount above remains the true total for display/diagnostics.
+  const pagesToRead = Math.min(pageCount ?? 0, MAX_EXTRACT_PAGES);
+  for (let i = 1; i <= pagesToRead; i += 1) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
     const pageItems = content.items as TextItem[];

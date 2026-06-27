@@ -1,27 +1,38 @@
 {
-  "_comment": "Copy this to private-test-manifest.json (gitignored) and point paths at PDFs OUTSIDE the repo. Only aggregate expectations live here; never commit real statements or real values.",
+  "_comment": "Copy this to private-test-manifest.json (gitignored) and point each path at a PDF OUTSIDE the repo. Only aggregate expectations live here; NEVER commit real statements or real values. Omit any expected* field you don't want asserted. The runner skips entries whose file is absent, so you can keep the full hard-file corpus listed and run with whatever subset you have locally.",
+  "_fields": {
+    "path": "absolute path to the PDF (outside the repo)",
+    "expectedStatementKind": "credit-card | bank-account",
+    "expectedLayoutFamily": "e.g. credit-card-table | bank-account-table",
+    "expectedRowCount": "number of itemized transaction rows",
+    "expectedOpeningBalance": "number",
+    "expectedClosingBalance": "number",
+    "expectedTotalCredits": "number",
+    "expectedTotalDebits": "number",
+    "expectedDifference": "reconciliation difference (expected − statement closing); 0 when it reconciles",
+    "expectedBalanceStatus": "passed | needs-review | limited"
+  },
+  "_hard_corpus": "Recommended hard files to include when present: credit-union-credit-card-1.pdf, credit-union-business-1.pdf, rbc-business-1.pdf, rbc-chequing-6.pdf, bmo-business-1.pdf, td-business-1.pdf, cibc-credit-card-*.pdf, plus the RBC visa/business/chequing files already in your local set.",
   "statements": [
     {
+      "_note": "Fully-worked example. Replace path + values with a real local statement.",
       "path": "C:/private-statements/example-credit-card.pdf",
       "expectedStatementKind": "credit-card",
       "expectedLayoutFamily": "credit-card-table",
-      "expectedRowCount": 0,
-      "expectedOpeningBalance": 0,
-      "expectedClosingBalance": 0,
-      "expectedTotalCredits": 0,
-      "expectedTotalDebits": 0,
+      "expectedRowCount": 42,
+      "expectedOpeningBalance": 1200.0,
+      "expectedClosingBalance": 1543.21,
+      "expectedTotalCredits": 800.0,
+      "expectedTotalDebits": 1143.21,
+      "expectedDifference": 0,
       "expectedBalanceStatus": "passed"
     },
-    {
-      "path": "C:/private-statements/example-bank-account.pdf",
-      "expectedStatementKind": "bank-account",
-      "expectedLayoutFamily": "bank-account-table",
-      "expectedRowCount": 0,
-      "expectedOpeningBalance": 0,
-      "expectedClosingBalance": 0,
-      "expectedTotalCredits": 0,
-      "expectedTotalDebits": 0,
-      "expectedBalanceStatus": "passed"
-    }
+    { "_note": "fill expected* locally", "path": "C:/private-statements/credit-union-credit-card-1.pdf" },
+    { "_note": "fill expected* locally", "path": "C:/private-statements/credit-union-business-1.pdf" },
+    { "_note": "fill expected* locally", "path": "C:/private-statements/rbc-business-1.pdf" },
+    { "_note": "fill expected* locally", "path": "C:/private-statements/rbc-chequing-6.pdf" },
+    { "_note": "fill expected* locally", "path": "C:/private-statements/bmo-business-1.pdf" },
+    { "_note": "fill expected* locally", "path": "C:/private-statements/td-business-1.pdf" },
+    { "_note": "fill expected* locally", "path": "C:/private-statements/cibc-credit-card-1.pdf" }
   ]
 }

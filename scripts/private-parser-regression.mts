@@ -15,6 +15,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { extractPdfText } from "../src/lib/pdf-extract-core.ts";
 import { parseStatement } from "../src/lib/statement-pipeline.ts";
 import { computeBalanceCheck } from "../src/lib/upload.ts";
+import { isAiAssistEligible } from "../src/lib/ai-assist.ts";
 
 type ManifestEntry = {
   path: string;
@@ -25,6 +26,8 @@ type ManifestEntry = {
   expectedClosingBalance?: number;
   expectedTotalCredits?: number;
   expectedTotalDebits?: number;
+  /** Expected reconciliation difference (expected − statement closing), usually 0. */
+  expectedDifference?: number;
   expectedBalanceStatus?: "passed" | "needs-review" | "limited";
 };
 
@@ -94,6 +97,11 @@ for (const entry of manifest.statements ?? []) {
     );
     const status = !check.available ? "limited" : check.passed ? "passed" : "needs-review";
 
+    // AI-fallback rule (no network): a parser-verified statement MUST skip AI.
+    // isAiAssistEligible runs the same deterministic eligibility used by the route.
+    const aiEligible = isAiAssistEligible(statement);
+    const aiSkipped = !aiEligible;
+
     // Content-safe metadata-leak check: a credit-card description that ENDS with a
     // known ambiguous spend-category label (after real merchant text) means a
     // statement-provided category leaked into Description. Counts only — no text.
@@ -116,6 +124,7 @@ for (const entry of manifest.statements ?? []) {
       closingBalance: round2(parsed.closingBalance),
       totalCredits: round2(check.totalCredits),
       totalDebits: round2(check.totalDebits),
+      difference: round2(check.difference),
       balanceStatus: status,
     };
 
@@ -134,15 +143,24 @@ for (const entry of manifest.statements ?? []) {
       mismatches.push(`credits ${actual.totalCredits}≠${entry.expectedTotalCredits}`);
     if (!approx(actual.totalDebits, entry.expectedTotalDebits))
       mismatches.push(`debits ${actual.totalDebits}≠${entry.expectedTotalDebits}`);
+    if (!approx(actual.difference, entry.expectedDifference))
+      mismatches.push(`difference ${actual.difference}≠${entry.expectedDifference}`);
     if (entry.expectedBalanceStatus && actual.balanceStatus !== entry.expectedBalanceStatus)
       mismatches.push(`status ${actual.balanceStatus}≠${entry.expectedBalanceStatus}`);
+    // Rule 4: when the author declares the statement parser-verified, AI must be
+    // skipped (isAiAssistEligible === false). Tied to declared intent, not the bare
+    // arithmetic status, since the validation engine that gates AI can legitimately
+    // diverge from the arithmetic identity.
+    if (entry.expectedBalanceStatus === "passed" && !aiSkipped)
+      mismatches.push("ai-not-skipped-on-verified");
     if (categoryLeaks > 0) mismatches.push(`category-leaks ${categoryLeaks}`);
 
     if (mismatches.length === 0) {
       const ps = result.parseStats;
+      const core = ` [diff=${actual.difference ?? "n/a"} status=${status} aiSkipped=${aiSkipped}`;
       const diag = ps
-        ? ` [inherited=${ps.rowsDateInherited} stillMissing=${ps.rowsStillMissingDate} eTransfer=${ps.eTransferDescriptionsNormalized} refRemoved=${ps.rawReferenceFragmentsRemoved} catLeaks=${categoryLeaks}]`
-        : "";
+        ? `${core} inherited=${ps.rowsDateInherited} stillMissing=${ps.rowsStillMissingDate} eTransfer=${ps.eTransferDescriptionsNormalized} refRemoved=${ps.rawReferenceFragmentsRemoved} catLeaks=${categoryLeaks}]`
+        : `${core}]`;
       console.log(`PASS  ${label}${diag}`);
     } else {
       failures += 1;
