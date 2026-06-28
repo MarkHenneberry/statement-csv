@@ -20,6 +20,8 @@ import {
   evaluateCandidateQuality,
   buildBlindersPacket,
   notAttemptedOutcome,
+  classifyTransactionSection,
+  classifyNonTransactionSection,
   SYSTEM_PROMPT,
   type AiAssistConfig,
   type ChatResult,
@@ -1084,7 +1086,11 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   check("still exactly one AI call (no extra calls)", calls === 1 && r.outcome.aiCallCount === 1);
   check("quality diagnostics recorded", r.outcome.aiAggregateRowsDetected + r.outcome.aiPlaceholderRowsDetected >= 1 && r.outcome.aiItemizedRowCount !== null);
   const serialized = JSON.stringify(r.outcome);
-  check("quality diagnostics contain no private content", !/unspecified purchases|payment|interest charge|base64|merchant/i.test(serialized));
+  // Guard against leaked ROW TEXT/merchant/base64. Note: safe section category
+  // tokens ("payments"/"interest"/"fees"/"purchases") and field names such as
+  // aiPaymentsSectionDetected are NOT private content, so match description-shaped
+  // leaks precisely rather than bare words that also appear in field names.
+  check("quality diagnostics contain no private content", !/unspecified purchases|interest charge|payment -|paiement|base64|merchant/i.test(serialized));
 
   // A valid itemized candidate is still adopted (no over-rejection).
   const good = await runAiAssist(broken, ON, {}, {
@@ -2035,6 +2041,134 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   const reconV = reply({ candidate: { statementKind: "bank-account", openingBalance: 100, closingBalance: 200, transactions: [{ description: "Deposit", credit: 100, amount: 100 }] } });
   const rv = await runAiAssist(verified, ON, {}, { force: true, call: reconV, env: {} as NodeJS.ProcessEnv, images: [fpImg(1)], evidencePlan: completePlan });
   check("reconciled-but-not-adopted (parser already good) reports no failure", rv.outcome.aiReconciled === true && rv.outcome.adoptedCandidateSource === "parser" && rv.outcome.aiFailureLikelyReason === "none");
+}
+
+// ===== Section-aware AI full-reconstruction (general credit-card failure class) =====
+// Synthetic, FAKE data. Mirrors the class a real CIBC statement exposed: AI must
+// reconstruct ONLY posted itemized rows (payments, interest, fees, purchases) and
+// must NOT drop a real itemized fee/interest row or include payment-due/remittance/
+// rewards values. Adoption stays driven by deterministic reconciliation (unchanged).
+{
+  // Prompt now carries the section-aware + cross-check + anti-failure language.
+  check("prompt is section-aware (identifies transaction sections)", /SECTION-AWARE RECONSTRUCTION/.test(SYSTEM_PROMPT));
+  check("prompt lists non-transaction sections to ignore", /minimum payment due, amount due, payment due date/i.test(SYSTEM_PROMPT));
+  check("prompt: keep itemized fee even when a fees total is in the summary", /Include an itemized FEE row even when a fees total/i.test(SYSTEM_PROMPT));
+  check("prompt: keep itemized interest even when an interest total is in the summary", /include\s+itemized INTEREST rows even when an interest total/i.test(SYSTEM_PROMPT));
+  check("prompt: do not include minimum payment / amount due as a transaction", /Do NOT include the minimum payment due as a payment\/credit/i.test(SYSTEM_PROMPT));
+  check("prompt: residual equal to a section amount → re-check that section", /residual equals a known itemized section amount/i.test(SYSTEM_PROMPT));
+  check("prompt: partial improvement is failure unless reconciled", /PARTIAL improvement is a FAILURE unless the reconstructed/i.test(SYSTEM_PROMPT));
+  check("prompt is general, not bank-specific", /any issuer — never bank-specific/i.test(SYSTEM_PROMPT) && !/CIBC/i.test(SYSTEM_PROMPT));
+
+  // Section classification maps to a FIXED safe vocabulary (no free text echoed).
+  check("classify: 'Your payments' → payments", classifyTransactionSection("Your payments") === "payments");
+  check("classify: 'Interest charged' → interest", classifyTransactionSection("Interest charged this period") === "interest");
+  check("classify: 'Annual fee' → fees", classifyTransactionSection("Annual fee") === "fees");
+  check("classify: 'New charges' → purchases", classifyTransactionSection("Your new charges and credits") === "purchases");
+  check("classify: 'Minimum Payment due' → minimum-payment", classifyNonTransactionSection("Minimum Payment due") === "minimum-payment");
+  check("classify: 'Please pay / remittance slip' → remittance", classifyNonTransactionSection("Remittance slip") === "remittance");
+  check("classify: 'Rewards summary' → rewards", classifyNonTransactionSection("Rewards summary") === "rewards");
+  check("classify: 'Cashback gift certificate' → cashback", classifyNonTransactionSection("Cashback gift certificate") === "cashback");
+  check("classify: unknown/merchant string → null (dropped, never echoed)", classifyTransactionSection("SECRET MERCHANT 123") === null);
+
+  // parseAiResponse normalizes section coverage and drops anything not in the vocab.
+  const pr = parseAiResponse(JSON.stringify({
+    candidate: { transactions: [{ description: "x", debit: 1, amount: -1 }] },
+    detectedTransactionSections: ["payments", "SECRET MERCHANT NAME", "interest", "fees"],
+    ignoredNonTransactionSections: ["Minimum Payment due", "Rewards summary"],
+    sectionTotalsMatch: true,
+    possibleMissingSection: "fees",
+    possibleMissingAmount: 29,
+  }));
+  check(
+    "section coverage parsed + merchant text dropped",
+    Boolean(pr?.sectionCoverage) &&
+      pr!.sectionCoverage!.detectedTransactionSections.join(",") === "payments,interest,fees" &&
+      pr!.sectionCoverage!.ignoredNonTransactionSections.join(",") === "minimum-payment,rewards" &&
+      pr!.sectionCoverage!.sectionTotalsMatch === true &&
+      pr!.sectionCoverage!.possibleMissingSection === "fees" &&
+      pr!.sectionCoverage!.possibleMissingAmount === 29,
+    JSON.stringify(pr?.sectionCoverage),
+  );
+
+  // A non-reconciling credit-card parser result with summary anchors (eligible).
+  const ccParser = cc([row({ credit: 300 }), row({ debit: 71 })], 1000, 850, { credits: 300, debits: 150 });
+  check("section-test parser is AI-eligible (non-reconciling)", isAiAssistEligible(ccParser) === true);
+
+  // (A) Full reconstruction WITH payments + interest + fees + purchases reconciles → adopted.
+  const completeReply = reply({
+    candidate: {
+      statementKind: "credit-card", openingBalance: 1000, closingBalance: 850,
+      summaryTotals: { totalCredits: 300, totalDebits: 150 },
+      transactions: [
+        { description: "PAYMENT - THANK YOU", credit: 300, amount: 300 },
+        { description: "INTEREST CHARGE ON PURCHASES", debit: 50, amount: -50 },
+        { description: "ANNUAL FEE", debit: 29, amount: -29 },
+        { description: "BOOK STORE TORONTO ON", debit: 71, amount: -71 },
+      ],
+    },
+    detectedTransactionSections: ["payments", "interest", "fees", "purchases"],
+    ignoredNonTransactionSections: ["Minimum Payment due", "Rewards summary"],
+    sectionTotalsMatch: true,
+  });
+  const rA = await run(ccParser, completeReply);
+  check(
+    "complete section-aware reconstruction reconciles + adopted (fee + interest kept)",
+    rA.outcome.status === "reconciled" && rA.outcome.aiAdopted === true &&
+      rA.statement!.validation.status === "passed" && rA.statement!.transactions.length === 4,
+    `${rA.outcome.status} rows=${rA.statement?.transactions.length}`,
+  );
+  check(
+    "section diagnostics surfaced (fees/interest/payments/charges + anchors)",
+    rA.outcome.aiFeesSectionDetected && rA.outcome.aiInterestSectionDetected &&
+      rA.outcome.aiPaymentsSectionDetected && rA.outcome.aiChargesSectionDetected &&
+      rA.outcome.aiSummaryAnchorsUsed && rA.outcome.aiIgnoredNonTransactionSectionsCount === 2,
+    JSON.stringify({
+      fees: rA.outcome.aiFeesSectionDetected, interest: rA.outcome.aiInterestSectionDetected,
+      anchors: rA.outcome.aiSummaryAnchorsUsed, ignored: rA.outcome.aiIgnoredNonTransactionSectionsCount,
+    }),
+  );
+
+  // (B) Partial reconstruction that MISSES the itemized fee stays unreconciled → rejected.
+  const missingFeeReply = reply({
+    candidate: {
+      statementKind: "credit-card", openingBalance: 1000, closingBalance: 850,
+      summaryTotals: { totalCredits: 300, totalDebits: 150 },
+      transactions: [
+        { description: "PAYMENT - THANK YOU", credit: 300, amount: 300 },
+        { description: "INTEREST CHARGE ON PURCHASES", debit: 50, amount: -50 },
+        { description: "BOOK STORE TORONTO ON", debit: 71, amount: -71 },
+      ],
+    },
+    detectedTransactionSections: ["payments", "interest", "purchases"],
+  });
+  const rB = await run(ccParser, missingFeeReply);
+  check(
+    "partial reconstruction missing a fee is NOT adopted (improved but unreconciled)",
+    rB.outcome.aiAdopted === false && rB.statement === undefined &&
+      rB.outcome.aiImprovedButStillUnreconciled === true,
+    `${rB.outcome.status} adopted=${rB.outcome.aiAdopted}`,
+  );
+
+  // (C) Reconstruction that INCLUDES a minimum-payment-due credit cannot reconcile → rejected.
+  const remittanceIncludedReply = reply({
+    candidate: {
+      statementKind: "credit-card", openingBalance: 1000, closingBalance: 850,
+      summaryTotals: { totalCredits: 300, totalDebits: 150 },
+      transactions: [
+        { description: "PAYMENT - THANK YOU", credit: 300, amount: 300 },
+        { description: "INTEREST CHARGE ON PURCHASES", debit: 50, amount: -50 },
+        { description: "ANNUAL FEE", debit: 29, amount: -29 },
+        { description: "BOOK STORE TORONTO ON", debit: 71, amount: -71 },
+        { description: "MINIMUM PAYMENT", credit: 134.05, amount: 134.05 },
+      ],
+    },
+  });
+  const rC = await run(ccParser, remittanceIncludedReply);
+  check(
+    "including minimum-payment-due as a credit breaks reconciliation → not adopted",
+    rC.outcome.aiAdopted === false && rC.statement === undefined,
+    `${rC.outcome.status} adopted=${rC.outcome.aiAdopted}`,
+  );
 }
 
 console.log(failures === 0 ? `\nAll AI-assist v2 + pricing checks passed.` : `\n${failures} check(s) failed.`);

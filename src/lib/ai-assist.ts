@@ -232,6 +232,26 @@ export type AiAssistOutcome = {
   aiRowsByPage: Record<number, number>;
   /** Safe per-image vision evidence metadata, in send order (no pixels/text). */
   aiVisionEvidence: VisionImageMeta[];
+  // ----- Section-coverage diagnostics (safe tokens/counts/numbers only) -----
+  /** Transaction sections the AI reported reconstructing (fixed safe vocabulary). */
+  aiDetectedTransactionSections: string[];
+  /** Count of non-transaction sections the AI reported ignoring. */
+  aiIgnoredNonTransactionSectionsCount: number | null;
+  /** Model-reported cross-check of reconstructed section totals vs anchors. */
+  aiSectionTotalsMatched: boolean | null;
+  /** Safe token for a section the AI flagged as possibly missing (else null). */
+  aiMissingSectionLikely: string | null;
+  /** Safe amount the AI flagged as possibly missing (number only, else null). */
+  aiPossibleMissingAmount: number | null;
+  /** True when per-section summary anchors were supplied to the model. */
+  aiSummaryAnchorsUsed: boolean;
+  /** Whether the AI reported a fees / interest / payments / charges section. */
+  aiFeesSectionDetected: boolean;
+  aiInterestSectionDetected: boolean;
+  aiPaymentsSectionDetected: boolean;
+  aiChargesSectionDetected: boolean;
+  /** Count of money-bearing NON-transaction sections the AI reported ignoring. */
+  aiNonTransactionMoneySectionsDetected: number | null;
 };
 
 export type VisionSelectionDiag = {
@@ -353,6 +373,18 @@ export type AiEvidence = {
   /** Opening/closing balance values DETECTED deterministically (the only ones AI may use). */
   detectedBalances: number[];
   detectedSummaryTotals: { credits: number | null; debits: number | null } | null;
+  /**
+   * Deterministic per-section anchor totals (credit-card), derived from already-
+   * detected summary totals + current-period interest/fees. The model cross-checks
+   * its reconstructed section totals against these (and must still itemize the rows;
+   * an anchor is never a row). Null for non-credit-card statements. Numbers only.
+   */
+  expectedSectionTotals: {
+    payments: number | null;
+    charges: number | null;
+    fees: number | null;
+    interest: number | null;
+  } | null;
   /** Account-section candidates (multi-account statements). */
   accountSections: { index: number; label: string; opening: number | null; closing: number | null; txCount: number }[];
   /** Per-candidate parser summaries (from scoring). */
@@ -562,9 +594,24 @@ export function buildAiEvidence(
   const parserLikelyMissedTransactions =
     summaryMeaningful && (parserActivityNearZero || statement.transactions.length <= 1);
 
+  // Per-section anchors (credit-card only): payments/charges from the summary totals,
+  // fees/interest from detected current-period interest/fees. Derived from values
+  // already detected deterministically — no new parsing, numbers only.
+  const ccFees = supplement.creditCardInterestFees ?? null;
+  const expectedSectionTotals =
+    statement.statementKind === "credit-card"
+      ? {
+          payments: statement.summaryTotals?.totalCredits ?? supplement.detectedSummaryTotals?.credits ?? null,
+          charges: statement.summaryTotals?.totalDebits ?? supplement.detectedSummaryTotals?.debits ?? null,
+          fees: ccFees?.feesCharged ?? null,
+          interest: ccFees?.interestCharged ?? null,
+        }
+      : null;
+
   return {
     parserLikelyMissedTransactions,
     creditCardInterestFees: supplement.creditCardInterestFees ?? null,
+    expectedSectionTotals,
     blinders: supplement.blinders ?? null,
     parserSummary: {
       statementKind: statement.statementKind,
@@ -651,11 +698,74 @@ export function parseAiTransactions(jsonText: string): Transaction[] | null {
   return sanitizeTransactions(data.transactions);
 }
 
+/**
+ * Map a model-reported section label to a FIXED safe vocabulary token, or null
+ * when it matches nothing known. This guarantees no arbitrary model free-text
+ * (which could echo a merchant/section name) ever reaches diagnostics or logs.
+ */
+export function classifyTransactionSection(s: string): string | null {
+  const l = s.toLowerCase();
+  if (/payment/.test(l) && !/due|minimum|coupon|option|enclosed|slip/.test(l)) return "payments";
+  if (/refund|reversal|return/.test(l)) return "refunds";
+  if (/interest/.test(l)) return "interest";
+  if (/\bfee|service charge/.test(l)) return "fees";
+  if (/cash advance/.test(l)) return "cash-advances";
+  if (/balance transfer/.test(l)) return "balance-transfers";
+  if (/purchase|new charge|\bcharge/.test(l)) return "purchases";
+  if (/credit/.test(l)) return "credits";
+  return null;
+}
+
+export function classifyNonTransactionSection(s: string): string | null {
+  const l = s.toLowerCase();
+  if (/minimum payment/.test(l)) return "minimum-payment";
+  if (/amount due|amount past due|new balance/.test(l)) return "amount-due";
+  if (/payment due|due date/.test(l)) return "payment-due";
+  if (/remittance|payment slip|tear[\s-]?off/.test(l)) return "remittance";
+  if (/coupon/.test(l)) return "payment-coupon";
+  if (/payment option/.test(l)) return "payment-options";
+  if (/account summary|statement summary/.test(l)) return "account-summary";
+  if (/reward|points/.test(l)) return "rewards";
+  if (/spend report|spend categor/.test(l)) return "spend-report";
+  if (/cash ?back|gift certificate|certificate/.test(l)) return "cashback";
+  if (/legal|disclosure|terms/.test(l)) return "legal";
+  if (/message|notice/.test(l)) return "message";
+  if (/marketing|promo|offer/.test(l)) return "marketing";
+  if (/summary|total/.test(l)) return "summary";
+  return null;
+}
+
+const SAFE_SECTION_TOKENS = new Set([
+  "payments", "credits", "refunds", "interest", "fees", "purchases",
+  "charges", "cash-advances", "balance-transfers", "other",
+]);
+function safeSectionTokenList(v: unknown, classify: (s: string) => string | null): string[] {
+  if (!Array.isArray(v)) return [];
+  const out = new Set<string>();
+  for (const item of v.slice(0, 30)) {
+    if (typeof item !== "string") continue;
+    const tok = classify(item);
+    if (tok) out.add(tok);
+  }
+  return [...out];
+}
+
+/** Section-coverage metadata reported by the model (safe tokens/numbers only). */
+export type AiSectionCoverage = {
+  detectedTransactionSections: string[];
+  ignoredNonTransactionSections: string[];
+  sectionTotalsMatch: boolean | null;
+  possibleMissingSection: string | null;
+  possibleMissingAmount: number | null;
+};
+
 export type AiResponse = {
   candidate?: Record<string, unknown>;
   repairPlan?: Record<string, unknown>;
   /** Safe reason string when AI declares it cannot safely reconstruct the table. */
   noSafeReconstruction?: string;
+  /** Safe, normalized section-coverage metadata (advisory diagnostics only). */
+  sectionCoverage?: AiSectionCoverage;
 };
 
 /**
@@ -686,15 +796,37 @@ export function parseAiResponse(jsonText: string): AiResponse | null {
     };
   }
   const repairPlan = isObj(data.repairPlan) ? data.repairPlan : undefined;
-  const nsr = (data as Record<string, unknown>).noSafeReconstruction;
+  const d = data as Record<string, unknown>;
+  const nsr = d.noSafeReconstruction;
+  const nsrReason = d.noSafeReconstructionReason;
   const noSafeReconstruction =
     typeof nsr === "string"
       ? nsr
       : isObj(nsr) && typeof nsr.reason === "string"
         ? nsr.reason
-        : undefined;
+        : typeof nsrReason === "string"
+          ? nsrReason
+          : undefined;
   if (!candidate && !repairPlan && !noSafeReconstruction) return null;
-  return { candidate, repairPlan, noSafeReconstruction };
+
+  // Section-coverage metadata: normalize to a FIXED safe vocabulary (no free text).
+  const possibleMissingRaw =
+    typeof d.possibleMissingSection === "string" ? d.possibleMissingSection : "";
+  const sectionCoverage: AiSectionCoverage = {
+    detectedTransactionSections: safeSectionTokenList(
+      d.detectedTransactionSections,
+      classifyTransactionSection,
+    ),
+    ignoredNonTransactionSections: safeSectionTokenList(
+      d.ignoredNonTransactionSections,
+      classifyNonTransactionSection,
+    ),
+    sectionTotalsMatch: typeof d.sectionTotalsMatch === "boolean" ? d.sectionTotalsMatch : null,
+    possibleMissingSection: classifyTransactionSection(possibleMissingRaw),
+    possibleMissingAmount: finiteNum(d.possibleMissingAmount) ?? null,
+  };
+
+  return { candidate, repairPlan, noSafeReconstruction, sectionCoverage };
 }
 
 const KINDS: StatementKind[] = ["bank-account", "credit-card", "unknown"];
@@ -1306,7 +1438,36 @@ export const SYSTEM_PROMPT =
   "explains the residual; never tunnel-vision on one missing amount. You may return " +
   'the array as "candidate.transactions" or equivalently "reconstructedTransactions"; ' +
   'if you genuinely cannot safely reconstruct the table, return "noSafeReconstruction" ' +
-  "with a short reason instead of a partial or fabricated candidate.";
+  "with a short reason instead of a partial or fabricated candidate. " +
+  "SECTION-AWARE RECONSTRUCTION (general, any issuer — never bank-specific): a " +
+  "credit-card statement groups money into several sections. FIRST identify the posted " +
+  "itemized TRANSACTION sections — payments, credits/refunds, interest, fees, purchases/" +
+  "new charges, cash advances, balance transfers, and any other posted itemized activity " +
+  "— and reconstruct rows ONLY from them. EXPLICITLY IGNORE non-transaction sections and " +
+  "never output them as rows: minimum payment due, amount due, payment due date, " +
+  "remittance/payment slip, payment coupon, total payment enclosed, payment options, " +
+  "account summary, rewards summary, spend report, cashback/gift certificate, and legal/" +
+  "message/marketing pages. " +
+  "SECTION-TOTAL CROSS-CHECK: when summary anchors are provided (evidence." +
+  "expectedSectionTotals, evidence.detectedSummaryTotals, evidence.creditCardInterestFees, " +
+  "and the blinders credit/debit targets), cross-check your reconstructed section totals " +
+  "against them — posted payment/credit rows should total the summary payments/credits, and " +
+  "itemized purchases + fees + interest should total the summary total charges/debits. " +
+  "Include an itemized FEE row even when a fees total also appears in the summary; include " +
+  "itemized INTEREST rows even when an interest total also appears in the summary — a summary " +
+  "total is NOT a substitute for the itemized line, and dropping it leaves Total Debits short. " +
+  "Do NOT include the minimum payment due as a payment/credit; do NOT include amount due or " +
+  "new balance as a transaction; do NOT include rewards, spend reports, cashback/gift " +
+  "certificates, or payment coupons as transactions. If the residual equals a known itemized " +
+  "section amount (a fee, an interest charge, or a payment), RE-CHECK that section in the " +
+  "images before returning. A PARTIAL improvement is a FAILURE unless the reconstructed " +
+  "statement fully reconciles. " +
+  "Optionally include these SAFE structural fields (category labels and numbers only — never " +
+  "row text, merchants, or account data) so coverage can be checked: " +
+  '"detectedTransactionSections" (e.g. ["payments","interest","fees","purchases"]), ' +
+  '"ignoredNonTransactionSections", "reconstructedSectionTotals", "expectedSectionTotals", ' +
+  '"sectionTotalsMatch" (boolean), "possibleMissingSection", "possibleMissingAmount", and ' +
+  '"noSafeReconstructionReason".';
 
 export async function callOpenAiChat(
   messages: ChatMessage[],
@@ -1521,6 +1682,17 @@ function baseOutcome(statement: ParsedStatement, config: AiAssistConfig): AiAssi
     parserRowsByPage: {},
     aiRowsByPage: {},
     aiVisionEvidence: [],
+    aiDetectedTransactionSections: [],
+    aiIgnoredNonTransactionSectionsCount: null,
+    aiSectionTotalsMatched: null,
+    aiMissingSectionLikely: null,
+    aiPossibleMissingAmount: null,
+    aiSummaryAnchorsUsed: false,
+    aiFeesSectionDetected: false,
+    aiInterestSectionDetected: false,
+    aiPaymentsSectionDetected: false,
+    aiChargesSectionDetected: false,
+    aiNonTransactionMoneySectionsDetected: null,
   };
 }
 
@@ -1634,6 +1806,32 @@ export async function runAiAssist(
   if (!parsed) {
     out.status = "invalid-response";
     return { outcome: out };
+  }
+
+  // Section-coverage diagnostics (advisory only — they NEVER affect adoption, which
+  // stays driven by deterministic reconciliation + quality). Safe tokens/counts/
+  // numbers only; section labels are normalized to a fixed vocabulary upstream.
+  out.aiSummaryAnchorsUsed = Boolean(
+    evidence.expectedSectionTotals &&
+      (evidence.expectedSectionTotals.payments !== null ||
+        evidence.expectedSectionTotals.charges !== null ||
+        evidence.expectedSectionTotals.fees !== null ||
+        evidence.expectedSectionTotals.interest !== null),
+  ) || Boolean(evidence.detectedSummaryTotals);
+  const sc = parsed.sectionCoverage;
+  if (sc) {
+    out.aiDetectedTransactionSections = sc.detectedTransactionSections;
+    out.aiIgnoredNonTransactionSectionsCount = sc.ignoredNonTransactionSections.length;
+    out.aiNonTransactionMoneySectionsDetected = sc.ignoredNonTransactionSections.length;
+    out.aiSectionTotalsMatched = sc.sectionTotalsMatch;
+    out.aiMissingSectionLikely = sc.possibleMissingSection;
+    out.aiPossibleMissingAmount = sc.possibleMissingAmount;
+    out.aiFeesSectionDetected = sc.detectedTransactionSections.includes("fees");
+    out.aiInterestSectionDetected = sc.detectedTransactionSections.includes("interest");
+    out.aiPaymentsSectionDetected = sc.detectedTransactionSections.includes("payments");
+    out.aiChargesSectionDetected =
+      sc.detectedTransactionSections.includes("purchases") ||
+      sc.detectedTransactionSections.includes("charges");
   }
 
   // Apply the deterministic interest/fee repair to a built candidate (closes a
@@ -1955,6 +2153,17 @@ export function notAttemptedOutcome(
     parserRowsByPage: {},
     aiRowsByPage: {},
     aiVisionEvidence: [],
+    aiDetectedTransactionSections: [],
+    aiIgnoredNonTransactionSectionsCount: null,
+    aiSectionTotalsMatched: null,
+    aiMissingSectionLikely: null,
+    aiPossibleMissingAmount: null,
+    aiSummaryAnchorsUsed: false,
+    aiFeesSectionDetected: false,
+    aiInterestSectionDetected: false,
+    aiPaymentsSectionDetected: false,
+    aiChargesSectionDetected: false,
+    aiNonTransactionMoneySectionsDetected: null,
   };
 }
 

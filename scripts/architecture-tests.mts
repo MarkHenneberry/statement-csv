@@ -6,7 +6,11 @@
 // export model — rather than specific bank statements. They use synthetic, FAKE
 // text/items only and store nothing.
 
-import { parseStatementText } from "../src/lib/parser.ts";
+import {
+  parseStatementText,
+  detectStatementPeriod,
+  inferRowYear,
+} from "../src/lib/parser.ts";
 import { parseStatement, PARSER_PIPELINE_STAGES } from "../src/lib/statement-pipeline.ts";
 import {
   buildParsedStatement,
@@ -219,6 +223,115 @@ const SUMMARY_HEAVY_CC = [
     PARSER_PIPELINE_STAGES.length === 10 &&
       PARSER_PIPELINE_STAGES[0].startsWith("A.") &&
       PARSER_PIPELINE_STAGES[PARSER_PIPELINE_STAGES.length - 1].startsWith("J."),
+  );
+}
+
+// ----- Generalized credit-card structure tests (synthetic, FAKE data) -----
+// These cover the class of bug a real CIBC statement exposed: payment-due /
+// remittance figures, spend-report/reward/certificate values, and cross-year
+// statement periods. They are issuer-agnostic and store nothing.
+
+// A synthetic credit-card statement whose payment slip prints the minimum-payment
+// amount on its OWN line, with the "Minimum Payment" / "Please pay this amount by"
+// labels on neighboring lines — the exact structure a single-line check misses.
+// The period crosses a year boundary (Dec 2025 → Jan 2026).
+const CARD_WITH_REMITTANCE = [
+  "SYNTHETIC CARD STATEMENT",
+  "Statement period December 10, 2025 to January 9, 2026",
+  "Previous Account Balance $1,000.00",
+  "New Balance $850.00",
+  "Your payments",
+  "Dec 20 ONLINE PAYMENT - THANK YOU $300.00",
+  "Your new charges and credits",
+  "Dec 22 BOOK STORE TORONTO ON $120.00",
+  "Jan 03 COFFEE SHOP DOWNTOWN $30.00",
+  "Minimum Payment $25.00",
+  "Please pay this amount by",
+  "Jan 05 $25.00",
+].join("\n");
+
+// 10. Payment-due / remittance amount must NOT become a transaction (general).
+{
+  const { statement } = parseStatement({ text: CARD_WITH_REMITTANCE });
+  const amounts = statement.transactions.map((t) => Math.abs(t.amount));
+  check(
+    "payment-due/remittance amount is not a transaction row",
+    statement.transactions.length === 3 && !amounts.some((a) => Math.abs(a - 25) < 0.001),
+    `rows=${statement.transactions.length} amounts=${amounts.join(",")}`,
+  );
+  check(
+    "no transaction row lacks merchant text (remittance/empty-desc leak)",
+    statement.transactions.every((t) => /[A-Za-z]{3,}/.test(t.description)),
+  );
+  check(
+    "credit-card reconciles to passed once remittance is rejected, AI not needed",
+    statement.validation.status === "passed",
+    `status=${statement.validation.status} diff=${statement.validation.difference}`,
+  );
+}
+
+// 11. Cross-year statement period assigns row years by month (general).
+{
+  const period = detectStatementPeriod("Statement period December 10, 2025 to January 9, 2026");
+  check(
+    "cross-year period detected with both years and crossesYear",
+    period !== null &&
+      period.crossesYear &&
+      period.startMonth === 12 &&
+      period.endMonth === 1 &&
+      period.startYear === 2025 &&
+      period.endYear === 2026,
+    JSON.stringify(period),
+  );
+  check(
+    "inferRowYear: December → earlier year, January → later year",
+    inferRowYear(period, 12, 2026) === 2025 && inferRowYear(period, 1, 2026) === 2026,
+  );
+  // Same-year period keeps the single year; no period falls back.
+  const sameYear = detectStatementPeriod("STATEMENT FROM APR 24 TO MAY 25, 2026");
+  check(
+    "same-year period does not cross and keeps its year",
+    sameYear !== null && !sameYear.crossesYear && inferRowYear(sameYear, 4, 2026) === 2026,
+    JSON.stringify(sameYear),
+  );
+  check("no period falls back to the provided year", inferRowYear(null, 12, 2026) === 2026);
+
+  // End-to-end: December rows render as 2025-xx, January rows as 2026-xx.
+  const result = parseStatementText(CARD_WITH_REMITTANCE);
+  const decRow = result.rows.find((r) => /BOOK STORE/i.test(r.description));
+  const janRow = result.rows.find((r) => /COFFEE SHOP/i.test(r.description));
+  check(
+    "December transaction renders with the earlier year (2025-12)",
+    Boolean(decRow) && decRow!.date.startsWith("2025-12"),
+    decRow?.date,
+  );
+  check(
+    "January transaction renders with the later year (2026-01)",
+    Boolean(janRow) && janRow!.date.startsWith("2026-01"),
+    janRow?.date,
+  );
+}
+
+// 12. Spend reports / rewards / cashback or gift certificates are not rows.
+{
+  const CARD_WITH_REWARDS = [
+    "SYNTHETIC CARD STATEMENT",
+    "Statement period January 1 to January 31, 2026",
+    "Previous Account Balance $500.00",
+    "New Balance $560.00",
+    "Your new charges and credits",
+    "Jan 05 BOOK STORE TORONTO ON $60.00",
+    "Spend Report Groceries $200.00",
+    "Cashback Certificate $50.00",
+    "Gift Certificate $25.00",
+  ].join("\n");
+  const { statement } = parseStatement({ text: CARD_WITH_REWARDS });
+  const amounts = statement.transactions.map((t) => Math.abs(t.amount));
+  check(
+    "spend-report / rewards / certificate values do not become transactions",
+    statement.transactions.length === 1 &&
+      !amounts.some((a) => [200, 50, 25].some((x) => Math.abs(a - x) < 0.001)),
+    `rows=${statement.transactions.length} amounts=${amounts.join(",")}`,
   );
 }
 

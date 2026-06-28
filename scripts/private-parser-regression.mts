@@ -116,6 +116,17 @@ for (const entry of manifest.statements ?? []) {
           ).length
         : 0;
 
+    // Content-safe remittance/payment-due leak check: a credit-card row that carries
+    // an amount but NO merchant text (no 3+ letter word) is the signature of a
+    // payment-due / minimum-payment / remittance figure leaking in as a transaction
+    // (e.g. a bare "Feb 05, 2026  $134.05" minimum-payment line). Counts only.
+    const emptyDescriptionRows =
+      parsed.statementKind === "credit-card"
+        ? parsed.rows.filter(
+            (r) => (r.debit !== null || r.credit !== null) && !/[A-Za-z]{3,}/.test(r.description),
+          ).length
+        : 0;
+
     const actual = {
       statementKind: parsed.statementKind,
       layoutFamily: parsed.layoutFamily,
@@ -154,6 +165,7 @@ for (const entry of manifest.statements ?? []) {
     if (entry.expectedBalanceStatus === "passed" && !aiSkipped)
       mismatches.push("ai-not-skipped-on-verified");
     if (categoryLeaks > 0) mismatches.push(`category-leaks ${categoryLeaks}`);
+    if (emptyDescriptionRows > 0) mismatches.push(`empty-desc-rows ${emptyDescriptionRows}`);
 
     if (mismatches.length === 0) {
       const ps = result.parseStats;

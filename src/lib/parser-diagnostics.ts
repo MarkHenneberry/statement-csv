@@ -80,6 +80,17 @@ export function buildSafeParseSummary(input: {
     renderDurationMs: o.renderDurationMs,
     aiCallDurationMs: o.aiCallDurationMs,
     routeDurationMs: o.routeDurationMs,
+    // Section-coverage diagnostics (safe tokens/counts only; no row text).
+    aiDetectedTransactionSections: o.aiDetectedTransactionSections.join("|") || null,
+    aiIgnoredNonTransactionSectionsCount: o.aiIgnoredNonTransactionSectionsCount,
+    aiSectionTotalsMatched: o.aiSectionTotalsMatched,
+    aiMissingSectionLikely: o.aiMissingSectionLikely,
+    aiPossibleMissingAmount: o.aiPossibleMissingAmount,
+    aiSummaryAnchorsUsed: o.aiSummaryAnchorsUsed,
+    aiFeesSectionDetected: o.aiFeesSectionDetected,
+    aiInterestSectionDetected: o.aiInterestSectionDetected,
+    aiPaymentsSectionDetected: o.aiPaymentsSectionDetected,
+    aiChargesSectionDetected: o.aiChargesSectionDetected,
   };
 }
 export type DiagnosticsBalanceStatus = "passed" | "needs-review" | "limited";

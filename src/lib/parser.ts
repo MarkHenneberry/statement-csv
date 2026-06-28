@@ -194,6 +194,14 @@ export type CreditCardParseStats = {
   fxRowsAttached: number;
   /** Payment-slip / remittance label rows suppressed (never transactions). */
   paymentRemittanceRejected: number;
+  /**
+   * Bare date+amount (or amount-only) rows rejected because they sat next to a
+   * payment-due / remittance / amount-due label on a NEIGHBORING line and carried
+   * no merchant description — i.e. a payment obligation, not a posted transaction.
+   */
+  paymentDueContextRejected: number;
+  /** Rows whose year was inferred from a cross-year statement period. */
+  crossYearRowsInferred: number;
 };
 
 export type ParseStatementResponse = {
@@ -959,7 +967,16 @@ export function detectStatementPeriodYear(text: string): number | undefined {
   return detectFallbackYear(text);
 }
 
-export type StatementPeriod = { startOrd: number; endOrd: number; crossesYear: boolean };
+export type StatementPeriod = {
+  startOrd: number;
+  endOrd: number;
+  crossesYear: boolean;
+  startMonth: number;
+  endMonth: number;
+  /** Year printed beside the start/end of the period, when present (else null). */
+  startYear: number | null;
+  endYear: number | null;
+};
 
 /** A coarse, year-agnostic day ordinal so dates can be range-compared cheaply. */
 function dateOrdinal(month: number, day: number): number {
@@ -967,23 +984,68 @@ function dateOrdinal(month: number, day: number): number {
 }
 
 /**
- * Detect a statement period like "January 10 to February 9, 2026" or
- * "FROM APR 24 TO MAY 25". Used to reject dates that fall well outside the
- * period (e.g. a payment-due date on a remittance slip).
+ * Detect a statement period like "January 10 to February 9, 2026",
+ * "FROM APR 24 TO MAY 25", or a cross-year period that prints a year beside each
+ * endpoint: "December 10, 2025 to January 9, 2026". The optional ", YYYY" after
+ * each day is captured so cross-year row years can be inferred per month. Used to
+ * reject dates well outside the period (e.g. a payment-due date on a remittance
+ * slip) and to assign the correct year to each transaction.
  */
 export function detectStatementPeriod(text: string): StatementPeriod | null {
   const m = text.match(
-    /([A-Za-z]{3,9})\.?\s+(\d{1,2})\s*(?:to|through|-|–|—)\s*([A-Za-z]{3,9})\.?\s+(\d{1,2})/i,
+    /([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:,?\s*(\d{4}))?\s*(?:to|through|-|–|—)\s*([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:,?\s*(\d{4}))?/i,
   );
   if (!m) return null;
   const m1 = MONTHS[m[1].slice(0, 3).toLowerCase()];
-  const m2 = MONTHS[m[3].slice(0, 3).toLowerCase()];
+  const m2 = MONTHS[m[4].slice(0, 3).toLowerCase()];
   const d1 = Number(m[2]);
-  const d2 = Number(m[4]);
+  const d2 = Number(m[5]);
   if (!m1 || !m2 || d1 < 1 || d1 > 31 || d2 < 1 || d2 > 31) return null;
   const startOrd = dateOrdinal(m1, d1);
   const endOrd = dateOrdinal(m2, d2);
-  return { startOrd, endOrd, crossesYear: startOrd > endOrd };
+  const startYear = m[3] ? Number(m[3]) : null;
+  const endYear = m[6] ? Number(m[6]) : null;
+  return {
+    startOrd,
+    endOrd,
+    crossesYear: startOrd > endOrd,
+    startMonth: m1,
+    endMonth: m2,
+    startYear,
+    endYear,
+  };
+}
+
+/**
+ * Infer the correct calendar year for a transaction month, honoring a statement
+ * period that crosses a year boundary. For "December 10, 2025 to January 9, 2026"
+ * a December row resolves to 2025 and a January row to 2026 — never the single
+ * statement year for every row. Falls back to `fallback` when the period carries
+ * no year context. General across issuers; not statement-specific.
+ */
+export function inferRowYear(
+  period: StatementPeriod | null,
+  month: number,
+  fallback: number | undefined,
+): number | undefined {
+  if (!period) return fallback;
+  if (!period.crossesYear) {
+    return period.startYear ?? period.endYear ?? fallback;
+  }
+  // Crossing a year boundary: the start side (e.g. Dec) belongs to the earlier
+  // year, the end side (e.g. Jan) to the later year. Use whichever year is known
+  // and derive the other when only one is printed.
+  const onStartSide = month >= period.startMonth;
+  const onEndSide = month <= period.endMonth;
+  if (onStartSide) {
+    if (period.startYear !== null) return period.startYear;
+    if (period.endYear !== null) return period.endYear - 1;
+  }
+  if (onEndSide) {
+    if (period.endYear !== null) return period.endYear;
+    if (period.startYear !== null) return period.startYear + 1;
+  }
+  return period.endYear ?? period.startYear ?? fallback;
 }
 
 /** Is a month/day within the statement period (with a posting-lag buffer)? */
@@ -1182,9 +1244,22 @@ function isTransactionHeader(line: string): boolean {
   );
 }
 
-// Spend report / rewards / budget / message centre lines are never transactions.
+// Spend report / rewards / certificate / budget / message centre lines are never
+// transactions. Generalized across issuers to also cover spend-category summaries,
+// rewards/cashback certificates, and gift certificates (e.g. a CreditSmart spend
+// report or a Costco cashback gift-certificate page) — money values on these pages
+// are summaries/awards, not posted itemized transactions.
 const CC_SPEND_REPORT_RE =
-  /spend(?:ing)? report|rewards? (?:summary|earned)|budget|message cent(?:re|er)|points? (?:summary|balance)/i;
+  /spend(?:ing)? report|spend categor(?:y|ies)|rewards? (?:summary|earned|certificate|program)|gift certificate|cash[\s-]?back (?:certificate|reward|summary)|reward certificate|creditsmart|budget|message cent(?:re|er)|points? (?:summary|balance|earned)/i;
+
+// Remittance / payment-due CONTEXT labels. These mark the payment slip / amount-due
+// box area. A bare "date + amount" or "amount only" line near one of these is a
+// payment obligation (minimum payment, amount due, total payment enclosed), NOT a
+// posted transaction — even though the label sits on a NEIGHBORING line, so a
+// single-line check cannot catch it. Used as a windowed context guard. General
+// across issuers; not statement-specific.
+const CC_REMITTANCE_CONTEXT_RE =
+  /minimum payment|amount due|amount past due|payment due|payment due date|please pay (?:this amount )?by|please pay by|total payment enclosed|payment (?:slip|coupon|options)|remittance|tear[\s-]?off|mail (?:your )?payment|amount enclosed/i;
 
 // Summary/label lines (skipped, not transactions). Used only for diagnostics.
 const CC_SUMMARY_LABEL_RE =
@@ -1355,6 +1430,22 @@ export function parseCreditCardTransactions(
     periodRejected: 0,
     fxRowsAttached: 0,
     paymentRemittanceRejected: 0,
+    paymentDueContextRejected: 0,
+    crossYearRowsInferred: 0,
+  };
+
+  // Precompute which line indexes carry remittance / payment-due CONTEXT so a bare
+  // date+amount line whose label sits a line or two away can be rejected. Reading
+  // the surrounding structure (not the single line) is what makes this general.
+  const remittanceContextIdx = lines.map((l) => CC_REMITTANCE_CONTEXT_RE.test(l));
+  const REMITTANCE_WINDOW = 3;
+  const nearRemittanceContext = (idx: number): boolean => {
+    const lo = Math.max(0, idx - REMITTANCE_WINDOW);
+    const hi = Math.min(lines.length - 1, idx + REMITTANCE_WINDOW);
+    for (let k = lo; k <= hi; k += 1) {
+      if (remittanceContextIdx[k]) return true;
+    }
+    return false;
   };
 
   let inSection = false;
@@ -1427,6 +1518,13 @@ export function parseCreditCardTransactions(
       stats.ignoredSummaryRows += 1;
       i += 1;
       continue;
+    } else if (!isDateLine && CC_SPEND_REPORT_RE.test(line)) {
+      // A spend-report / rewards / cashback-or-gift-certificate line that carries a
+      // money value but no transaction date (e.g. a spend-category total or a
+      // certificate award). It is a summary/award, never a posted transaction.
+      stats.ignoredSpendReportRows += 1;
+      i += 1;
+      continue;
     }
 
     // Payment slip / remittance / period-total lines are never transactions,
@@ -1461,7 +1559,9 @@ export function parseCreditCardTransactions(
         continue;
       }
 
-      // Transaction start.
+      // Transaction start. Remember the start line so a remittance/payment-due
+      // context check can look at the neighboring lines around this row.
+      const blockStartIdx = i;
       inSection = true;
       stats.transactionSectionDetected = true;
 
@@ -1561,7 +1661,26 @@ export function parseCreditCardTransactions(
       }
 
       if (amount !== null) {
-        const row = buildCreditCardRow(transDate, descParts.join(" "), amount, year, fxNote, {
+        const description = descParts.join(" ");
+        // GENERAL remittance/payment-due rejection: a "date + amount" (or
+        // amount-only) row with NO merchant description that sits next to a
+        // payment-due / amount-due / minimum-payment / remittance label is a
+        // payment obligation, not a posted transaction. Real transactions carry
+        // merchant text, so requiring an empty description keeps this safe. The
+        // label commonly sits on a neighboring line (own-line amount on a slip),
+        // which a single-line check cannot catch — hence the windowed context.
+        const hasMerchantText = /[A-Za-z]{3,}/.test(cleanDescription(description));
+        if (!hasMerchantText && nearRemittanceContext(blockStartIdx)) {
+          stats.paymentDueContextRejected += 1;
+          stats.paymentRemittanceRejected += 1;
+          i = j;
+          continue;
+        }
+        // Cross-year aware year: a December row inside a Dec→Jan period is the
+        // earlier year; a January row the later year. Falls back to `year`.
+        const rowYear = inferRowYear(period, transDate.month, year);
+        if (rowYear !== year) stats.crossYearRowsInferred += 1;
+        const row = buildCreditCardRow(transDate, description, amount, rowYear, fxNote, {
           // Section direction only applies in the sectioned strategy.
           sectionCredit: useSections && currentSectionCredit,
           explicitCredit,
