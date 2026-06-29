@@ -59,17 +59,34 @@ export default function PrivacyPage() {
 
             <div>
               <h2 className="text-xl font-semibold text-slate-900">
-                Designed so files are not kept after conversion
+                What we store, and what we do not
               </h2>
               <p className="mt-3">
-                StatementCSV is designed so your statement is used only to create your
-                spreadsheet file and is not kept afterward. This deletion behavior, and a
-                production logging policy that excludes statement contents, must be verified
-                in the production parser pipeline before launch. See the{" "}
+                Your uploaded PDF and its extracted text are held only in memory while your
+                request is being processed; they are not written to a database or file
+                storage. What we keep is account, billing, and quota metadata — for example
+                the page count, conversion status, balance-check result, credits used, and
+                timestamps. We do not store the contents of your transaction rows, merchant
+                or description text, balances, or your original PDF. Free-preview tracking
+                stores only quota metadata and a hashed, anonymous preview identifier — not
+                your statement. A production logging policy that excludes statement contents
+                is still being verified before launch. See the{" "}
                 <Link href="/security" className="font-medium text-brand-700 hover:underline">
                   security page
                 </Link>{" "}
                 for the full checklist.
+              </p>
+            </div>
+
+            <div>
+              <h2 className="text-xl font-semibold text-slate-900">
+                Payments are handled by Stripe
+              </h2>
+              <p className="mt-3">
+                Subscriptions and payments are processed by Stripe. Card numbers and payment
+                details are entered on Stripe and are never stored by StatementCSV — we keep
+                only the plan and billing status needed to apply your page credits. Failed
+                conversions do not use paid page credits.
               </p>
             </div>
 

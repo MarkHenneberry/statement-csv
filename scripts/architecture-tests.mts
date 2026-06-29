@@ -20,6 +20,7 @@ import { detectStatementProfile, STATEMENT_PROFILES } from "../src/lib/statement
 import { rowsToCsv } from "../src/lib/upload.ts";
 import { groupVisualLines, probeCoordinateHeaders } from "../src/lib/coordinate-table.ts";
 import { buildItems, coordinateSamples } from "../src/lib/coordinate-table-samples.ts";
+import { shouldShowDiagnostics } from "../src/lib/parser-diagnostics.ts";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = "") {
@@ -361,6 +362,82 @@ const CARD_WITH_REMITTANCE = [
     "parse route reads auth server-side via getAuthenticatedUser (not a client id)",
     /getAuthenticatedUser\(\)/.test(src),
   );
+}
+
+// 14. Production debug output is disabled/gated.
+{
+  // The diagnostics panel is hidden in production unless the explicit opt-in flag is set.
+  check(
+    "diagnostics panel hidden in production by default",
+    shouldShowDiagnostics({ nodeEnv: "production" }) === false &&
+      shouldShowDiagnostics({ nodeEnv: "production", showFlag: "false" }) === false,
+  );
+  check(
+    "diagnostics panel shows in dev and behind explicit prod opt-in",
+    shouldShowDiagnostics({ nodeEnv: "development" }) === true &&
+      shouldShowDiagnostics({ nodeEnv: "production", showFlag: "true" }) === true,
+  );
+
+  const fs = await import("node:fs");
+  const read = (rel: string) => fs.readFileSync(new URL(rel, import.meta.url), "utf8");
+
+  // Disk write of rendered statement crops is hard-gated to development.
+  const routeSrc = read("../src/app/api/parse-statement/route.ts");
+  check(
+    "debug vision-crop disk write is gated to development (no prod disk writes)",
+    /if\s*\(\s*!IS_DEV\s*\|\|\s*images\.length === 0\s*\)\s*return;/.test(routeSrc),
+  );
+  // A page-count ceiling is enforced before the parser/AI run.
+  check(
+    "parse route enforces MAX_PDF_PAGES before parser/AI",
+    /pdfPageCount\s*>\s*MAX_PDF_PAGES/.test(routeSrc),
+  );
+
+  // AI provider/token metadata is only populated behind the debug flag.
+  const aiSrc = read("../src/lib/ai-assist.ts");
+  check(
+    "AI provider metadata is gated by AI_ASSIST_DEBUG_PROVIDER_META",
+    /AI_ASSIST_DEBUG_PROVIDER_META === "true"/.test(aiSrc) &&
+      /if\s*\(\s*config\.debugProviderMeta/.test(aiSrc),
+  );
+}
+
+// 15. Public copy contains no unsupported/inaccurate claims.
+{
+  const fs = await import("node:fs");
+  const copyFiles = [
+    "../src/app/page.tsx",
+    "../src/app/privacy/page.tsx",
+    "../src/app/security/page.tsx",
+    "../src/app/pricing/page.tsx",
+    "../src/lib/pricing.ts",
+    "../src/lib/faq.ts",
+    "../src/components/upload/UploadFlow.tsx",
+    "../src/components/content/DataRetentionTrustBlock.tsx",
+    "../src/components/content/PrivacyMiniBlock.tsx",
+  ];
+  // Affirmative overclaims that must never appear (chosen so honest disclaimers,
+  // e.g. "not a guarantee of perfect accuracy", do not false-positive).
+  const banned = [
+    "guaranteed accuracy",
+    "99.9",
+    "bank-approved",
+    "pipeda",
+    "data residency",
+    "local-only processing",
+    "nothing is uploaded or stored",
+    "everything happens in your browser",
+    "works with every bank",
+    "ai never sees your document",
+  ];
+  let copyOffenders = "";
+  for (const rel of copyFiles) {
+    const text = fs.readFileSync(new URL(rel, import.meta.url), "utf8").toLowerCase();
+    for (const phrase of banned) {
+      if (text.includes(phrase)) copyOffenders += `${rel}:"${phrase}" `;
+    }
+  }
+  check("public copy has no unsupported claims", copyOffenders === "", copyOffenders);
 }
 
 console.log(

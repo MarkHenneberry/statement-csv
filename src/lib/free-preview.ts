@@ -1,28 +1,22 @@
-// Free-preview limits and copy constants.
+// Free-preview meaningful-page analysis + (deprecated) legacy limit constants.
 //
-// These define the FREE preview tier behavior. The page cap is enforced
-// statelessly per request (see the parse-statement route). The "1 preview every
-// 6 hours" interval and per-account AI quotas CANNOT be enforced without accounts
-// / a datastore, so they are surfaced as messaging only for now.
-//
-// TODO(launch-blocker): enforce real server-side quota — preview interval
-// (1 / 6h) and monthly page limits — once auth + a datastore + rate limiting
-// exist. Until then this is honest free-preview messaging, NOT abuse protection.
+// The REAL free-preview quota (6 pages / 12 hours / 5 attempts by default) is now
+// enforced server-side via src/lib/billing/free-preview-quota.ts +
+// evaluatePreviewAccess/getPreviewLimits in src/lib/billing/credits.ts. The
+// constants below are LEGACY and no longer the source of truth — do not use them
+// for user-facing copy (use getPreviewLimits()). They remain only so older imports
+// don't break; detectMeaningfulPages/analyzePreviewLimit below are still used.
 
-/** Maximum pages processed for a free preview (enforced per request). */
+/** @deprecated Legacy per-request cap. Real limit: getPreviewLimits().pageLimit. */
 export const FREE_PREVIEW_MAX_PAGES = 5;
 
-/** Minimum hours between free previews (messaging only — needs accounts to enforce). */
+/** @deprecated Legacy interval. Real window: getPreviewLimits().windowHours. */
 export const FREE_PREVIEW_INTERVAL_HOURS = 6;
 
-/**
- * Whether AI-assisted repair may run during a free preview. AI is always a
- * fallback (only when the parser result needs help); for free preview it is
- * additionally capped to the previewed pages. Per-account AI quotas are TODO.
- */
+/** @deprecated Legacy flag. AI eligibility is decided in src/lib/ai-assist.ts. */
 export const FREE_PREVIEW_AI_ASSIST_ALLOWED = true;
 
-/** Notice shown when an uploaded statement exceeds the free preview page cap. */
+/** @deprecated Legacy truncation notice (preview is no longer page-truncated). */
 export const FREE_PREVIEW_TRUNCATION_NOTICE = `Free preview covers the first ${FREE_PREVIEW_MAX_PAGES} pages. Only those pages were converted — upgrade to convert the full statement.`;
 
 // A "money amount": $-prefixed or a number with thousands/decimals (1,234.56).

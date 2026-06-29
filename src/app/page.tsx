@@ -108,7 +108,7 @@ export default function HomePage() {
         <SectionHeading
           eyebrow="How it works"
           title="Three steps from PDF to spreadsheet"
-          description="No software to install and no bank connection. Everything happens in your browser flow."
+          description="No software to install and no bank connection. Upload a PDF, review the extracted rows, and export to CSV or Excel."
           centered
         />
         <div className="mt-12">

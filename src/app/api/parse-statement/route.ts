@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { validateFile } from "@/lib/upload";
+import { validateFile, MAX_PDF_PAGES } from "@/lib/upload";
 import { extractPdfText } from "@/lib/pdf-extract";
 import {
   SCANNED_PDF_WARNING,
@@ -52,6 +52,9 @@ import type { BalanceStatus, ConversionStatus } from "@/lib/billing/types";
 // PDF parsing needs the Node runtime (unpdf / pdf.js is not Edge-compatible).
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// Upper bound on a single conversion (parser + optional vision/AI fallback). Caps
+// runaway work and matches the platform function limit; tune per hosting plan.
+export const maxDuration = 60;
 
 const IS_DEV = process.env.NODE_ENV === "development";
 
@@ -62,12 +65,15 @@ function moneyString(value: number | null): string | null {
   return value === null ? null : value.toFixed(2);
 }
 
-// Optional local-only debug aid (AI_VISION_DEBUG_SAVE_CROPS=true): persist the
-// rendered vision crops so a developer can confirm the RIGHT regions were sent.
-// PRIVACY: filenames carry only region kind/page/band + pixel dimensions — never
+// Optional local-DEV-only debug aid (AI_VISION_DEBUG_SAVE_CROPS=true AND
+// NODE_ENV=development): persist the rendered vision crops so a developer can
+// confirm the RIGHT regions were sent. This is the ONLY path in the app that writes
+// statement-derived bytes to disk; it is hard-gated to development so rendered
+// statement images can never be written on the production server even if the flag
+// is set. Filenames carry only region kind/page/band + pixel dimensions — never
 // statement text, balances, names, or account data. Folder is gitignored.
 async function saveVisionCropsForDebug(images: VisionImage[], regions: VisionRegion[]): Promise<void> {
-  if (images.length === 0) return;
+  if (!IS_DEV || images.length === 0) return;
   try {
     const { mkdir, writeFile } = await import("node:fs/promises");
     const dir = "private-debug/vision-crops";
@@ -220,12 +226,24 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   if (IS_DEV) console.log("[parse-statement] route reached", { pages: extracted.pageCount });
 
-  // ----- Quota gate: block BEFORE the parser/AI run -----
   // The page count is derived server-side from the extracted PDF; the client cannot
-  // supply or influence it. Paid accounts (allowance > 0) use BillingAccount
-  // credits; everyone else (signed-out OR signed-in free) uses the free-preview
-  // quota. Neither path runs the parser/AI until the gate passes.
+  // supply or influence it.
   const pdfPageCount = extracted.pageCount ?? extracted.pages.length;
+
+  // ----- Safety cap: reject pathologically large PDFs BEFORE parser/AI -----
+  // Bounds per-request work regardless of plan. Clean message; no parser/AI runs.
+  if (pdfPageCount > MAX_PDF_PAGES) {
+    return errorResponse(
+      fileName,
+      `This PDF has ${pdfPageCount} pages, which is over the ${MAX_PDF_PAGES}-page limit. Please split it (for example, one statement or account at a time) and try again.`,
+      413,
+    );
+  }
+
+  // ----- Quota gate: block BEFORE the parser/AI run -----
+  // Paid accounts (allowance > 0) use BillingAccount credits; everyone else
+  // (signed-out OR signed-in free) uses the free-preview quota. Neither path runs
+  // the parser/AI until the gate passes.
   const isPaid = account != null && account.monthlyPageAllowance > 0;
   const billingMode: "paid" | "preview" = isPaid ? "paid" : "preview";
 

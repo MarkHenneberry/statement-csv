@@ -56,6 +56,12 @@ export const LOW_CONFIDENCE_THRESHOLD = 0.7;
 export const MAX_FILE_SIZE_MB = 10;
 export const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
+// Conservative MVP ceiling on pages per uploaded PDF. Typical bank/credit-card
+// statements are well under this; the cap is a safety bound so a pathologically
+// large PDF can't drive long parser/AI work. Checked AFTER page count is known but
+// BEFORE the parser/AI run. Adjustable; documented in docs/production-checklist.md.
+export const MAX_PDF_PAGES = 100;
+
 export const PROCESSING_STEPS = [
   "Reading statement",
   "Finding transaction rows",

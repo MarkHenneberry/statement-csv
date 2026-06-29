@@ -41,6 +41,10 @@ function DoNotStore() {
     "We do not sell or share your transaction data.",
     "We do not use your statement data for ads or marketing.",
     "We avoid using your original PDF as the AI input — guided AI verification works from rendered statement images.",
+    "We store account, billing, and quota metadata — not your transaction rows, descriptions, balances, or original PDF.",
+    "Your PDF and extracted text are held in memory only during processing, not written to a database or file storage.",
+    "Free-preview tracking stores only quota metadata and a hashed, anonymous preview identifier.",
+    "Payments are handled by Stripe; we do not store card numbers.",
   ];
   return (
     <ul className="mt-8 space-y-3">

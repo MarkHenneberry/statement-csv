@@ -605,7 +605,7 @@ export function UploadFlow() {
           <div className="max-w-xl">
             <p className="text-xs text-slate-600">
               Export the reviewed rows as a CSV or Excel file for spreadsheets, bookkeeping,
-              or accounting software. Nothing is uploaded or stored.
+              or accounting software. The file is generated in your browser.
             </p>
             {creditNote ? (
               <p className="mt-0.5 text-xs text-slate-500">{creditNote}</p>

@@ -1,4 +1,3 @@
-import { FREE_PREVIEW_MAX_PAGES } from "./free-preview.ts";
 import type { PlanKey } from "./billing/plans.ts";
 
 export type PricingTier = {
@@ -40,7 +39,7 @@ export const pricingSubheadline =
 export const freePreview = {
   name: "Free preview",
   description:
-    `Try before paying. Preview up to ${FREE_PREVIEW_MAX_PAGES} pages to see how your statement ` +
+    "Try before paying. Convert up to 6 pages every 12 hours to see how your statement " +
     "converts, with no account and no bank login required.",
   cta: { label: "Try free preview", href: "/upload" },
 };

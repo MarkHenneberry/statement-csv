@@ -56,10 +56,6 @@ export default function PricingPage() {
         <div className="mt-10">
           <PricingCards />
         </div>
-        {/* TODO(launch-blocker): paid plans require auth + payments + server-side
-            page-credit enforcement (none built yet). Only the free preview is
-            actually available today; the paid cards describe intended plans and
-            their CTAs route to the free converter. */}
         <p className="mx-auto mt-8 max-w-2xl text-center text-sm text-slate-500">
           {pricingFooter}
         </p>
@@ -101,8 +97,8 @@ export default function PricingPage() {
 
       <CTASection
         title="Preview your statement free"
-        description="Preview up to 5 pages to see how your statement converts before choosing a plan."
-        primaryCta={{ label: "Convert a Statement", href: "/upload" }}
+        description="Convert up to 6 pages every 12 hours to see how your statement converts before choosing a plan."
+        primaryCta={{ label: "Convert a statement", href: "/upload" }}
         secondaryCta={{ label: "Read the FAQ", href: "/faq" }}
       />
     </>

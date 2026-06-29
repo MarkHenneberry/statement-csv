@@ -82,7 +82,7 @@ export const generalFaqs: FaqItem[] = [
   {
     question: "Is this free?",
     answer:
-      "You can run a free preview, with no account required, to see how your statement converts. Paid plans use monthly page credits: Minimum is $10/month for 100 pages, Plus is $25/month for 500 pages, Pro is $40/month for 1,000 pages, and Pro+ is $60/month for 2,000 pages or $80/month for 3,000 pages.",
+      "You can run a free preview with no account required: convert up to 6 pages every 12 hours to see how your statement converts. Paid plans use monthly page credits: Minimum is $10/month for 100 pages, Plus is $25/month for 500 pages, Pro is $40/month for 1,000 pages, and Pro+ is $60/month for 2,000 pages or $80/month for 3,000 pages.",
   },
   {
     question: "What counts as a page?",
