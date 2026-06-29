@@ -88,8 +88,10 @@ export default async function AccountPage({
       </div>
 
       <p className="mt-4 rounded-xl border border-slate-200 bg-section px-4 py-3 text-sm leading-relaxed text-slate-600 shadow-card">
-        Page-credit limits are not enforced yet — your conversions are not blocked or charged
-        against this allowance during this phase. Run a free preview from the converter any time.
+        Each page of a converted statement uses one page credit. Verified conversions are charged
+        when they complete; review-highlighted conversions are only charged if you export them, and
+        statements we can&rsquo;t read are never charged. Credits reset at the start of each billing
+        period.
       </p>
     </div>
   );

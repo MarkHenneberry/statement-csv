@@ -34,11 +34,13 @@ import {
   type VisionRegion,
   type EvidencePlanDiag,
 } from "@/lib/pdf-render";
-import {
-  FREE_PREVIEW_MAX_PAGES,
-  FREE_PREVIEW_TRUNCATION_NOTICE,
-  analyzePreviewLimit,
-} from "@/lib/free-preview";
+import { analyzePreviewLimit } from "@/lib/free-preview";
+import { getAuthenticatedUser } from "@/lib/supabase/server";
+import { ensureAppAccount } from "@/lib/billing/account";
+import { evaluateUploadAccess, getRemainingPages } from "@/lib/billing/credits";
+import { createConversionRecord } from "@/lib/billing/repo";
+import { chargeVerifiedConversion } from "@/lib/billing/charge";
+import type { BalanceStatus, ConversionStatus } from "@/lib/billing/types";
 
 // PDF parsing needs the Node runtime (unpdf / pdf.js is not Edge-compatible).
 export const runtime = "nodejs";
@@ -106,6 +108,40 @@ function errorResponse(fileName: string, warning: string, status = 400) {
   return NextResponse.json(body, { status });
 }
 
+// Billing gate response (auth / page-credit blocks). Carries a safe `billingError`
+// code so the client can route the user to sign in or upgrade. No statement content.
+function billingErrorResponse(
+  fileName: string,
+  code: NonNullable<ParseStatementResponse["billingError"]>,
+  message: string,
+  status: number,
+  pageCount: number | null = null,
+) {
+  const body: ParseStatementResponse = {
+    ok: false,
+    source: "real-parser",
+    fileName,
+    pageCount,
+    statementKind: "unknown",
+    layoutFamily: "unknown",
+    rows: [],
+    openingBalance: null,
+    closingBalance: null,
+    warnings: [message],
+    previewLimited: false,
+    pagesProcessed: 0,
+    billingError: code,
+  };
+  return NextResponse.json(body, { status });
+}
+
+// Map the validation status to the safe BalanceStatus enum stored on a Conversion.
+function toBalanceStatus(status: string): BalanceStatus {
+  if (status === "passed") return "passed";
+  if (status === "limited") return "limited";
+  return "review";
+}
+
 // PRIVACY: this handler must never persist the file or extracted text, and must
 // never log statement text, rows, balances, account numbers, or descriptions.
 // Only generic, non-sensitive messages may be logged.
@@ -129,6 +165,30 @@ export async function POST(request: Request): Promise<NextResponse> {
   const validation = validateFile(file);
   if (!validation.ok) {
     return errorResponse(fileName, validation.reason);
+  }
+
+  // ----- Billing gate: authenticate + load the account BEFORE any work -----
+  // Signed-out users cannot process real statements (the sample preview is a
+  // separate, client-side mock and does not hit this route).
+  const authUser = await getAuthenticatedUser();
+  if (!authUser) {
+    return billingErrorResponse(
+      fileName,
+      "AUTH_REQUIRED",
+      "Please sign in or create an account to convert a statement.",
+      401,
+    );
+  }
+  let account;
+  try {
+    account = (await ensureAppAccount(authUser)).account;
+  } catch {
+    return billingErrorResponse(
+      fileName,
+      "BILLING_ACCOUNT_NOT_FOUND",
+      "We couldn't load your account. Please try again.",
+      500,
+    );
   }
 
   let extracted;
@@ -155,9 +215,28 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   if (IS_DEV) console.log("[parse-statement] route reached", { pages: extracted.pageCount });
 
-  // Little or no extractable text => almost certainly scanned/image-only.
+  // ----- Page-credit gate: block BEFORE the parser/AI run -----
+  const pdfPageCount = extracted.pageCount ?? extracted.pages.length;
+  const access = evaluateUploadAccess(account, pdfPageCount);
+  if (!access.allowed) {
+    const message =
+      access.code === "PLAN_REQUIRED"
+        ? "Your account has no monthly page credits. Choose a plan to convert statements."
+        : `Not enough page credits: this statement needs ${access.required} page(s) and you have ${access.remaining} remaining. Upgrade or wait for your next billing period.`;
+    return billingErrorResponse(fileName, access.code, message, 402, pdfPageCount);
+  }
+
+  // Little or no extractable text => almost certainly scanned/image-only. The user
+  // had credits, but extraction failed, so this is a FAILED conversion: charge 0.
   if (extracted.textLength < MIN_TEXT_LENGTH) {
     if (IS_DEV) console.log("[parse-statement] scanned/image-only (no AI)");
+    const conv = await createConversionRecord({
+      userId: authUser.id,
+      pageCount: pdfPageCount,
+      status: "failed",
+      balanceStatus: null,
+      creditsCharged: 0,
+    }).catch(() => null);
     const body: ParseStatementResponse = {
       ok: true,
       source: "real-parser",
@@ -174,24 +253,25 @@ export async function POST(request: Request): Promise<NextResponse> {
       runtimeEnv: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "unknown",
       // Always include aiAssist so the client/diagnostics can rely on it.
       aiAssist: notAttemptedOutcome(aiAssistConfig(), "not-eligible"),
+      billing: conv
+        ? {
+            conversionId: conv.id,
+            status: "failed",
+            charged: false,
+            chargedPages: 0,
+            pagesRemaining: getRemainingPages(account),
+          }
+        : undefined,
     };
     return NextResponse.json(body);
   }
 
-  // Free-preview page cap (stateless, per request). Process only the first N
-  // pages; the 1-preview-per-6h interval and monthly quotas need accounts and are
-  // NOT enforced here (see free-preview.ts TODO). This is honest free-preview
-  // behavior, not abuse protection.
-  const totalPages = extracted.pageCount ?? extracted.pages.length;
-  const capped = totalPages > FREE_PREVIEW_MAX_PAGES;
-  const previewPages = capped ? extracted.pages.slice(0, FREE_PREVIEW_MAX_PAGES) : extracted.pages;
-  const previewItems = capped
-    ? extracted.items.filter((it) => it.page <= FREE_PREVIEW_MAX_PAGES)
-    : extracted.items;
-  // Preview is only "limited" when the SKIPPED pages carry meaningful (transaction)
-  // content. Skipping blank/trailer/contact pages is not a limitation.
+  // Authenticated + credit-checked: process the FULL document. Page credits (not a
+  // preview cap) govern how much a user may convert, so nothing is truncated here.
+  const previewPages = extracted.pages;
+  const previewItems = extracted.items;
   const previewAnalysis = analyzePreviewLimit(extracted.pages, previewPages.length);
-  const truncated = previewAnalysis.previewLimited;
+  const truncated = false;
 
   // Run the explicit pipeline: extracted text + coordinate items → ParsedStatement
   // (model) → validation. Export/preview rows come from the model's transactions,
@@ -469,9 +549,48 @@ export async function POST(request: Request): Promise<NextResponse> {
     });
   }
 
-  const warnings = truncated
-    ? [FREE_PREVIEW_TRUNCATION_NOTICE, ...result.warnings]
-    : result.warnings;
+  const warnings = result.warnings;
+
+  // ----- Billing: record the conversion + charge verified results -----
+  // Verified (balance-checked) results are charged the full PDF page count now.
+  // Review/usable results are recorded but charged only on export (see
+  // /api/conversions/charge-export). Failed/no-table results are charged 0.
+  const verified = finalStatement.validation.status === "passed";
+  const usable = finalRows.length > 0;
+  const convStatus: ConversionStatus = verified ? "verified" : usable ? "review" : "failed";
+  let billing: ParseStatementResponse["billing"] | undefined;
+  try {
+    const conv = await createConversionRecord({
+      userId: authUser.id,
+      pageCount: pdfPageCount,
+      status: convStatus,
+      balanceStatus: toBalanceStatus(finalStatement.validation.status),
+      creditsCharged: 0,
+    });
+    if (convStatus === "verified") {
+      const charge = await chargeVerifiedConversion(conv.id, authUser.id);
+      billing = {
+        conversionId: conv.id,
+        status: "verified",
+        charged: charge.ok,
+        chargedPages: charge.ok ? charge.chargedPages : 0,
+        pagesRemaining: charge.ok ? charge.pagesRemaining : getRemainingPages(account),
+      };
+    } else {
+      billing = {
+        conversionId: conv.id,
+        status: convStatus,
+        charged: false,
+        chargedPages: 0,
+        pagesRemaining: getRemainingPages(account),
+        requiredPages: pdfPageCount,
+      };
+    }
+  } catch {
+    // A billing/DB hiccup must not corrupt the parse result the user sees. Leave
+    // `billing` undefined; export charging still validates server-side.
+    billing = undefined;
+  }
 
   const body: ParseStatementResponse = {
     ok: true,
@@ -494,6 +613,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     parseStats: result.parseStats,
     validation: finalStatement.validation,
     aiAssist: aiOutcome,
+    billing,
   };
 
   return NextResponse.json(body);

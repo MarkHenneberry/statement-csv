@@ -146,6 +146,37 @@ export function periodAdvanced(prevStart: Date, newStart: Date): boolean {
   return newStart.getTime() > prevStart.getTime();
 }
 
+/**
+ * Decide whether an account may process a PDF of `pageCount` pages. Pure (no auth,
+ * no DB) so it is unit-testable and used by the upload route's pre-parser gate.
+ *   - free / 0 allowance        -> PLAN_REQUIRED
+ *   - paid but not enough left  -> INSUFFICIENT_PAGE_CREDITS (with remaining/required)
+ *   - otherwise                 -> allowed
+ */
+export type UploadAccessDecision =
+  | { allowed: true; remaining: number; required: number }
+  | {
+      allowed: false;
+      code: "PLAN_REQUIRED" | "INSUFFICIENT_PAGE_CREDITS";
+      remaining: number;
+      required: number;
+    };
+
+export function evaluateUploadAccess(
+  account: Pick<BillingAccount, "monthlyPageAllowance" | "pagesUsedThisPeriod">,
+  pageCount: number,
+): UploadAccessDecision {
+  const remaining = getRemainingPages(account);
+  const required = Math.max(0, Math.floor(pageCount));
+  if (account.monthlyPageAllowance <= 0) {
+    return { allowed: false, code: "PLAN_REQUIRED", remaining, required };
+  }
+  if (required > remaining) {
+    return { allowed: false, code: "INSUFFICIENT_PAGE_CREDITS", remaining, required };
+  }
+  return { allowed: true, remaining, required };
+}
+
 /** Safe usage summary for the account page (allowance / used / remaining). */
 export function summarizeAccountUsage(
   account: Pick<BillingAccount, "monthlyPageAllowance" | "pagesUsedThisPeriod">,

@@ -234,6 +234,25 @@ export type ParseStatementResponse = {
   validation?: StatementValidation;
   /** Explicit AI-assist outcome (status/config/diagnostics). No raw content. */
   aiAssist?: AiAssistOutcome;
+  /**
+   * Billing error code when processing was blocked before the parser/AI ran (auth
+   * or page-credit gating). Safe label only.
+   */
+  billingError?: "AUTH_REQUIRED" | "PLAN_REQUIRED" | "INSUFFICIENT_PAGE_CREDITS" | "BILLING_ACCOUNT_NOT_FOUND";
+  /**
+   * Page-credit billing summary for a processed conversion (safe metadata only).
+   * `status` mirrors the chargeable outcome; `chargedPages`/`pagesRemaining` reflect
+   * the account after any verified charge. For review results, `charged` is false
+   * until the user exports.
+   */
+  billing?: {
+    conversionId: string;
+    status: "verified" | "review" | "failed";
+    charged: boolean;
+    chargedPages: number;
+    pagesRemaining: number | null;
+    requiredPages?: number;
+  };
   // NOTE: a raw text preview is intentionally NOT part of the response. Raw
   // statement text is too easy to leak via screenshots, so it is never returned
   // or shown, even in development.

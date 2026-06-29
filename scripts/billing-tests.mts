@@ -22,6 +22,7 @@ import {
   resetForNewPeriod,
   defaultFreeAccountFields,
   summarizeAccountUsage,
+  evaluateUploadAccess,
 } from "../src/lib/billing/credits.ts";
 import { pricingPlans } from "../src/lib/pricing.ts";
 
@@ -140,6 +141,37 @@ check("nextPeriodEnd clamps month rollover (Jan 31 -> Feb)", nextPeriodEnd(new D
     "default account opens a one-month period",
     f.currentPeriodStart.toISOString().startsWith("2026-01-10") &&
       f.currentPeriodEnd.toISOString().startsWith("2026-02-10"),
+  );
+}
+
+// ----- evaluateUploadAccess (pre-parser gate) -----
+{
+  // Free / 0-allowance accounts can never process a real upload.
+  const free = evaluateUploadAccess({ monthlyPageAllowance: 0, pagesUsedThisPeriod: 0 }, 6);
+  check(
+    "free/0-allowance is blocked with PLAN_REQUIRED",
+    free.allowed === false && free.code === "PLAN_REQUIRED" && free.required === 6,
+    JSON.stringify(free),
+  );
+
+  // Paid with enough remaining is allowed and reports remaining/required.
+  const enough = evaluateUploadAccess({ monthlyPageAllowance: 100, pagesUsedThisPeriod: 0 }, 6);
+  check(
+    "paid with enough credits is allowed (remaining 100, required 6)",
+    enough.allowed === true && enough.remaining === 100 && enough.required === 6,
+    JSON.stringify(enough),
+  );
+
+  // Allowed exactly at the boundary (remaining == required).
+  const exact = evaluateUploadAccess({ monthlyPageAllowance: 100, pagesUsedThisPeriod: 94 }, 6);
+  check("paid allowed when remaining equals required", exact.allowed === true);
+
+  // Paid but not enough remaining is blocked with INSUFFICIENT_PAGE_CREDITS.
+  const short = evaluateUploadAccess({ monthlyPageAllowance: 100, pagesUsedThisPeriod: 97 }, 6);
+  check(
+    "paid but short is blocked with INSUFFICIENT_PAGE_CREDITS (remaining 3, required 6)",
+    short.allowed === false && short.code === "INSUFFICIENT_PAGE_CREDITS" && short.remaining === 3 && short.required === 6,
+    JSON.stringify(short),
   );
 }
 

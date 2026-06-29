@@ -61,6 +61,8 @@ type PreviewMeta = {
   parseStats?: LayoutParseStats;
   validation?: StatementValidation;
   aiAssist?: AiAssistOutcome;
+  /** Page-credit billing summary (safe metadata) for this conversion. */
+  billing?: ParseStatementResponse["billing"];
 };
 
 // Safe diagnostics may be shown in production behind an explicit opt-in flag so we
@@ -83,6 +85,8 @@ export function UploadFlow() {
   const [activeStep, setActiveStep] = useState(0);
   const [meta, setMeta] = useState<PreviewMeta | null>(null);
   const [rows, setRows] = useState<TransactionRow[]>([]);
+  const [billingError, setBillingError] =
+    useState<ParseStatementResponse["billingError"] | null>(null);
 
   // Advance the processing animation but never auto-jump to the preview — the
   // fetch result is what moves us forward (it sits on the last step until done).
@@ -137,6 +141,7 @@ export function UploadFlow() {
       parseStats: data.parseStats,
       validation: data.validation,
       aiAssist: data.aiAssist,
+      billing: data.billing,
     });
     setStatus("preview");
   }
@@ -146,12 +151,15 @@ export function UploadFlow() {
     setStatus("processing");
     setActiveStep(0);
     setErrorMessage(null);
+    setBillingError(null);
     try {
       const form = new FormData();
       form.append("file", file);
       const res = await fetch("/api/parse-statement", { method: "POST", body: form });
       const data = (await res.json()) as ParseStatementResponse;
       if (!data.ok) {
+        // Billing gate (sign in / upgrade) — route the user, don't dead-end.
+        if (data.billingError) setBillingError(data.billingError);
         setErrorMessage(
           data.warnings[0] ??
             "We couldn't convert this statement. You can load the sample preview instead.",
@@ -211,24 +219,74 @@ export function UploadFlow() {
     setRows((rs) => [...rs, blankRow()]);
   }
 
+  // After a successful review-export charge, fold the fresh totals back into the
+  // billing summary so the credit note updates and a second export won't re-charge.
+  function markCharged(result: { chargedPages: number; pagesRemaining: number | null }) {
+    setMeta((m) =>
+      m && m.billing
+        ? {
+            ...m,
+            billing: {
+              ...m.billing,
+              charged: true,
+              chargedPages: result.chargedPages,
+              pagesRemaining: result.pagesRemaining,
+            },
+          }
+        : m,
+    );
+  }
+
   if (status === "processing") {
     return <ProcessingSteps activeStep={activeStep} fileName={file?.name} />;
   }
 
   if (status === "error") {
+    // Billing gates get their own routing (sign in / upgrade) instead of "try again".
+    const needsAuth = billingError === "AUTH_REQUIRED";
+    const needsPlan = billingError === "PLAN_REQUIRED" || billingError === "INSUFFICIENT_PAGE_CREDITS";
+    const title = needsAuth
+      ? "Sign in to convert a statement"
+      : needsPlan
+        ? "A plan is needed to convert"
+        : "We couldn't convert this statement";
     return (
       <div className="mx-auto max-w-xl">
-        <UploadWarning variant="error" title="We couldn't convert this statement">
+        <UploadWarning variant={billingError ? "info" : "error"} title={title}>
           {errorMessage}
         </UploadWarning>
         <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-          <button
-            type="button"
-            onClick={runParse}
-            className="inline-flex items-center justify-center rounded-lg bg-brand-600 px-5 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-brand-700"
-          >
-            Try again
-          </button>
+          {needsAuth ? (
+            <>
+              <Link
+                href="/login"
+                className="inline-flex items-center justify-center rounded-lg bg-brand-600 px-5 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-brand-700"
+              >
+                Sign in
+              </Link>
+              <Link
+                href="/signup"
+                className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-5 py-3 text-base font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Create account
+              </Link>
+            </>
+          ) : needsPlan ? (
+            <Link
+              href="/pricing"
+              className="inline-flex items-center justify-center rounded-lg bg-brand-600 px-5 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-brand-700"
+            >
+              View plans
+            </Link>
+          ) : (
+            <button
+              type="button"
+              onClick={runParse}
+              className="inline-flex items-center justify-center rounded-lg bg-brand-600 px-5 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-brand-700"
+            >
+              Try again
+            </button>
+          )}
           <button
             type="button"
             onClick={loadSample}
@@ -279,6 +337,33 @@ export function UploadFlow() {
       unsupported,
       noUsableTransactionTable,
     });
+
+    // Page-credit export gating. Verified conversions are already charged on the
+    // server and export freely; review-highlighted conversions must be charged
+    // (server-side, idempotent) before a file is produced. Mock/sample data and
+    // failed conversions have no billing record and are never charged here.
+    const billing = meta.source === "real-parser" ? meta.billing : undefined;
+    const exportNeedsCharge = billing?.status === "review" && !billing.charged;
+    const exportConversionId = billing?.conversionId ?? null;
+    const remainingLabel = (n: number | null) =>
+      n === null ? "" : ` You have ${n} page ${n === 1 ? "credit" : "credits"} remaining.`;
+    let creditNote: string | null = null;
+    if (billing) {
+      if (billing.status === "verified" && billing.charged) {
+        creditNote = `This conversion used ${billing.chargedPages} page ${
+          billing.chargedPages === 1 ? "credit" : "credits"
+        }.${remainingLabel(billing.pagesRemaining)}`;
+      } else if (billing.status === "review" && billing.charged) {
+        creditNote = `Export used ${billing.chargedPages} page ${
+          billing.chargedPages === 1 ? "credit" : "credits"
+        }.${remainingLabel(billing.pagesRemaining)}`;
+      } else if (exportNeedsCharge) {
+        const req = billing.requiredPages ?? meta.pageCount ?? 0;
+        creditNote = `Exporting will use ${req} page ${
+          req === 1 ? "credit" : "credits"
+        } when you download.${remainingLabel(billing.pagesRemaining)}`;
+      }
+    }
 
     // Specific issues to list under the banner (preview truncation is NOT a parse
     // problem and is communicated by the preview-limited state, so exclude it).
@@ -406,11 +491,17 @@ export function UploadFlow() {
               <div className="max-w-xl">
                 <p className={`text-sm font-semibold ${titleColor}`}>{heading}</p>
                 <p className={`mt-0.5 text-xs ${noteColor}`}>{presentation.exportNote}</p>
+                {creditNote ? (
+                  <p className={`mt-0.5 text-xs ${noteColor}`}>{creditNote}</p>
+                ) : null}
               </div>
               <TransactionExportButtons
                 rows={rows}
                 sourceFileName={meta.fileName}
                 labelPrefix={presentation.exportLabelPrefix ?? undefined}
+                conversionId={exportConversionId}
+                requiresExportCharge={exportNeedsCharge}
+                onCharged={markCharged}
               />
             </div>
           );
@@ -446,11 +537,22 @@ export function UploadFlow() {
         </p>
 
         <div className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-section p-2.5 shadow-card sm:flex-row sm:items-center sm:justify-between">
-          <p className="max-w-xl text-xs text-slate-600">
-            Export the reviewed rows as a CSV or Excel file for spreadsheets, bookkeeping,
-            or accounting software. Nothing is uploaded or stored.
-          </p>
-          <TransactionExportButtons rows={rows} sourceFileName={meta.fileName} />
+          <div className="max-w-xl">
+            <p className="text-xs text-slate-600">
+              Export the reviewed rows as a CSV or Excel file for spreadsheets, bookkeeping,
+              or accounting software. Nothing is uploaded or stored.
+            </p>
+            {creditNote ? (
+              <p className="mt-0.5 text-xs text-slate-500">{creditNote}</p>
+            ) : null}
+          </div>
+          <TransactionExportButtons
+            rows={rows}
+            sourceFileName={meta.fileName}
+            conversionId={exportConversionId}
+            requiresExportCharge={exportNeedsCharge}
+            onCharged={markCharged}
+          />
         </div>
 
         {showDiagnostics ? (
