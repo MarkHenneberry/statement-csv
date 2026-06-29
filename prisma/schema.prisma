@@ -1,0 +1,127 @@
+// StatementCSV billing/account schema — BLUEPRINT ONLY.
+//
+// This file documents the target database models for the account / page-credit
+// foundation. It is intentionally NOT wired yet:
+//   - Prisma is not installed as a dependency in this pass.
+//   - No DATABASE_URL is required to build the app (no Prisma client is imported).
+//   - The working, tested logic lives in src/lib/billing/* (types + helpers).
+//
+// NEXT PASS (Stripe + persistence) will:
+//   1. `npm i -D prisma` and `npm i @prisma/client`
+//   2. set DATABASE_URL (Postgres recommended for MVP)
+//   3. `npx prisma migrate dev` + `npx prisma generate`
+//   4. swap src/lib/billing/types.ts consumers to the generated client types.
+//
+// PRIVACY: these tables store ONLY safe operational metadata. We never store
+// transaction rows, raw PDF text, PDF files, rendered images, or AI prompts/
+// responses. See src/lib/billing/README.md.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PlanKey {
+  free
+  minimum
+  plus
+  pro
+  pro_plus_2000
+  pro_plus_3000
+}
+
+enum SubscriptionStatus {
+  free
+  active
+  past_due
+  canceled
+  incomplete
+}
+
+enum ConversionStatus {
+  verified
+  review
+  failed
+}
+
+enum BalanceStatus {
+  passed
+  review
+  limited
+}
+
+enum LedgerReason {
+  verified_conversion
+  review_export
+  refund
+  monthly_reset
+  manual_adjustment
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  account     BillingAccount?
+  conversions Conversion[]
+  ledger      PageCreditLedger[]
+}
+
+model BillingAccount {
+  userId               String             @id
+  user                 User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planKey              PlanKey            @default(free)
+  status               SubscriptionStatus @default(free)
+  // Populated by Stripe in a later pass; nullable until then.
+  stripeCustomerId     String?            @unique
+  stripeSubscriptionId String?            @unique
+  currentPeriodStart   DateTime           @default(now())
+  currentPeriodEnd     DateTime
+  // Snapshot of the plan allowance for the active period.
+  monthlyPageAllowance Int                @default(0)
+  pagesUsedThisPeriod  Int                @default(0)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+}
+
+model Conversion {
+  id        String           @id @default(cuid())
+  // Nullable so an anonymous free preview can still be recorded.
+  userId    String?
+  user      User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  // Optional, treat as sensitive — never required by billing. No statement content.
+  originalFilename String?
+  pageCount        Int
+  status           ConversionStatus
+  balanceStatus    BalanceStatus?
+  creditsCharged   Int             @default(0)
+  chargedAt        DateTime?
+  exportedAt       DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  ledger PageCreditLedger[]
+
+  @@index([userId])
+}
+
+model PageCreditLedger {
+  id           String       @id @default(cuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversionId String?
+  conversion   Conversion?  @relation(fields: [conversionId], references: [id], onDelete: SetNull)
+  // + adds credits (monthly_reset / refund), - consumes them (a conversion).
+  deltaPages   Int
+  reason       LedgerReason
+  createdAt    DateTime     @default(now())
+
+  @@index([userId])
+}
