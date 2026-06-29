@@ -82,7 +82,22 @@ export const generalFaqs: FaqItem[] = [
   {
     question: "Is this free?",
     answer:
-      "You can run a free preview of up to 3 pages, with no account required, to see how your statement converts. Full conversions use a monthly plan: Starter is $5/month for 50 pages, Plus is $10/month for 150 pages, and Pro is $20/month for 500 pages.",
+      "You can run a free preview, with no account required, to see how your statement converts. Paid plans use monthly page credits: Minimum is $10/month for 100 pages, Plus is $25/month for 500 pages, Pro is $40/month for 1,000 pages, and Pro+ is $60/month for 2,000 pages or $80/month for 3,000 pages.",
+  },
+  {
+    question: "What counts as a page?",
+    answer:
+      "Each page in an uploaded statement PDF counts as one page credit. For example, a 4-page statement uses 4 page credits when the conversion is charged.",
+  },
+  {
+    question: "Do failed conversions use credits?",
+    answer:
+      "Could-not-extract results do not use page credits. Review-highlighted conversions only use credits if you choose to export the rows.",
+  },
+  {
+    question: "Can I process more than 3,000 pages?",
+    answer:
+      "Yes. Contact us for higher-volume needs.",
   },
   {
     question: "How does StatementCSV make money?",

@@ -1,102 +1,111 @@
-import { FREE_PREVIEW_MAX_PAGES, FREE_PREVIEW_INTERVAL_HOURS } from "./free-preview.ts";
+import { FREE_PREVIEW_MAX_PAGES } from "./free-preview.ts";
+
+export type PricingTier = { pages: string; price: string; priceSuffix?: string };
 
 export type PricingPlan = {
   name: string;
   price: string;
   priceSuffix?: string;
+  /** Monthly page-credit allowance, shown prominently on the card. */
+  pages: string;
   description: string;
   features: string[];
   cta: { label: string; href: string };
   highlighted?: boolean;
+  /** Optional badge text (e.g. "Best value"). */
+  badge?: string;
+  /** Volume tiers shown inside the card (Pro+). */
+  tiers?: PricingTier[];
+  /** Small note under the features (e.g. higher-volume contact line). */
+  note?: string;
 };
 
-export const pricingHeadline = "Canadian statement conversion with balance checks";
+export const pricingHeadline = "Simple monthly page credits for statement PDFs";
 
 export const pricingSubheadline =
-  "Run a free preview first, then choose a monthly plan based on how many pages you convert. " +
-  "Every plan includes CSV and Excel exports, parser-first extraction, guided AI verification " +
-  "when needed, and balance checks before export.";
+  "Monthly page credits for bank and credit-card statement PDFs. Run a free preview first, then " +
+  "choose a plan based on how many pages you convert each month. Every plan includes clean CSV and " +
+  "Excel exports, parser-first extraction with guided AI verification, and balance-checked exports.";
 
-// Page-based pricing. Pages are counted after upload (see pricingFooter). Every
-// tier includes CSV + Excel export, parser-first extraction, guided AI verification
-// when the parser needs help, and balance checks. AI is available on every tier;
-// it is not a paid-only feature. Optional AI category suggestions are a Plus/Pro
-// extra. Digital PDF statements only; no bank login.
+// Free preview: try before paying. Rendered as a callout above the paid plans.
+export const freePreview = {
+  name: "Free preview",
+  description:
+    `Try before paying. Preview up to ${FREE_PREVIEW_MAX_PAGES} pages to see how your statement ` +
+    "converts, with no account and no bank login required.",
+  cta: { label: "Try free preview", href: "/upload" },
+};
+
+// Shared, honest feature set for every paid plan (page-credit positioning).
+const PLAN_FEATURES = [
+  "Monthly page credits for statement PDFs",
+  "Clean CSV and Excel exports",
+  "Parser-first extraction with guided AI verification",
+  "Balance-checked exports",
+  "Review highlighted rows before export",
+  "No bank login required",
+];
+
+// TODO(launch-blocker): paid plans require accounts + payments + server-side page-
+// credit enforcement, none of which exist yet. Until then only the free preview is
+// actually available; the paid cards describe intended plans and their CTAs route to
+// the free converter (no checkout is implied).
 export const pricingPlans: PricingPlan[] = [
   {
-    name: "Free Preview",
-    price: "$0",
-    description: "See how your statement converts before you pay.",
-    features: [
-      `Preview up to ${FREE_PREVIEW_MAX_PAGES} pages`,
-      `1 preview every ${FREE_PREVIEW_INTERVAL_HOURS} hours`,
-      "CSV + Excel export for previewed rows",
-      "Parser-first extraction",
-      "Guided AI verification when needed",
-      "Balance check included",
-      "Good for testing whether a statement can be converted",
-    ],
-    cta: { label: "Try the free preview", href: "/upload" },
-  },
-  {
-    name: "Starter",
-    price: "$5",
+    name: "Minimum",
+    price: "$10",
     priceSuffix: "/month",
-    description: "For occasional full conversions.",
-    features: [
-      "50 pages/month",
-      "Full statement conversions",
-      "CSV + Excel export",
-      "Parser-first extraction",
-      "Guided AI verification when needed",
-      "Balance checks before export",
-    ],
-    cta: { label: "Get Starter", href: "/upload" },
+    pages: "100 pages/month",
+    description: "For occasional statement conversion.",
+    features: PLAN_FEATURES,
+    cta: { label: "Start converting", href: "/upload" },
   },
   {
     name: "Plus",
-    price: "$10",
+    price: "$25",
     priceSuffix: "/month",
-    description: "Good for regular bookkeeping cleanup.",
-    features: [
-      "150 pages/month",
-      "CSV + Excel export",
-      "Parser-first extraction",
-      "Guided AI verification when needed",
-      "Balance checks before export",
-      "Optional AI category suggestions",
-      "Editable categories before export",
-    ],
-    cta: { label: "Get Plus", href: "/upload" },
+    pages: "500 pages/month",
+    description: "For small businesses, freelancers, landlords, and regular bookkeeping.",
+    features: PLAN_FEATURES,
+    cta: { label: "Start converting", href: "/upload" },
     highlighted: true,
+    badge: "Best value",
   },
   {
     name: "Pro",
-    price: "$20",
+    price: "$40",
     priceSuffix: "/month",
-    description: "Best for bookkeepers and regular use.",
-    features: [
-      "300 pages/month",
-      "CSV + Excel export",
-      "Parser-first extraction",
-      "Guided AI verification when needed",
-      "Balance checks before export",
-      "Optional AI category suggestions",
-      "Batch-friendly workflow (planned)",
+    pages: "1,000 pages/month",
+    description: "For bookkeepers, admin staff, and higher-volume users.",
+    features: PLAN_FEATURES,
+    cta: { label: "Start converting", href: "/upload" },
+  },
+  {
+    name: "Pro+",
+    price: "from $60",
+    priceSuffix: "/month",
+    pages: "2,000 or 3,000 pages/month",
+    description: "For larger monthly workloads.",
+    features: PLAN_FEATURES,
+    cta: { label: "Start converting", href: "/upload" },
+    tiers: [
+      { pages: "2,000 pages/month", price: "$60", priceSuffix: "/month" },
+      { pages: "3,000 pages/month", price: "$80", priceSuffix: "/month" },
     ],
-    cta: { label: "Get Pro", href: "/upload" },
+    note: "Need more than 3,000 pages/month? Contact us.",
   },
 ];
 
-// TODO(launch-blocker): paid tiers require auth + payments + server-side page
-// quota enforcement, none of which exist yet. Until then only the free preview
-// is actually available; the paid cards describe intended plans. Optional AI
-// category suggestions and batch workflow are planned, not yet live.
 export const pricingFooter =
-  "Prices are in USD. Page limits apply to digital PDF statements. Scanned or image-based statements are not currently supported. Optional AI category suggestions and batch tools are planned features.";
+  "Prices are in USD and based on the number of PDF pages processed. Page credits apply to digital " +
+  "PDF statements. Scanned or image-based statements are not currently supported.";
 
-// Optional categories copy (categories are a Plus/Pro extra, separate from
-// balance verification, AI-suggested, and easy to edit).
-export const categoryFeatureHeadline = "Optional AI category suggestions";
-export const categoryFeatureSubtext =
-  "Get suggested categories for bookkeeping. Categories are AI-assisted, easy to edit, and separate from balance verification. Review and edit them before export.";
+// Plain-language page-credit rules, shown on the pricing page.
+export const creditRules = [
+  "Page credits are based on the number of PDF pages processed.",
+  "Verified conversions use page credits.",
+  "Review highlighted rows use page credits only if you export them.",
+  "Could not extract statement does not use page credits.",
+  "Page credits reset monthly.",
+  "Extremely large or unusual files may be limited.",
+];

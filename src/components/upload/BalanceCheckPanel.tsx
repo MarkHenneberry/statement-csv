@@ -46,7 +46,7 @@ export function BalanceCheckPanel({
   }[status];
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+    <div className="rounded-xl border border-slate-200 bg-surface p-2.5 shadow-card">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-xs font-semibold text-slate-900">Balance checks</h3>
         <span

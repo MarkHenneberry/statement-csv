@@ -4,7 +4,7 @@ export type BalanceStatus = "passed" | "review" | "limited";
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
+    <div className="rounded-lg border border-slate-200 bg-surface px-2.5 py-1.5">
       <dt className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
         {label}
       </dt>
@@ -58,7 +58,7 @@ export function StatementSummary({
     : null;
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+    <div className="rounded-xl border border-slate-200 bg-section p-2.5 shadow-card">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="text-[11px] font-medium uppercase tracking-wide text-brand-600">

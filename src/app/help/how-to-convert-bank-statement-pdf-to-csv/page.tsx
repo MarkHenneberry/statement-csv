@@ -57,16 +57,16 @@ export default function HowToConvertPdfToCsvPage() {
 
       <Section>
         <Breadcrumbs crumbs={crumbs} />
-        <div className="max-w-3xl">
-          <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
+        <div className="mx-auto max-w-2xl text-center">
+          <h1 className="text-balance text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
             How to Convert a Bank Statement PDF to CSV
           </h1>
-          <p className="mt-6 text-lg leading-relaxed text-slate-600">
+          <p className="mt-5 text-base leading-relaxed text-slate-600 sm:text-lg">
             Bank statement PDFs are built for reading, not for spreadsheets. This guide explains why
             they are hard to work with, how to convert one to CSV, what balance checks mean, and what
             to do when rows are highlighted for review.
           </p>
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+          <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
             <ButtonLink href="/upload">Convert a statement</ButtonLink>
             <ButtonLink href="/sample" variant="secondary">
               See sample export

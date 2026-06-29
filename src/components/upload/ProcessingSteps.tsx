@@ -30,7 +30,7 @@ export function ProcessingSteps({
   fileName?: string;
 }) {
   return (
-    <div className="mx-auto max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+    <div className="mx-auto max-w-md rounded-xl border border-slate-200 bg-surface p-8 shadow-card">
       <h2 className="text-center text-lg font-semibold text-slate-900">
         Converting your statement
       </h2>

@@ -445,7 +445,7 @@ export function UploadFlow() {
           deposits, payments, or refunds.
         </p>
 
-        <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-section p-2.5 shadow-card sm:flex-row sm:items-center sm:justify-between">
           <p className="max-w-xl text-xs text-slate-600">
             Export the reviewed rows as a CSV or Excel file for spreadsheets, bookkeeping,
             or accounting software. Nothing is uploaded or stored.

@@ -53,8 +53,8 @@ export default function RbcPage() {
 
       <Section>
         <Breadcrumbs crumbs={crumbs} />
-        <div className="max-w-3xl">
-          <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
+        <div className="mx-auto max-w-2xl text-center">
+          <h1 className="text-balance text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
             Convert RBC Bank Statements to CSV
           </h1>
           <p className="mt-6 text-lg leading-relaxed text-slate-600">
@@ -64,7 +64,7 @@ export default function RbcPage() {
             a clean CSV. StatementCSV is an independent tool and is not affiliated with or
             endorsed by RBC.
           </p>
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+          <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
             <ButtonLink href="/upload">Convert a Statement</ButtonLink>
             <ButtonLink href="/pricing" variant="secondary">
               See Pricing
@@ -126,9 +126,9 @@ export default function RbcPage() {
       </Section>
 
       <Section muted>
-        <div className="grid items-start gap-12 lg:grid-cols-2">
+        <div className="grid items-start gap-8 lg:grid-cols-2">
           <div>
-            <SectionHeading title="Why convert an RBC PDF to CSV?" />
+            <SectionHeading title="Why convert an RBC PDF to CSV?" centered={false} />
             <div className="mt-6 space-y-4 text-base leading-relaxed text-slate-600">
               <p>
                 RBC gives you a clear PDF to read, but it is awkward when you need to do
@@ -152,7 +152,7 @@ export default function RbcPage() {
               </p>
             </div>
           </div>
-          <div className="rounded-2xl border border-slate-200 bg-white p-6">
+          <div className="rounded-xl border border-slate-200 bg-surface p-6 shadow-card">
             <p className="text-sm font-semibold text-slate-900">Example RBC export</p>
             <pre className="mt-3 overflow-x-auto rounded-lg bg-slate-50 p-4 text-xs text-slate-600">
 {`Date,Description,Withdrawals,Deposits,Balance

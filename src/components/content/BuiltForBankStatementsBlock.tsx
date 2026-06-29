@@ -6,19 +6,20 @@ export function BuiltForBankStatementsBlock({
   muted = false,
   heading = "Built for Canadian bank statements, not generic PDFs",
   body = "Generic PDF converters try to pull tables out of any document. StatementCSV is parser-first and designed around Canadian bank statement data: transaction rows, Interac e-Transfers, repeated page headers, debit and credit columns, running balances, multi-page statements, and review warnings. The goal is not just to copy text out of a PDF. It is to create a spreadsheet-ready transaction file you can trust enough to review and export.",
-  centered = false,
+  centered = true,
 }: {
   muted?: boolean;
   heading?: string;
   body?: string;
-  /** Center the heading and intro text (used on the home page). */
+  /** Center the heading and intro text. Centered by default for a consistent
+   *  site-wide section alignment; pass false for a left-aligned variant. */
   centered?: boolean;
 }) {
   return (
     <Section muted={muted}>
-      <div className={`max-w-3xl ${centered ? "mx-auto text-center" : "mx-auto"}`}>
+      <div className={`mx-auto max-w-3xl ${centered ? "text-center" : ""}`}>
         <SectionHeading eyebrow="Bank statements, specifically" title={heading} centered={centered} />
-        <p className="mt-6 text-lg leading-relaxed text-slate-600">{body}</p>
+        <p className="mt-4 text-base leading-relaxed text-slate-600 sm:text-lg">{body}</p>
       </div>
     </Section>
   );

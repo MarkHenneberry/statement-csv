@@ -14,20 +14,20 @@ export function Hero({
   secondaryCta?: { label: string; href: string };
 }) {
   return (
-    <section className="relative overflow-hidden border-b border-slate-200 bg-white">
+    <section className="relative overflow-hidden border-b border-slate-200 bg-transparent">
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-72 bg-gradient-to-b from-brand-50 to-transparent"
       />
-      <Container className="py-20 sm:py-28">
+      <Container className="py-12 sm:py-20">
         <div className="mx-auto max-w-3xl text-center">
-          <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
+          <h1 className="mx-auto max-w-2xl text-balance text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
             {title}
           </h1>
-          <div className="mt-6 space-y-4 text-lg leading-relaxed text-slate-600">
+          <div className="mx-auto mt-5 max-w-2xl space-y-4 text-base leading-relaxed text-slate-600 sm:text-lg">
             {children}
           </div>
-          <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
+          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <ButtonLink href={primaryCta.href}>{primaryCta.label}</ButtonLink>
             {secondaryCta ? (
               <ButtonLink href={secondaryCta.href} variant="secondary">

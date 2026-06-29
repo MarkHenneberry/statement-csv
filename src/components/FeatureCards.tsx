@@ -20,14 +20,14 @@ export function FeatureCards({
   }[columns];
 
   return (
-    <div className={`grid gap-6 ${colClass}`}>
+    <div className={`grid gap-5 ${colClass}`}>
       {items.map((item) => (
         <div
           key={item.title}
-          className="rounded-2xl border border-slate-200 bg-white p-6 transition hover:border-slate-300 hover:shadow-sm"
+          className="rounded-xl border border-slate-200 bg-surface p-5 shadow-card transition hover:border-brand-300 hover:shadow-card-hover"
         >
           {item.icon ? (
-            <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
+            <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
               {item.icon}
             </div>
           ) : null}

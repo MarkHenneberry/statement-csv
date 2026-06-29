@@ -90,11 +90,11 @@ export default function SecurityPage() {
 
       <Section>
         <Breadcrumbs crumbs={crumbs} />
-        <div className="max-w-3xl">
-          <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
+        <div className="mx-auto max-w-2xl text-center">
+          <h1 className="text-balance text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
             Security and Privacy for Bank Statement Conversion
           </h1>
-          <p className="mt-6 text-lg leading-relaxed text-slate-600">
+          <p className="mt-5 text-base leading-relaxed text-slate-600 sm:text-lg">
             Bank statements are sensitive. StatementCSV is designed to handle them with
             care: no bank login, no selling of transaction data, and no use of your
             statement data for marketing. Your statement is processed to create your

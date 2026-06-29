@@ -13,20 +13,20 @@ export function CTASection({
   secondaryCta?: { label: string; href: string };
 }) {
   return (
-    <section className="bg-brand-700">
-      <Container className="py-16 sm:py-20">
+    <section className="bg-brand-600">
+      <Container className="py-12 sm:py-16">
         <div className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
+          <h2 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">
             {title}
           </h2>
-          <p className="mt-4 text-lg leading-relaxed text-brand-100">{description}</p>
+          <p className="mt-3 text-base leading-relaxed text-brand-50 sm:text-lg">{description}</p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <ButtonLink href={primaryCta.href} variant="secondary">
               {primaryCta.label}
             </ButtonLink>
             <ButtonLink
               href={secondaryCta.href}
-              className="bg-brand-600 text-white ring-1 ring-inset ring-brand-400 hover:bg-brand-500"
+              className="bg-transparent text-white ring-1 ring-inset ring-white/50 hover:bg-white/10"
             >
               {secondaryCta.label}
             </ButtonLink>

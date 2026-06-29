@@ -53,8 +53,6 @@ import {
   pricingSubheadline,
   pricingFooter,
   pricingHeadline,
-  categoryFeatureHeadline,
-  categoryFeatureSubtext,
 } from "../src/lib/pricing.ts";
 import { siteConfig } from "../src/lib/site.ts";
 import { generalFaqs } from "../src/lib/faq.ts";
@@ -275,7 +273,15 @@ check("no message uses 'AI-recovered'", (["reconciled", "improved", "no-improvem
 // ----- scanned + pricing copy -----
 check("scanned message says digital PDFs only", SCANNED_PDF_WARNING.includes("digital PDF statements only"));
 check("scanned message does not claim OCR", !/OCR/i.test(SCANNED_PDF_WARNING));
-check("every tier includes CSV + Excel", pricingPlans.every((p) => p.features.some((f) => /csv \+ excel/i.test(f))));
+check("every tier includes CSV + Excel", pricingPlans.every((p) => p.features.some((f) => /csv (and|\+) excel/i.test(f))));
+check("every plan shows monthly page credits", pricingPlans.every((p) => /pages\/month/i.test(p.pages)));
+check("plans are the new MVP page-credit tiers", pricingPlans.map((p) => p.name).join(",") === "Minimum,Plus,Pro,Pro+");
+check("Plus is the highlighted best-value plan", pricingPlans.some((p) => p.name === "Plus" && p.highlighted && /best value/i.test(p.badge ?? "")));
+check("Pro+ shows 2,000 and 3,000 page volume tiers", (() => {
+  const proPlus = pricingPlans.find((p) => p.name === "Pro+");
+  const tiers = proPlus?.tiers ?? [];
+  return tiers.some((t) => /2,000/.test(t.pages) && /\$60/.test(t.price)) && tiers.some((t) => /3,000/.test(t.pages) && /\$80/.test(t.price));
+})());
 check("no tier mentions 'No ads'", pricingPlans.every((p) => p.features.every((f) => !/no ads/i.test(f))));
 check("subheadline mentions guided AI verification", /guided ai verification/i.test(pricingSubheadline));
 check("footer says scanned/image not supported", /scanned or image-based statements are not currently supported/i.test(pricingFooter));
@@ -936,9 +942,7 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
     pricingHeadline,
     pricingSubheadline,
     pricingFooter,
-    categoryFeatureHeadline,
-    categoryFeatureSubtext,
-    ...pricingPlans.flatMap((p) => [p.name, p.description, ...p.features]),
+    ...pricingPlans.flatMap((p) => [p.name, p.pages, p.description, ...p.features]),
     ...generalFaqs.flatMap((f) => [f.question, f.answer]),
   ];
   check("no em dashes in positioning/pricing/trust copy", copyStrings.every((s) => !s.includes(EM_DASH)));
@@ -955,16 +959,6 @@ const img = (id: string): VisionImage => ({ id, kind: "summary", page: 1, band: 
   check("no '100% accurate' claim", !/100%\s*accurate/i.test(allCopy));
   check("no 'works with every' bank claim", !/works with every/i.test(allCopy));
   check("no 'AI never sees' claim", !/ai never sees|ai never comes in contact/i.test(allCopy));
-
-  // Categories: optional, editable, Plus/Pro, separate from balance verification.
-  check("category copy says optional + AI-assisted", /optional/i.test(categoryFeatureHeadline) && /ai/i.test(categoryFeatureHeadline));
-  check("category copy says editable + separate from balance verification",
-    /edit/i.test(categoryFeatureSubtext) && /separate from balance/i.test(categoryFeatureSubtext));
-  check("only Plus/Pro list AI category suggestions", (() => {
-    const byName = Object.fromEntries(pricingPlans.map((p) => [p.name, p.features.join(" ")]));
-    const hasCat = (n: string) => /category|categories/i.test(byName[n] ?? "");
-    return !hasCat("Free Preview") && !hasCat("Starter") && hasCat("Plus") && hasCat("Pro");
-  })());
 
   // AI is available on every tier (not paid-only).
   check("every tier mentions guided AI verification", pricingPlans.every((p) => p.features.some((f) => /guided ai verification/i.test(f))));

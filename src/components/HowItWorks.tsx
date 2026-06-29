@@ -20,16 +20,16 @@ const defaultSteps: Step[] = [
 
 export function HowItWorks({ steps = defaultSteps }: { steps?: Step[] }) {
   return (
-    <ol className="grid gap-6 md:grid-cols-3">
+    <ol className="grid gap-5 md:grid-cols-3">
       {steps.map((step, index) => (
         <li
           key={step.title}
-          className="relative rounded-2xl border border-slate-200 bg-white p-6"
+          className="relative rounded-xl border border-slate-200 bg-surface p-5 shadow-card"
         >
-          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-50 text-base font-bold text-brand-700">
+          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-50 text-sm font-bold text-brand-700">
             {index + 1}
           </span>
-          <h3 className="mt-4 text-lg font-semibold text-slate-900">{step.title}</h3>
+          <h3 className="mt-3 text-base font-semibold text-slate-900">{step.title}</h3>
           <p className="mt-2 text-sm leading-relaxed text-slate-600">{step.body}</p>
         </li>
       ))}

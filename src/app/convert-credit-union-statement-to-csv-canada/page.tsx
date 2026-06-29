@@ -71,8 +71,8 @@ export default function CreditUnionPage() {
 
       <Section>
         <Breadcrumbs crumbs={crumbs} />
-        <div className="max-w-3xl">
-          <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
+        <div className="mx-auto max-w-2xl text-center">
+          <h1 className="text-balance text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
             Convert Canadian Credit Union Statements to CSV and Excel
           </h1>
           <p className="mt-6 text-lg leading-relaxed text-slate-600">
@@ -83,7 +83,7 @@ export default function CreditUnionPage() {
             institution, so you always review highlighted rows before export. StatementCSV is
             an independent tool and is not affiliated with or endorsed by any credit union.
           </p>
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+          <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
             <ButtonLink href="/upload">Convert a Statement</ButtonLink>
             <ButtonLink href="/pricing" variant="secondary">
               See Pricing

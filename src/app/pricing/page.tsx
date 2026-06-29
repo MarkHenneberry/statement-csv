@@ -10,14 +10,14 @@ import {
   pricingHeadline,
   pricingSubheadline,
   pricingFooter,
-  categoryFeatureHeadline,
-  categoryFeatureSubtext,
+  freePreview,
+  creditRules,
 } from "@/lib/pricing";
 
 export const metadata: Metadata = {
   title: "Pricing",
   description:
-    "Page-based pricing for converting Canadian bank and credit card statements to CSV and Excel, with parser-first extraction, guided AI verification, and balance checks. Free preview, then Starter at $5/month, Plus at $10/month, or Pro at $20/month.",
+    "Monthly page-credit pricing for converting Canadian bank and credit card statements to CSV and Excel, with parser-first extraction, guided AI verification, and balance checks. Free preview, then Minimum at $10/month, Plus at $25/month, Pro at $40/month, or Pro+ from $60/month.",
   alternates: {
     canonical: absoluteUrl("/pricing"),
   },
@@ -26,6 +26,9 @@ export const metadata: Metadata = {
 const pricingFaqs = generalFaqs.filter((faq) =>
   [
     "Is this free?",
+    "What counts as a page?",
+    "Do failed conversions use credits?",
+    "Can I process more than 3,000 pages?",
     "What are balance checks?",
     "Are scanned statements supported?",
   ].includes(faq.question),
@@ -41,23 +44,38 @@ export default function PricingPage() {
           description={pricingSubheadline}
           centered
         />
-        <div className="mt-12">
+        {/* Free preview callout: try before paying, no bank login. */}
+        <div className="mx-auto mt-8 max-w-2xl rounded-xl border border-slate-200 bg-section p-4 text-center text-sm leading-relaxed text-slate-600 shadow-card">
+          <span className="font-semibold text-slate-900">{freePreview.name}:</span>{" "}
+          {freePreview.description}{" "}
+          <Link href={freePreview.cta.href} className="font-medium text-brand-700 hover:underline">
+            {freePreview.cta.label}
+          </Link>
+        </div>
+
+        <div className="mt-10">
           <PricingCards />
         </div>
-        {/* TODO(launch-blocker): paid tiers require auth + payments + server-side
-            page-quota enforcement (none built yet). Only the free preview is
-            actually available today; the paid cards describe intended plans. */}
+        {/* TODO(launch-blocker): paid plans require auth + payments + server-side
+            page-credit enforcement (none built yet). Only the free preview is
+            actually available today; the paid cards describe intended plans and
+            their CTAs route to the free converter. */}
         <p className="mx-auto mt-8 max-w-2xl text-center text-sm text-slate-500">
           {pricingFooter}
         </p>
 
-        <div className="mx-auto mt-10 max-w-2xl rounded-2xl border border-slate-200 bg-slate-50 p-6 text-center">
-          <h3 className="text-base font-semibold text-slate-900">{categoryFeatureHeadline}</h3>
-          <p className="mt-2 text-sm leading-relaxed text-slate-600">{categoryFeatureSubtext}</p>
-          <p className="mt-2 text-xs text-slate-500">
-            Categories are optional, available on Plus and Pro, and never used to decide whether a
-            conversion is verified.
-          </p>
+        <div className="mx-auto mt-10 max-w-2xl rounded-xl border border-slate-200 bg-section p-6 shadow-card">
+          <h3 className="text-center text-base font-semibold text-slate-900">
+            How page credits work
+          </h3>
+          <ul className="mx-auto mt-4 max-w-md space-y-2 text-left text-sm text-slate-600">
+            {creditRules.map((rule) => (
+              <li key={rule} className="flex gap-2">
+                <span aria-hidden="true" className="mt-2 h-1.5 w-1.5 flex-none rounded-full bg-brand-500" />
+                <span>{rule}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       </Section>
 

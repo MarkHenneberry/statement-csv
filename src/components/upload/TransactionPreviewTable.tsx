@@ -16,7 +16,7 @@ function parseNumber(value: string): number | null {
 }
 
 const cellInput =
-  "w-full rounded-md border border-transparent bg-transparent px-1.5 py-0.5 text-xs text-slate-800 focus:border-brand-300 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-200";
+  "w-full rounded-md border border-transparent bg-transparent px-1.5 py-0.5 text-xs text-slate-800 focus:border-brand-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-200";
 
 function TextCell({
   value,
@@ -103,7 +103,7 @@ export function TransactionPreviewTable({
       : "min-w-[540px]";
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white">
+    <div className="rounded-xl border border-slate-200 bg-surface shadow-card">
       <div className="flex items-center justify-between border-b border-slate-200 px-2.5 py-1.5">
         <div>
           <h3 className="text-xs font-semibold text-slate-900">
@@ -150,8 +150,8 @@ export function TransactionPreviewTable({
               {showCategory ? <col className="w-[108px]" /> : null}
               <col className="w-9" />
             </colgroup>
-            <thead>
-              <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
+            <thead className="sticky top-0 z-10">
+              <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
                 <th className="px-1.5 py-1" aria-label="Status" />
                 <th className="px-1.5 py-1 font-medium">Date</th>
                 <th className="px-1.5 py-1 font-medium">Description</th>

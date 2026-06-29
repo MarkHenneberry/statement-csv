@@ -20,19 +20,19 @@ function CheckIcon() {
 
 export function PricingCards() {
   return (
-    <div className="grid gap-6 lg:grid-cols-4">
+    <div className="grid gap-5 lg:grid-cols-4">
       {pricingPlans.map((plan) => (
         <div
           key={plan.name}
-          className={`flex flex-col rounded-2xl border bg-white p-6 shadow-sm ${
+          className={`flex flex-col rounded-xl border bg-surface p-6 shadow-card ${
             plan.highlighted
               ? "border-brand-600 ring-1 ring-brand-600"
               : "border-slate-200"
           }`}
         >
-          {plan.highlighted ? (
+          {plan.badge || plan.highlighted ? (
             <span className="mb-3 inline-flex w-fit rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-700">
-              Most popular
+              {plan.badge ?? "Most popular"}
             </span>
           ) : null}
           <h3 className="text-lg font-semibold text-slate-900">{plan.name}</h3>
@@ -46,9 +46,25 @@ export function PricingCards() {
               </span>
             ) : null}
           </p>
+          <p className="mt-1 text-sm font-semibold text-brand-700">{plan.pages}</p>
           <p className="mt-3 text-sm leading-relaxed text-slate-600">
             {plan.description}
           </p>
+          {plan.tiers ? (
+            <ul className="mt-4 space-y-1.5 rounded-lg bg-section p-3 text-sm text-slate-700">
+              {plan.tiers.map((tier) => (
+                <li key={tier.pages} className="flex items-center justify-between gap-2">
+                  <span>{tier.pages}</span>
+                  <span className="font-semibold tabular-nums text-slate-900">
+                    {tier.price}
+                    {tier.priceSuffix ? (
+                      <span className="font-medium text-slate-500">{tier.priceSuffix}</span>
+                    ) : null}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <ul className="mt-6 flex-1 space-y-3">
             {plan.features.map((feature) => (
               <li key={feature} className="flex gap-2 text-sm text-slate-700">
@@ -57,9 +73,12 @@ export function PricingCards() {
               </li>
             ))}
           </ul>
+          {plan.note ? (
+            <p className="mt-4 text-xs leading-relaxed text-slate-500">{plan.note}</p>
+          ) : null}
           <Link
             href={plan.cta.href}
-            className={`mt-8 inline-flex w-full items-center justify-center rounded-lg px-4 py-2.5 text-sm font-semibold transition ${
+            className={`mt-6 inline-flex w-full items-center justify-center rounded-lg px-4 py-2.5 text-sm font-semibold transition ${
               plan.highlighted
                 ? "bg-brand-600 text-white hover:bg-brand-700"
                 : "bg-slate-900 text-white hover:bg-slate-800"

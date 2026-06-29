@@ -160,11 +160,12 @@ export default function HomePage() {
       </Section>
 
       <Section>
-        <div className="grid items-start gap-12 lg:grid-cols-2">
+        <div className="grid items-start gap-8 lg:grid-cols-2">
           <div>
             <SectionHeading
               eyebrow="Why not just copy and paste?"
               title="PDFs were not built for spreadsheets"
+              centered={false}
             />
             <div className="mt-6 space-y-4 text-base leading-relaxed text-slate-600">
               <p>
@@ -183,16 +184,16 @@ export default function HomePage() {
               </p>
             </div>
           </div>
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6">
+          <div className="rounded-xl border border-slate-200 bg-section p-6 shadow-card">
             <p className="text-sm font-semibold text-slate-900">Before: pasted from PDF</p>
-            <pre className="mt-3 overflow-x-auto rounded-lg bg-white p-4 text-xs text-slate-600">
+            <pre className="mt-3 overflow-x-auto rounded-lg border border-slate-200 bg-surface p-4 text-xs text-slate-600">
 {`03/04 GROCERY
 STORE #221 -84.20 1,240.10
 03/05 PAYROLL
 DEPOSIT 2,000.00 3,240.10`}
             </pre>
             <p className="mt-6 text-sm font-semibold text-slate-900">After: clean CSV</p>
-            <pre className="mt-3 overflow-x-auto rounded-lg bg-white p-4 text-xs text-slate-600">
+            <pre className="mt-3 overflow-x-auto rounded-lg border border-slate-200 bg-surface p-4 text-xs text-slate-600">
 {`Date,Description,Amount,Balance
 2024-03-04,Grocery Store #221,-84.20,1240.10
 2024-03-05,Payroll Deposit,2000.00,3240.10`}

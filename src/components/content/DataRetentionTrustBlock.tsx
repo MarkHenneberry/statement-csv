@@ -25,33 +25,21 @@ export function DataRetentionTrustBlock({
   body?: string;
   dark?: boolean;
 }) {
-  if (dark) {
-    return (
-      <section className="bg-slate-900">
-        <Container className="py-16 sm:py-20">
-          <div className="mx-auto max-w-2xl text-center">
-            <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-              {heading}
-            </h2>
-            <p className="mt-4 text-lg leading-relaxed text-slate-300">{body}</p>
-            <p className="mt-6 text-sm font-medium text-slate-400">
-              No bank login. Not used for marketing.
-            </p>
-          </div>
-        </Container>
-      </section>
-    );
-  }
-
+  // The `dark` variant is now a calm, brand-tinted light band (the brand direction
+  // is light/premium, not dark). The non-dark variant simply sits on the canvas.
+  const wrapperClass = dark
+    ? "border-y border-brand-100 bg-brand-50"
+    : "bg-transparent";
+  const microcopyClass = dark ? "text-brand-700" : "text-slate-500";
   return (
-    <section className="bg-white">
-      <Container className="py-16 sm:py-20">
+    <section className={wrapperClass}>
+      <Container className="py-14 sm:py-20">
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
             {heading}
           </h2>
           <p className="mt-4 text-lg leading-relaxed text-slate-600">{body}</p>
-          <p className="mt-6 text-sm font-medium text-slate-500">
+          <p className={`mt-6 text-sm font-medium ${microcopyClass}`}>
             No bank login. Not used for marketing.
           </p>
         </div>

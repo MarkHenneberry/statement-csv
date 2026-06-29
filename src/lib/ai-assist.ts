@@ -735,10 +735,6 @@ export function classifyNonTransactionSection(s: string): string | null {
   return null;
 }
 
-const SAFE_SECTION_TOKENS = new Set([
-  "payments", "credits", "refunds", "interest", "fees", "purchases",
-  "charges", "cash-advances", "balance-transfers", "other",
-]);
 function safeSectionTokenList(v: unknown, classify: (s: string) => string | null): string[] {
   if (!Array.isArray(v)) return [];
   const out = new Set<string>();

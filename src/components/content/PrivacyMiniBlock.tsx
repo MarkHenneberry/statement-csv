@@ -18,7 +18,7 @@ export function PrivacyMiniBlock({
 }) {
   return (
     <div
-      className={`rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 ${className}`}
+      className={`rounded-xl border border-slate-200 bg-section p-4 text-sm text-slate-600 ${className}`}
     >
       <p>
         <span className="font-semibold text-slate-900">

@@ -75,15 +75,15 @@ export function UploadDropzone({
         }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
-        className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-12 text-center transition ${
+        className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-12 text-center transition ${
           dragging
             ? "border-brand-500 bg-brand-50"
-            : "border-slate-300 bg-slate-50 hover:border-slate-400"
+            : "border-slate-300 bg-section hover:border-brand-400 hover:bg-brand-50/40"
         }`}
       >
         {file ? (
           <div className="w-full">
-            <div className="mx-auto flex max-w-sm items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left">
+            <div className="mx-auto flex max-w-sm items-center gap-3 rounded-xl border border-slate-200 bg-surface p-4 text-left shadow-card">
               <span className="flex h-10 w-10 flex-none items-center justify-center rounded-lg bg-brand-50 text-brand-700">
                 <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                   <path d="M4 3a2 2 0 0 1 2-2h5.586a1 1 0 0 1 .707.293l3.414 3.414a1 1 0 0 1 .293.707V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V3Z" />

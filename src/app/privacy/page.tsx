@@ -32,7 +32,7 @@ export default function PrivacyPage() {
           */}
 
           <div className="mt-10 space-y-8 text-base leading-relaxed text-slate-700">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6">
+            <div className="rounded-xl border border-slate-200 bg-section p-6 shadow-card">
               <h2 className="text-xl font-semibold text-slate-900">
                 Your statement is used only to create your conversion
               </h2>
@@ -98,7 +98,7 @@ export default function PrivacyPage() {
               </p>
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6">
+            <div className="rounded-xl border border-slate-200 bg-section p-6 shadow-card">
               <p className="text-sm text-slate-600">
                 This page describes how StatementCSV is intended to work. It is not legal
                 advice and will be expanded with a formal privacy policy before launch.

@@ -42,15 +42,15 @@ export default function SamplePage() {
 
       <Section>
         <Breadcrumbs crumbs={crumbs} />
-        <div className="max-w-3xl">
-          <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
+        <div className="mx-auto max-w-2xl text-center">
+          <h1 className="text-balance text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
             Sample Bank Statement CSV Output
           </h1>
-          <p className="mt-6 text-lg leading-relaxed text-slate-600">
+          <p className="mt-5 text-base leading-relaxed text-slate-600 sm:text-lg">
             See what the cleaned data looks like before you upload a real statement. This
             is example data, not a real account.
           </p>
-          <div className="mt-8">
+          <div className="mt-7">
             <ButtonLink href="/upload">Convert your own statement</ButtonLink>
           </div>
         </div>
@@ -75,7 +75,7 @@ export default function SamplePage() {
             title="The same data as raw CSV"
             description="This is exactly the kind of file you download and open in Excel or Google Sheets."
           />
-          <pre className="mt-8 overflow-x-auto rounded-2xl border border-slate-200 bg-slate-50 p-5 text-xs leading-relaxed text-slate-700">
+          <pre className="mt-8 overflow-x-auto rounded-xl border border-slate-200 bg-surface p-5 text-xs leading-relaxed text-slate-700 shadow-card">
 {`Date,Description,Debit,Credit,Amount,Balance
 2024-05-02,Payroll Deposit,,2200.00,2200.00,4200.00
 2024-05-03,Grocery Mart #214,84.20,,-84.20,4115.80
@@ -92,7 +92,7 @@ export default function SamplePage() {
             title="What each column means"
             description="The columns are designed around bank statement data, not generic tables."
           />
-          <dl className="mt-8 divide-y divide-slate-200 rounded-2xl border border-slate-200 bg-white">
+          <dl className="mt-8 divide-y divide-slate-200 rounded-xl border border-slate-200 bg-surface shadow-card">
             {columnNotes.map((c) => (
               <div key={c.name} className="flex flex-col gap-1 p-4 sm:flex-row sm:gap-6">
                 <dt className="w-32 flex-none font-semibold text-slate-900">{c.name}</dt>

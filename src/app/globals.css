@@ -11,5 +11,32 @@ html {
 }
 
 body {
-  @apply bg-white text-slate-900 antialiased;
+  /* Soft off-white canvas so white cards/sections read as raised, not flat. */
+  @apply bg-canvas text-slate-900 antialiased;
+  font-feature-settings: "cv11";
+  line-height: 1.6;
+}
+
+/* Tabular figures for any element that opts in (transaction amounts, totals). */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+  Accessibility: a single, consistent, visible focus ring for keyboard users on
+  every interactive element. Mouse clicks (no :focus-visible) stay clean. This
+  covers links/buttons/inputs site-wide without editing each component.
+*/
+@layer base {
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [tabindex]:focus-visible,
+  [role="button"]:focus-visible {
+    outline: 2px solid theme("colors.brand.600");
+    outline-offset: 2px;
+    border-radius: 0.375rem;
+  }
 }

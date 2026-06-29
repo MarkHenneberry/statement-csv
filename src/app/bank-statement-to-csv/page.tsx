@@ -36,8 +36,8 @@ export default function BankStatementToCsvPage() {
 
       <Section>
         <Breadcrumbs crumbs={crumbs} />
-        <div className="max-w-3xl">
-          <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
+        <div className="mx-auto max-w-2xl text-center">
+          <h1 className="text-balance text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
             Convert Bank Statements to CSV and Excel
           </h1>
           <p className="mt-6 text-lg leading-relaxed text-slate-600">
@@ -46,7 +46,7 @@ export default function BankStatementToCsvPage() {
             file with Date, Description, Debit, Credit, Amount, and Balance. It uses parser-first
             extraction with guided AI verification, and balance-checks the result before you export.
           </p>
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+          <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
             <ButtonLink href="/upload">Convert a statement</ButtonLink>
             <ButtonLink href="/sample" variant="secondary">
               See sample export

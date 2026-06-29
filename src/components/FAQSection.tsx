@@ -2,9 +2,9 @@ import type { FaqItem } from "@/lib/faq";
 
 export function FAQSection({ items }: { items: FaqItem[] }) {
   return (
-    <dl className="divide-y divide-slate-200 rounded-2xl border border-slate-200 bg-white">
+    <dl className="divide-y divide-slate-200 rounded-xl border border-slate-200 bg-surface shadow-card">
       {items.map((item) => (
-        <details key={item.question} className="group p-6">
+        <details key={item.question} className="group p-5">
           <summary className="flex cursor-pointer items-center justify-between gap-4 text-left text-base font-semibold text-slate-900 [&::-webkit-details-marker]:hidden">
             <dt>{item.question}</dt>
             <svg

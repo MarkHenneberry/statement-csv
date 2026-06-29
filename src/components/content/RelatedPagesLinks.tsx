@@ -21,12 +21,12 @@ export function RelatedPagesLinks({
   return (
     <Section muted={muted}>
       <SectionHeading title={heading} description={description} />
-      <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {links.map((link) => (
           <Link
             key={link.href}
             href={link.href}
-            className="group rounded-2xl border border-slate-200 bg-white p-5 transition hover:border-brand-300 hover:shadow-sm"
+            className="group rounded-xl border border-slate-200 bg-surface p-5 shadow-card transition hover:border-brand-300 hover:shadow-card-hover"
           >
             <span className="flex items-center justify-between gap-2 text-base font-semibold text-slate-900">
               {link.label}

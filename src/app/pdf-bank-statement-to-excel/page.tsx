@@ -49,16 +49,16 @@ export default function PdfToExcelPage() {
 
       <Section>
         <Breadcrumbs crumbs={crumbs} />
-        <div className="max-w-3xl">
-          <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
+        <div className="mx-auto max-w-2xl text-center">
+          <h1 className="text-balance text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
             Convert PDF Bank Statements to Excel
           </h1>
-          <p className="mt-6 text-lg leading-relaxed text-slate-600">
+          <p className="mt-5 text-base leading-relaxed text-slate-600 sm:text-lg">
             Turn a PDF bank statement into a clean spreadsheet you can open in Excel or
             Google Sheets — with transaction rows in real columns instead of a flat,
             uneditable document.
           </p>
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+          <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
             <ButtonLink href="/upload">Convert a Statement</ButtonLink>
             <ButtonLink href="/sample" variant="secondary">
               See sample output
@@ -118,7 +118,7 @@ export default function PdfToExcelPage() {
           title="Clean up statements in your spreadsheet"
           description="Once the data is in Excel or Google Sheets, the slow part is done."
         />
-        <ul className="mx-auto mt-8 max-w-3xl space-y-3 text-base text-slate-700">
+        <ul className="mx-auto mt-6 max-w-xl space-y-2.5 text-left text-base text-slate-700">
           <li>Sort by date or amount to find the largest transactions quickly.</li>
           <li>Filter by description to isolate a single merchant or category.</li>
           <li>Total a column for expenses, taxes, or budgeting.</li>

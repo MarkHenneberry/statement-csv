@@ -39,14 +39,14 @@ export function OutputColumnsExample({
   className?: string;
 }) {
   return (
-    <div className={`rounded-2xl border border-slate-200 bg-white ${className}`}>
+    <div className={`overflow-hidden rounded-xl border border-slate-200 bg-surface shadow-card ${className}`}>
       <div className="border-b border-slate-200 px-4 py-3">
         <p className="text-sm font-semibold text-slate-900">{title}</p>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[640px] border-collapse text-sm">
           <thead>
-            <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
+            <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
               {columns.map((c) => (
                 <th
                   key={c.key}

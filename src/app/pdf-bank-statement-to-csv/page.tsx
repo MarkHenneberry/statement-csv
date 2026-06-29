@@ -60,17 +60,17 @@ export default function PdfToCsvPage() {
 
       <Section>
         <Breadcrumbs crumbs={crumbs} />
-        <div className="max-w-3xl">
-          <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
+        <div className="mx-auto max-w-2xl text-center">
+          <h1 className="text-balance text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
             Convert PDF Bank Statements to CSV
           </h1>
-          <p className="mt-6 text-lg leading-relaxed text-slate-600">
+          <p className="mt-5 text-base leading-relaxed text-slate-600 sm:text-lg">
             A PDF is fine for reading, but it is the wrong format for a spreadsheet.
             StatementCSV is a bank statement converter that extracts the transaction data
             from your PDF and turns it into a clean CSV you can open in Excel, Google
             Sheets, or your accounting tool &mdash; without retyping a single row.
           </p>
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+          <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
             <ButtonLink href="/upload">Convert a Statement</ButtonLink>
             <ButtonLink href="/pricing" variant="secondary">
               See Pricing
@@ -144,9 +144,9 @@ export default function PdfToCsvPage() {
       </Section>
 
       <Section muted>
-        <div className="grid items-start gap-12 lg:grid-cols-2">
+        <div className="grid items-start gap-8 lg:grid-cols-2">
           <div>
-            <SectionHeading title="Why PDFs are hard to work with" />
+            <SectionHeading title="Why PDFs are hard to work with" centered={false} />
             <div className="mt-6 space-y-4 text-base leading-relaxed text-slate-600">
               <p>
                 A PDF stores text for display, not for data. Columns that look neat on
@@ -173,7 +173,7 @@ export default function PdfToCsvPage() {
               </p>
             </div>
           </div>
-          <div className="rounded-2xl border border-slate-200 bg-white p-6">
+          <div className="rounded-xl border border-slate-200 bg-surface p-6 shadow-card">
             <p className="text-sm font-semibold text-slate-900">Sample CSV output</p>
             <pre className="mt-3 overflow-x-auto rounded-lg bg-slate-50 p-4 text-xs text-slate-600">
 {`Date,Description,Amount,Balance

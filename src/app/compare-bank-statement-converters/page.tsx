@@ -52,16 +52,16 @@ export default function CompareConvertersPage() {
 
       <Section>
         <Breadcrumbs crumbs={crumbs} />
-        <div className="max-w-3xl">
-          <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
+        <div className="mx-auto max-w-2xl text-center">
+          <h1 className="text-balance text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
             Compare Bank Statement Converters
           </h1>
-          <p className="mt-6 text-lg leading-relaxed text-slate-600">
+          <p className="mt-5 text-base leading-relaxed text-slate-600 sm:text-lg">
             There are several ways to turn a PDF bank statement into a spreadsheet. Rather than make
             claims about specific competitors, here are the features to consider when choosing a bank
             statement converter — and how StatementCSV approaches each one.
           </p>
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+          <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
             <ButtonLink href="/upload">Convert a statement</ButtonLink>
             <ButtonLink href="/sample" variant="secondary">
               See sample export

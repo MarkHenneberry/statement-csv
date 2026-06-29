@@ -57,17 +57,17 @@ export default function ImportQuickbooksPage() {
 
       <Section>
         <Breadcrumbs crumbs={crumbs} />
-        <div className="max-w-3xl">
-          <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
+        <div className="mx-auto max-w-2xl text-center">
+          <h1 className="text-balance text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
             Import Bank Statements into QuickBooks with a CSV Workflow
           </h1>
-          <p className="mt-6 text-lg leading-relaxed text-slate-600">
+          <p className="mt-5 text-base leading-relaxed text-slate-600 sm:text-lg">
             QuickBooks imports structured files, not PDFs. The reliable path is to convert your PDF
             bank statement into a clean CSV first, review the columns and totals, then prepare that
             file for QuickBooks&apos; import workflow. StatementCSV is an independent tool and is not a
             QuickBooks integration or partner.
           </p>
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+          <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
             <ButtonLink href="/upload">Convert a statement</ButtonLink>
             <ButtonLink href="/bank-statement-to-csv" variant="secondary">
               Bank statement to CSV
