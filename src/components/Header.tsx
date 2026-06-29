@@ -1,14 +1,36 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Container } from "@/components/Container";
 import { ButtonLink } from "@/components/Button";
 import { BrandMark } from "@/components/BrandMark";
+import { SignOutButton } from "@/components/auth/SignOutButton";
+import { createClient } from "@/lib/supabase/client";
+import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { primaryNav } from "@/lib/site";
 
 export function Header() {
   const [open, setOpen] = useState(false);
+  // Cosmetic signed-in indicator only. Detected client-side so marketing pages stay
+  // static; protected pages/data are gated server-side with validated auth.
+  const [authed, setAuthed] = useState(false);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    const supabase = createClient();
+    let active = true;
+    supabase.auth.getUser().then(({ data }) => {
+      if (active) setAuthed(Boolean(data.user));
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthed(Boolean(session?.user));
+    });
+    return () => {
+      active = false;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
 
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur">
@@ -28,7 +50,25 @@ export function Header() {
             ))}
           </nav>
 
-          <div className="hidden md:block">
+          <div className="hidden items-center gap-5 md:flex">
+            {authed ? (
+              <>
+                <Link
+                  href="/account"
+                  className="text-sm font-medium text-slate-600 transition hover:text-slate-900"
+                >
+                  Account
+                </Link>
+                <SignOutButton className="text-sm font-medium text-slate-600 transition hover:text-slate-900" />
+              </>
+            ) : (
+              <Link
+                href="/login"
+                className="text-sm font-medium text-slate-600 transition hover:text-slate-900"
+              >
+                Sign in
+              </Link>
+            )}
             <ButtonLink href="/upload">Convert a Statement</ButtonLink>
           </div>
 
@@ -64,6 +104,26 @@ export function Header() {
                   {item.label}
                 </Link>
               ))}
+              {authed ? (
+                <>
+                  <Link
+                    href="/account"
+                    className="rounded-md px-2 py-2 text-base font-medium text-slate-700 hover:bg-slate-50"
+                    onClick={() => setOpen(false)}
+                  >
+                    Account
+                  </Link>
+                  <SignOutButton className="rounded-md px-2 py-2 text-left text-base font-medium text-slate-700 hover:bg-slate-50" />
+                </>
+              ) : (
+                <Link
+                  href="/login"
+                  className="rounded-md px-2 py-2 text-base font-medium text-slate-700 hover:bg-slate-50"
+                  onClick={() => setOpen(false)}
+                >
+                  Sign in
+                </Link>
+              )}
               <ButtonLink href="/upload" className="mt-2 w-full">
                 Convert a Statement
               </ButtonLink>

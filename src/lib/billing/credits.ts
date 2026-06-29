@@ -11,7 +11,11 @@
 //   - Allowance resets at the start of each billing period.
 
 import { getPlanAllowance, type PlanKey } from "./plans.ts";
-import type { BillingAccount, ConversionStatus } from "./types.ts";
+import type {
+  BillingAccount,
+  ConversionStatus,
+  SubscriptionStatus,
+} from "./types.ts";
 
 // Re-exported so callers can get an allowance straight from a plan key.
 export { getPlanAllowance };
@@ -105,5 +109,40 @@ export function resetForNewPeriod(
     pagesUsedThisPeriod: 0,
     currentPeriodStart: new Date(now.getTime()),
     currentPeriodEnd: nextPeriodEnd(now),
+  };
+}
+
+/**
+ * The default billing-account fields for a brand-new signed-in user: the free plan,
+ * free status, zero allowance (the free preview is a separate path), zero usage, and
+ * a fresh one-month period. Pure so it can be unit-tested and reused by the account
+ * upsert. No Stripe IDs yet.
+ */
+export function defaultFreeAccountFields(now: Date = new Date()): {
+  planKey: PlanKey;
+  status: SubscriptionStatus;
+  monthlyPageAllowance: number;
+  pagesUsedThisPeriod: number;
+  currentPeriodStart: Date;
+  currentPeriodEnd: Date;
+} {
+  return {
+    planKey: "free",
+    status: "free",
+    monthlyPageAllowance: getPlanAllowance("free"),
+    pagesUsedThisPeriod: 0,
+    currentPeriodStart: new Date(now.getTime()),
+    currentPeriodEnd: nextPeriodEnd(now),
+  };
+}
+
+/** Safe usage summary for the account page (allowance / used / remaining). */
+export function summarizeAccountUsage(
+  account: Pick<BillingAccount, "monthlyPageAllowance" | "pagesUsedThisPeriod">,
+): { monthlyPageAllowance: number; pagesUsedThisPeriod: number; remaining: number } {
+  return {
+    monthlyPageAllowance: account.monthlyPageAllowance,
+    pagesUsedThisPeriod: account.pagesUsedThisPeriod,
+    remaining: getRemainingPages(account),
   };
 }

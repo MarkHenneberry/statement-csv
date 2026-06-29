@@ -36,27 +36,38 @@ async function main(): Promise<void> {
   console.log("ok    table counts:", JSON.stringify(counts));
 
   // 3. Optional, explicit dev-only write: upsert a single safe placeholder row.
+  //    Runs the upsert TWICE to prove repeated sign-in does not duplicate rows.
   if (process.env.DB_SANITY_WRITE === "true") {
     const email = "dev-sanity@example.com";
-    const user = await prisma.user.upsert({
-      where: { email },
-      update: {},
-      create: { email, name: "DB Sanity (dev)" },
-    });
-    await prisma.billingAccount.upsert({
-      where: { userId: user.id },
-      update: {},
-      create: {
-        userId: user.id,
-        planKey: "free",
-        status: "free",
-        monthlyPageAllowance: 0,
-        pagesUsedThisPeriod: 0,
-        currentPeriodStart: new Date(),
-        currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      },
-    });
-    console.log("ok    upserted safe dev test user + billing account (DB_SANITY_WRITE=true)");
+    const upsertOnce = async () => {
+      const user = await prisma.user.upsert({
+        where: { email },
+        update: {},
+        create: { email, name: "DB Sanity (dev)" },
+      });
+      await prisma.billingAccount.upsert({
+        where: { userId: user.id },
+        update: {},
+        create: {
+          userId: user.id,
+          planKey: "free",
+          status: "free",
+          monthlyPageAllowance: 0,
+          pagesUsedThisPeriod: 0,
+          currentPeriodStart: new Date(),
+          currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        },
+      });
+      return user.id;
+    };
+    await upsertOnce();
+    const userId = await upsertOnce();
+    const users = await prisma.user.count({ where: { email } });
+    const accounts = await prisma.billingAccount.count({ where: { userId } });
+    console.log(`ok    idempotent upsert: users=${users} accounts=${accounts} (expected 1/1)`);
+    if (users !== 1 || accounts !== 1) {
+      throw new Error(`idempotency check failed: users=${users} accounts=${accounts}`);
+    }
   } else {
     console.log("info  read-only check (set DB_SANITY_WRITE=true to upsert a safe dev row)");
   }

@@ -20,6 +20,8 @@ import {
   isPeriodExpired,
   nextPeriodEnd,
   resetForNewPeriod,
+  defaultFreeAccountFields,
+  summarizeAccountUsage,
 } from "../src/lib/billing/credits.ts";
 import { pricingPlans } from "../src/lib/pricing.ts";
 
@@ -124,6 +126,31 @@ check("nextPeriodEnd clamps month rollover (Jan 31 -> Feb)", nextPeriodEnd(new D
     "Pro+ 3,000 tier matches plan ($80 / 3,000)",
     proPlusTiers.some((t) => t.pages.includes(fmt(3000)) && t.price === `$${PLANS.pro_plus_3000.monthlyPriceUsd}`),
   );
+}
+
+// ----- default free account (new signed-in user) -----
+{
+  const f = defaultFreeAccountFields(new Date("2026-01-10T00:00:00Z"));
+  check(
+    "default account is the free plan with 0 allowance + 0 used",
+    f.planKey === "free" && f.status === "free" && f.monthlyPageAllowance === 0 && f.pagesUsedThisPeriod === 0,
+    JSON.stringify(f),
+  );
+  check(
+    "default account opens a one-month period",
+    f.currentPeriodStart.toISOString().startsWith("2026-01-10") &&
+      f.currentPeriodEnd.toISOString().startsWith("2026-02-10"),
+  );
+}
+
+// ----- account usage summary (free + paid shapes) -----
+{
+  const free = summarizeAccountUsage({ monthlyPageAllowance: 0, pagesUsedThisPeriod: 0 });
+  check("free shape: allowance 0 / used 0 / remaining 0", free.monthlyPageAllowance === 0 && free.remaining === 0);
+  const paid = summarizeAccountUsage({ monthlyPageAllowance: 500, pagesUsedThisPeriod: 120 });
+  check("paid shape: 500 allowance, 120 used -> 380 remaining", paid.remaining === 380 && paid.pagesUsedThisPeriod === 120);
+  const over = summarizeAccountUsage({ monthlyPageAllowance: 100, pagesUsedThisPeriod: 250 });
+  check("over-used shape clamps remaining to 0", over.remaining === 0);
 }
 
 console.log(
