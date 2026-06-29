@@ -15,6 +15,7 @@ import {
   type BalanceMode,
 } from "@/lib/upload";
 import { conversionPresentation } from "@/lib/conversion-state";
+import { dispatchQuotaUpdated } from "@/lib/client-events";
 import { SCANNED_PDF_WARNING } from "@/lib/review-messages";
 import type {
   ParseStatementResponse,
@@ -24,6 +25,7 @@ import type {
   LayoutParseStats,
 } from "@/lib/parser";
 import type { StatementValidation } from "@/lib/statement-model";
+import { buttonClasses } from "@/components/Button";
 import { UploadDropzone } from "@/components/upload/UploadDropzone";
 import { ProcessingSteps } from "@/components/upload/ProcessingSteps";
 import {
@@ -39,6 +41,17 @@ import { buildParserDiagnostics, shouldShowDiagnostics } from "@/lib/parser-diag
 import type { AiAssistOutcome } from "@/lib/ai-assist";
 
 type Status = "upload" | "processing" | "preview" | "error";
+
+// Mirrors GET /api/preview-status (safe metadata only).
+type PreviewStatus = {
+  mode: "paid" | "preview";
+  signedIn: boolean;
+  previewPageLimit?: number;
+  previewWindowHours?: number;
+  previewPagesRemaining?: number;
+  paidPagesRemaining?: number;
+  monthlyPageAllowance?: number;
+};
 
 type RowPatch = Partial<Omit<TransactionRow, "id">>;
 
@@ -87,6 +100,23 @@ export function UploadFlow() {
   const [rows, setRows] = useState<TransactionRow[]>([]);
   const [billingError, setBillingError] =
     useState<ParseStatementResponse["billingError"] | null>(null);
+  const [previewBlock, setPreviewBlock] =
+    useState<ParseStatementResponse["previewBlock"] | null>(null);
+  const [previewStatus, setPreviewStatus] = useState<PreviewStatus | null>(null);
+
+  // Server-side preview/paid quota for the upload screen. Read-only and best-effort:
+  // the parse route enforces the real quota regardless of what this returns.
+  function refreshPreviewStatus() {
+    fetch("/api/preview-status", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: PreviewStatus | null) => {
+        if (d) setPreviewStatus(d);
+      })
+      .catch(() => {});
+  }
+  useEffect(() => {
+    refreshPreviewStatus();
+  }, []);
 
   // Advance the processing animation but never auto-jump to the preview — the
   // fetch result is what moves us forward (it sits on the last step until done).
@@ -152,22 +182,31 @@ export function UploadFlow() {
     setActiveStep(0);
     setErrorMessage(null);
     setBillingError(null);
+    setPreviewBlock(null);
     try {
       const form = new FormData();
       form.append("file", file);
       const res = await fetch("/api/parse-statement", { method: "POST", body: form });
       const data = (await res.json()) as ParseStatementResponse;
       if (!data.ok) {
-        // Billing gate (sign in / upgrade) — route the user, don't dead-end.
+        // Quota gate (free preview used / upgrade) — route the user, don't dead-end.
         if (data.billingError) setBillingError(data.billingError);
+        if (data.previewBlock) setPreviewBlock(data.previewBlock);
         setErrorMessage(
           data.warnings[0] ??
             "We couldn't convert this statement. You can load the sample preview instead.",
         );
         setStatus("error");
+        // A block doesn't change usage, but the header may be showing a stale count
+        // that this block just revealed — re-sync it from the server.
+        refreshPreviewStatus();
+        dispatchQuotaUpdated();
         return;
       }
       applyResult(data);
+      // Reflect consumed preview pages / paid credits on the upload screen + header.
+      refreshPreviewStatus();
+      dispatchQuotaUpdated();
     } catch {
       // Network/parse failure. Offer the sample so the flow is never a dead end.
       setErrorMessage(
@@ -202,9 +241,12 @@ export function UploadFlow() {
     setFile(null);
     setFileError(null);
     setErrorMessage(null);
+    setBillingError(null);
+    setPreviewBlock(null);
     setMeta(null);
     setRows([]);
     setActiveStep(0);
+    refreshPreviewStatus();
   }
 
   function updateRow(id: string, patch: RowPatch) {
@@ -242,64 +284,74 @@ export function UploadFlow() {
   }
 
   if (status === "error") {
-    // Billing gates get their own routing (sign in / upgrade) instead of "try again".
+    // Quota/billing gates get their own routing (create account / upgrade) instead
+    // of "try again". A free-preview block offers Create account (signed-out only)
+    // + View plans; a paid block offers View plans.
     const needsAuth = billingError === "AUTH_REQUIRED";
+    const previewExhausted = billingError === "PREVIEW_LIMIT";
     const needsPlan = billingError === "PLAN_REQUIRED" || billingError === "INSUFFICIENT_PAGE_CREDITS";
-    const title = needsAuth
-      ? "Sign in to convert a statement"
-      : needsPlan
-        ? "A plan is needed to convert"
-        : "We couldn't convert this statement";
+    // For an exhausted preview, a signed-out visitor is offered Create account first.
+    const showCreateAccount = (needsAuth || previewExhausted) && previewBlock?.signedIn !== true;
+    const showViewPlans = needsPlan || previewExhausted;
+    const title = previewExhausted
+      ? "Free preview used"
+      : needsAuth
+        ? "Sign in to convert a statement"
+        : needsPlan
+          ? "A plan is needed to convert"
+          : "We couldn't convert this statement";
+    const isGate = Boolean(billingError);
+    // Consistent, concise, app-standard buttons. Create account is primary when it
+    // shows (signed-out preview block); otherwise View plans / Try again is primary.
+    // whitespace-nowrap keeps labels on one line; the row wraps as a whole on small
+    // screens instead of individual buttons turning into tall cards.
+    const viewPlansVariant = showCreateAccount && !needsAuth ? "secondary" : "primary";
     return (
-      <div className="mx-auto max-w-xl">
-        <UploadWarning variant={billingError ? "info" : "error"} title={title}>
+      <div className="mx-auto max-w-2xl">
+        <UploadWarning variant={isGate ? "info" : "error"} title={title}>
           {errorMessage}
         </UploadWarning>
-        <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-          {needsAuth ? (
-            <>
-              <Link
-                href="/login"
-                className="inline-flex items-center justify-center rounded-lg bg-brand-600 px-5 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-brand-700"
-              >
-                Sign in
-              </Link>
-              <Link
-                href="/signup"
-                className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-5 py-3 text-base font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                Create account
-              </Link>
-            </>
-          ) : needsPlan ? (
+        <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          {needsAuth && !previewExhausted ? (
+            <Link href="/login" className={buttonClasses("primary", "whitespace-nowrap")}>
+              Sign in
+            </Link>
+          ) : null}
+          {showCreateAccount ? (
             <Link
-              href="/pricing"
-              className="inline-flex items-center justify-center rounded-lg bg-brand-600 px-5 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-brand-700"
+              href="/signup"
+              className={buttonClasses(needsAuth ? "secondary" : "primary", "whitespace-nowrap")}
             >
+              Create account
+            </Link>
+          ) : null}
+          {showViewPlans ? (
+            <Link href="/pricing" className={buttonClasses(viewPlansVariant, "whitespace-nowrap")}>
               View plans
             </Link>
-          ) : (
+          ) : null}
+          {!isGate ? (
             <button
               type="button"
               onClick={runParse}
-              className="inline-flex items-center justify-center rounded-lg bg-brand-600 px-5 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-brand-700"
+              className={buttonClasses("primary", "whitespace-nowrap")}
             >
               Try again
             </button>
-          )}
+          ) : null}
           <button
             type="button"
             onClick={loadSample}
-            className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-5 py-3 text-base font-semibold text-slate-700 transition hover:bg-slate-50"
+            className={buttonClasses("secondary", "whitespace-nowrap")}
           >
-            Load sample preview
+            Load sample
           </button>
           <button
             type="button"
             onClick={resetAll}
-            className="inline-flex items-center justify-center rounded-lg px-5 py-3 text-base font-medium text-slate-600 transition hover:text-slate-900"
+            className={buttonClasses("ghost", "whitespace-nowrap")}
           >
-            Choose another file
+            Choose file
           </button>
         </div>
       </div>
@@ -338,30 +390,43 @@ export function UploadFlow() {
       noUsableTransactionTable,
     });
 
-    // Page-credit export gating. Verified conversions are already charged on the
-    // server and export freely; review-highlighted conversions must be charged
-    // (server-side, idempotent) before a file is produced. Mock/sample data and
-    // failed conversions have no billing record and are never charged here.
+    // Export gating + credit notes.
+    //  - PAID verified: already charged, export freely.
+    //  - PAID review: charge (idempotent) on the server before the file is produced.
+    //  - PREVIEW (verified or review): pages are consumed at parse time, so export
+    //    is free here and never triggers a server charge.
+    // Mock/sample data has no billing record and is never charged.
     const billing = meta.source === "real-parser" ? meta.billing : undefined;
-    const exportNeedsCharge = billing?.status === "review" && !billing.charged;
+    const isPreview = billing?.mode === "preview";
+    const exportNeedsCharge =
+      billing?.mode === "paid" && billing.status === "review" && !billing.charged;
     const exportConversionId = billing?.conversionId ?? null;
-    const remainingLabel = (n: number | null) =>
-      n === null ? "" : ` You have ${n} page ${n === 1 ? "credit" : "credits"} remaining.`;
     let creditNote: string | null = null;
     if (billing) {
-      if (billing.status === "verified" && billing.charged) {
-        creditNote = `This conversion used ${billing.chargedPages} page ${
-          billing.chargedPages === 1 ? "credit" : "credits"
-        }.${remainingLabel(billing.pagesRemaining)}`;
-      } else if (billing.status === "review" && billing.charged) {
-        creditNote = `Export used ${billing.chargedPages} page ${
-          billing.chargedPages === 1 ? "credit" : "credits"
-        }.${remainingLabel(billing.pagesRemaining)}`;
-      } else if (exportNeedsCharge) {
-        const req = billing.requiredPages ?? meta.pageCount ?? 0;
-        creditNote = `Exporting will use ${req} page ${
-          req === 1 ? "credit" : "credits"
-        } when you download.${remainingLabel(billing.pagesRemaining)}`;
+      const n = (count: number, singular: string) => `${count} ${singular}${count === 1 ? "" : "s"}`;
+      if (isPreview) {
+        const remainLabel =
+          billing.pagesRemaining === null
+            ? ""
+            : ` You have ${n(billing.pagesRemaining, "free preview page")} left in this window.`;
+        if (billing.charged) {
+          creditNote = `This free preview used ${n(billing.chargedPages, "preview page")}.${remainLabel}`;
+        } else {
+          creditNote = `This preview used 0 preview pages.${remainLabel}`;
+        }
+      } else {
+        const remainLabel =
+          billing.pagesRemaining === null
+            ? ""
+            : ` You have ${n(billing.pagesRemaining, "page credit")} remaining.`;
+        if (billing.status === "verified" && billing.charged) {
+          creditNote = `This conversion used ${n(billing.chargedPages, "page credit")}.${remainLabel}`;
+        } else if (billing.status === "review" && billing.charged) {
+          creditNote = `Export used ${n(billing.chargedPages, "page credit")}.${remainLabel}`;
+        } else if (exportNeedsCharge) {
+          const req = billing.requiredPages ?? meta.pageCount ?? 0;
+          creditNote = `Exporting will use ${n(req, "page credit")} when you download.${remainLabel}`;
+        }
       }
     }
 
@@ -596,6 +661,33 @@ export function UploadFlow() {
       <p className="mt-3 text-lg leading-relaxed text-slate-600">
         Upload a digital PDF bank statement to preview the conversion.
       </p>
+
+      {(() => {
+        // Quota line: free-preview allowance for visitors/free users, or remaining
+        // paid credits for subscribers. Server-enforced; this is display only.
+        if (previewStatus?.mode === "paid") {
+          return (
+            <p className="mt-3 text-sm font-medium text-slate-600">
+              {previewStatus.paidPagesRemaining ?? 0} of {previewStatus.monthlyPageAllowance ?? 0}{" "}
+              page credits remaining this month.
+            </p>
+          );
+        }
+        const limit = previewStatus?.previewPageLimit ?? 6;
+        const hours = previewStatus?.previewWindowHours ?? 12;
+        const remaining = previewStatus?.previewPagesRemaining;
+        return (
+          <p className="mt-3 text-sm font-medium text-brand-700">
+            Free preview: convert up to {limit} pages every {hours} hours without an account.
+            {typeof remaining === "number" ? (
+              <span className="font-normal text-slate-600">
+                {" "}
+                {remaining} preview {remaining === 1 ? "page" : "pages"} remaining in this window.
+              </span>
+            ) : null}
+          </p>
+        );
+      })()}
 
       <div className="mt-8 space-y-4">
         <UploadDropzone file={file} onSelect={handleSelect} onReject={handleReject} />

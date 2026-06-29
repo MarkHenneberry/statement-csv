@@ -21,7 +21,12 @@
 // and never prints connection strings or secrets.
 
 import { PrismaClient } from "@prisma/client";
-import { getRemainingPages } from "../src/lib/billing/credits.ts";
+import {
+  getRemainingPages,
+  getPreviewLimits,
+  evaluatePreviewAccess,
+  previewWindowEnd,
+} from "../src/lib/billing/credits.ts";
 
 if (!process.env.DATABASE_URL) {
   console.log("No DATABASE_URL set — skipping credit enforcement check (this is fine).");
@@ -130,6 +135,48 @@ async function usedPages(userId: string): Promise<number> {
   return acct?.pagesUsedThisPeriod ?? -1;
 }
 
+// ----- Free-preview window helpers (mirror src/lib/billing/free-preview-quota.ts;
+// the real module imports `server-only` + next/headers and can't run in a node
+// script). Keep in sync with that module.
+const createdPreviewHashes: string[] = [];
+
+async function previewSnapshot(subjectHash: string, now: Date) {
+  const w = await prisma.freePreviewUsage.findFirst({
+    where: { subjectHash, windowEnd: { gt: now } },
+    orderBy: { windowStart: "desc" },
+  });
+  return { pagesUsed: w?.pagesUsed ?? 0, attemptsUsed: w?.attemptsUsed ?? 0 };
+}
+
+async function previewGetOrCreateWindow(
+  subjectHash: string,
+  subjectType: "anonymous_cookie" | "user",
+  now: Date,
+) {
+  const existing = await prisma.freePreviewUsage.findFirst({
+    where: { subjectHash, windowEnd: { gt: now } },
+    orderBy: { windowStart: "desc" },
+  });
+  if (existing) return existing;
+  if (!createdPreviewHashes.includes(subjectHash)) createdPreviewHashes.push(subjectHash);
+  return prisma.freePreviewUsage.create({
+    data: {
+      subjectHash,
+      subjectType,
+      windowStart: now,
+      windowEnd: previewWindowEnd(now, getPreviewLimits().windowHours),
+      pagesUsed: 0,
+      attemptsUsed: 0,
+    },
+  });
+}
+
+async function previewRecordPages(subjectHash: string, subjectType: "anonymous_cookie" | "user", pages: number, now: Date) {
+  if (pages <= 0) return;
+  const w = await previewGetOrCreateWindow(subjectHash, subjectType, now);
+  await prisma.freePreviewUsage.update({ where: { id: w.id }, data: { pagesUsed: { increment: pages } } });
+}
+
 async function main(): Promise<void> {
   await prisma.$queryRaw`SELECT 1`;
 
@@ -191,6 +238,58 @@ async function main(): Promise<void> {
     check("insufficient case leaves usage unchanged (97)", (await usedPages(uid)) === 97);
   }
 
+  // ----- Free-preview quota (anonymous + signed-in-free) -----
+  const limits = getPreviewLimits();
+  const now = new Date();
+
+  // 6. Anonymous visitor: a verified result consumes the page count from the quota.
+  {
+    const hash = `test-anon-verified-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const before = evaluatePreviewAccess(limits, await previewSnapshot(hash, now), 3);
+    check("anon under limit is allowed (3 pages, fresh window)", before.allowed === true && before.remaining === limits.pageLimit);
+    await previewRecordPages(hash, "anonymous_cookie", 3, now); // verified consumes pages
+    const snap = await previewSnapshot(hash, now);
+    check("anon verified result consumed 3 preview pages", snap.pagesUsed === 3, JSON.stringify(snap));
+    const after = evaluatePreviewAccess(limits, snap, limits.pageLimit);
+    check("remaining preview pages reflect consumption", after.remaining === limits.pageLimit - 3);
+  }
+
+  // 7. Anonymous visitor: a review (usable) result also consumes pages at parse time.
+  {
+    const hash = `test-anon-review-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await previewRecordPages(hash, "anonymous_cookie", 4, now); // review consumes pages too
+    const snap = await previewSnapshot(hash, now);
+    check("anon review result consumed 4 preview pages", snap.pagesUsed === 4, JSON.stringify(snap));
+  }
+
+  // 8. Failed extraction consumes 0 preview pages.
+  {
+    const hash = `test-anon-failed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await previewRecordPages(hash, "anonymous_cookie", 0, now); // failed consumes 0
+    const snap = await previewSnapshot(hash, now);
+    check("failed preview extraction consumed 0 pages", snap.pagesUsed === 0, JSON.stringify(snap));
+  }
+
+  // 9. Remaining 2 preview pages cannot process a 3-page PDF (blocked before parser).
+  {
+    const hash = `test-anon-short-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await previewRecordPages(hash, "anonymous_cookie", limits.pageLimit - 2, now); // leave 2
+    const decision = evaluatePreviewAccess(limits, await previewSnapshot(hash, now), 3);
+    check(
+      "remaining 2 preview pages blocks a 3-page upload (PREVIEW_PAGE_LIMIT)",
+      decision.allowed === false && decision.required === 3 && decision.remaining === 2,
+      JSON.stringify(decision),
+    );
+  }
+
+  // 10. Signed-in FREE user uses the same preview quota (subjectType: user).
+  {
+    const hash = `test-user-free-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await previewRecordPages(hash, "user", 2, now);
+    const snap = await previewSnapshot(hash, now);
+    check("signed-in free user consumes the same preview quota", snap.pagesUsed === 2, JSON.stringify(snap));
+  }
+
   console.log(
     failures === 0
       ? `\nAll credit-enforcement DB checks passed.`
@@ -211,7 +310,14 @@ main()
       await prisma.billingAccount.deleteMany({ where: { userId } }).catch(() => {});
       await prisma.user.deleteMany({ where: { id: userId } }).catch(() => {});
     }
-    console.log(`info  cleaned up ${createdUserIds.length} dev test user(s)`);
+    if (createdPreviewHashes.length > 0) {
+      await prisma.freePreviewUsage
+        .deleteMany({ where: { subjectHash: { in: createdPreviewHashes } } })
+        .catch(() => {});
+    }
+    console.log(
+      `info  cleaned up ${createdUserIds.length} dev test user(s) + ${createdPreviewHashes.length} preview window(s)`,
+    );
     await prisma.$disconnect();
     process.exit(failures === 0 ? 0 : 1);
   });

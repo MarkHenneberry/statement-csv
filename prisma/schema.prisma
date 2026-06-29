@@ -61,6 +61,11 @@ enum LedgerReason {
   manual_adjustment
 }
 
+enum PreviewSubjectType {
+  anonymous_cookie
+  user
+}
+
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
@@ -123,4 +128,23 @@ model PageCreditLedger {
   createdAt    DateTime     @default(now())
 
   @@index([userId])
+}
+
+// Anonymous / free-preview quota tracking. Holds ONLY quota metadata — never a
+// filename, statement text, rows, balances, or PDF contents. The subject is either
+// an opaque, server-generated browser cookie (anonymous) or a signed-in user id;
+// in BOTH cases only a one-way HASH of the subject is stored here (the raw cookie
+// value / user id is never persisted in this table). One row per rolling window.
+model FreePreviewUsage {
+  id           String             @id @default(cuid())
+  subjectHash  String
+  subjectType  PreviewSubjectType
+  windowStart  DateTime
+  windowEnd    DateTime
+  pagesUsed    Int                @default(0)
+  attemptsUsed Int                @default(0)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@index([subjectHash, windowEnd])
 }

@@ -177,6 +177,70 @@ export function evaluateUploadAccess(
   return { allowed: true, remaining, required };
 }
 
+// ----- Free-preview quota (no-account / signed-in-free path) ----------------
+// A separate, lighter quota from the paid BillingAccount credits: a small number
+// of pages per rolling time window, identified by an opaque cookie (anonymous) or
+// a signed-in user id. Pure here (no DB, no cookies) so it is unit-testable; the
+// server-only module src/lib/billing/free-preview-quota.ts wires it to Postgres +
+// the HttpOnly cookie. Defaults: 6 pages / 12 hours / 5 attempts.
+
+export type PreviewLimits = { pageLimit: number; windowHours: number; maxAttempts: number };
+
+/** Read the free-preview limits from env, clamped to safe positive integers. */
+export function getPreviewLimits(env: NodeJS.ProcessEnv = process.env): PreviewLimits {
+  const intOr = (raw: string | undefined, fallback: number) => {
+    const n = Number.parseInt(raw ?? "", 10);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  };
+  return {
+    pageLimit: intOr(env.FREE_PREVIEW_PAGE_LIMIT, 6),
+    windowHours: intOr(env.FREE_PREVIEW_WINDOW_HOURS, 12),
+    maxAttempts: intOr(env.FREE_PREVIEW_MAX_ATTEMPTS, 5),
+  };
+}
+
+/** Usage already recorded against the subject's current window. */
+export type PreviewUsageSnapshot = { pagesUsed: number; attemptsUsed: number };
+
+export type PreviewAccessDecision =
+  | { allowed: true; remaining: number; required: number; attemptsRemaining: number }
+  | {
+      allowed: false;
+      code: "PREVIEW_PAGE_LIMIT" | "PREVIEW_ATTEMPT_LIMIT";
+      remaining: number;
+      required: number;
+      attemptsRemaining: number;
+    };
+
+/**
+ * Decide whether a free-preview subject may process a PDF of `pageCount` pages in
+ * its current window. Pure: callers supply the limits + already-recorded usage.
+ *   - too many attempts in the window -> PREVIEW_ATTEMPT_LIMIT
+ *   - not enough preview pages left   -> PREVIEW_PAGE_LIMIT (with remaining/required)
+ *   - otherwise                       -> allowed
+ */
+export function evaluatePreviewAccess(
+  limits: PreviewLimits,
+  usage: PreviewUsageSnapshot,
+  pageCount: number,
+): PreviewAccessDecision {
+  const remaining = Math.max(0, limits.pageLimit - usage.pagesUsed);
+  const attemptsRemaining = Math.max(0, limits.maxAttempts - usage.attemptsUsed);
+  const required = Math.max(0, Math.floor(pageCount));
+  if (attemptsRemaining <= 0) {
+    return { allowed: false, code: "PREVIEW_ATTEMPT_LIMIT", remaining, required, attemptsRemaining };
+  }
+  if (required > remaining) {
+    return { allowed: false, code: "PREVIEW_PAGE_LIMIT", remaining, required, attemptsRemaining };
+  }
+  return { allowed: true, remaining, required, attemptsRemaining };
+}
+
+/** End of a preview window that opens at `start` and lasts `windowHours`. */
+export function previewWindowEnd(start: Date, windowHours: number): Date {
+  return new Date(start.getTime() + windowHours * 60 * 60 * 1000);
+}
+
 /** Safe usage summary for the account page (allowance / used / remaining). */
 export function summarizeAccountUsage(
   account: Pick<BillingAccount, "monthlyPageAllowance" | "pagesUsedThisPeriod">,

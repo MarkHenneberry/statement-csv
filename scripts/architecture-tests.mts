@@ -335,6 +335,34 @@ const CARD_WITH_REMITTANCE = [
   );
 }
 
+// 13. Quota gating must be server-trust only: the parse route derives the page
+// count from the extracted PDF and the subject from auth/cookie — never from query
+// params or request-body flags (?free=true, ?dev=true, body.pageCount, etc.).
+{
+  const fs = await import("node:fs");
+  const src = fs.readFileSync(
+    new URL("../src/app/api/parse-statement/route.ts", import.meta.url),
+    "utf8",
+  );
+  check(
+    "parse route derives page count from the extracted PDF (server-side)",
+    /const\s+pdfPageCount\s*=\s*extracted\.pageCount\s*\?\?\s*extracted\.pages\.length/.test(src),
+  );
+  check(
+    "parse route does not read URL query params (no ?free/?dev bypass)",
+    !/searchParams/.test(src) && !/nextUrl/.test(src) && !/new URL\(\s*request\.url/.test(src),
+  );
+  check(
+    "parse route does not trust a client-supplied page count or plan/preview flag",
+    !/form\.get\(\s*["'](pageCount|pages|free|paid|preview|plan|dev)["']\s*\)/.test(src) &&
+      !/body\.(pageCount|isPaid|preview|free|plan)\b/.test(src),
+  );
+  check(
+    "parse route reads auth server-side via getAuthenticatedUser (not a client id)",
+    /getAuthenticatedUser\(\)/.test(src),
+  );
+}
+
 console.log(
   failures === 0
     ? `\nAll architecture invariants held.`

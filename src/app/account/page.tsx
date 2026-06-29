@@ -3,7 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthenticatedUser } from "@/lib/supabase/server";
 import { ensureAppAccount } from "@/lib/billing/account";
-import { summarizeAccountUsage } from "@/lib/billing/credits";
+import { summarizeAccountUsage, getPreviewLimits } from "@/lib/billing/credits";
 import { PLANS, type PlanKey } from "@/lib/billing/plans";
 import { SignOutButton } from "@/components/auth/SignOutButton";
 import { ManageBillingButton } from "@/components/auth/ManageBillingButton";
@@ -87,12 +87,23 @@ export default async function AccountPage({
         </div>
       </div>
 
-      <p className="mt-4 rounded-xl border border-slate-200 bg-section px-4 py-3 text-sm leading-relaxed text-slate-600 shadow-card">
-        Each page of a converted statement uses one page credit. Verified conversions are charged
-        when they complete; review-highlighted conversions are only charged if you export them, and
-        statements we can&rsquo;t read are never charged. Credits reset at the start of each billing
-        period.
-      </p>
+      {account.monthlyPageAllowance > 0 ? (
+        <p className="mt-4 rounded-xl border border-slate-200 bg-section px-4 py-3 text-sm leading-relaxed text-slate-600 shadow-card">
+          Each page of a converted statement uses one page credit. Verified conversions are charged
+          when they complete; review-highlighted conversions are only charged if you export them, and
+          statements we can&rsquo;t read are never charged. Credits reset at the start of each billing
+          period.
+        </p>
+      ) : (
+        <p className="mt-4 rounded-xl border border-slate-200 bg-section px-4 py-3 text-sm leading-relaxed text-slate-600 shadow-card">
+          You&rsquo;re on the free preview: convert up to {getPreviewLimits().pageLimit} pages every{" "}
+          {getPreviewLimits().windowHours} hours, no charge.{" "}
+          <Link href="/pricing" className="font-medium text-brand-700 hover:underline">
+            Choose a plan
+          </Link>{" "}
+          for a monthly page-credit allowance.
+        </p>
+      )}
     </div>
   );
 }

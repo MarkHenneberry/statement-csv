@@ -23,6 +23,9 @@ import {
   defaultFreeAccountFields,
   summarizeAccountUsage,
   evaluateUploadAccess,
+  getPreviewLimits,
+  evaluatePreviewAccess,
+  previewWindowEnd,
 } from "../src/lib/billing/credits.ts";
 import { pricingPlans } from "../src/lib/pricing.ts";
 
@@ -172,6 +175,76 @@ check("nextPeriodEnd clamps month rollover (Jan 31 -> Feb)", nextPeriodEnd(new D
     "paid but short is blocked with INSUFFICIENT_PAGE_CREDITS (remaining 3, required 6)",
     short.allowed === false && short.code === "INSUFFICIENT_PAGE_CREDITS" && short.remaining === 3 && short.required === 6,
     JSON.stringify(short),
+  );
+}
+
+// ----- free-preview quota (no-account / signed-in-free path) -----
+{
+  // Env defaults: 6 pages / 12 hours / 5 attempts.
+  const def = getPreviewLimits({} as NodeJS.ProcessEnv);
+  check(
+    "preview limits default to 6 pages / 12h / 5 attempts",
+    def.pageLimit === 6 && def.windowHours === 12 && def.maxAttempts === 5,
+    JSON.stringify(def),
+  );
+  const custom = getPreviewLimits({
+    FREE_PREVIEW_PAGE_LIMIT: "10",
+    FREE_PREVIEW_WINDOW_HOURS: "24",
+    FREE_PREVIEW_MAX_ATTEMPTS: "3",
+  } as unknown as NodeJS.ProcessEnv);
+  check(
+    "preview limits read env overrides",
+    custom.pageLimit === 10 && custom.windowHours === 24 && custom.maxAttempts === 3,
+  );
+  check(
+    "preview limits ignore non-positive/garbage env (fallback to defaults)",
+    getPreviewLimits({ FREE_PREVIEW_PAGE_LIMIT: "0", FREE_PREVIEW_WINDOW_HOURS: "abc" } as unknown as NodeJS.ProcessEnv).pageLimit === 6,
+  );
+
+  const limits = { pageLimit: 6, windowHours: 12, maxAttempts: 5 };
+
+  // Fresh subject under the limit is allowed.
+  const fresh = evaluatePreviewAccess(limits, { pagesUsed: 0, attemptsUsed: 0 }, 3);
+  check(
+    "signed-out under 6 pages is allowed",
+    fresh.allowed === true && fresh.remaining === 6 && fresh.required === 3,
+    JSON.stringify(fresh),
+  );
+
+  // Allowed exactly at the boundary (a 6-page PDF on a fresh window).
+  check(
+    "preview allowed when required equals remaining (6 pages fresh)",
+    evaluatePreviewAccess(limits, { pagesUsed: 0, attemptsUsed: 0 }, 6).allowed === true,
+  );
+
+  // Over the page limit on a fresh window is blocked before parser/AI.
+  const over = evaluatePreviewAccess(limits, { pagesUsed: 0, attemptsUsed: 0 }, 7);
+  check(
+    "signed-out over 6 pages is blocked (PREVIEW_PAGE_LIMIT)",
+    over.allowed === false && over.code === "PREVIEW_PAGE_LIMIT" && over.required === 7,
+    JSON.stringify(over),
+  );
+
+  // Remaining 2 pages cannot process a 3-page PDF.
+  const short = evaluatePreviewAccess(limits, { pagesUsed: 4, attemptsUsed: 1 }, 3);
+  check(
+    "remaining 2 preview pages cannot upload a 3-page PDF",
+    short.allowed === false && short.code === "PREVIEW_PAGE_LIMIT" && short.remaining === 2 && short.required === 3,
+    JSON.stringify(short),
+  );
+
+  // Attempt cap blocks even when pages remain.
+  const attempts = evaluatePreviewAccess(limits, { pagesUsed: 1, attemptsUsed: 5 }, 1);
+  check(
+    "preview blocked when attempts are exhausted (PREVIEW_ATTEMPT_LIMIT)",
+    attempts.allowed === false && attempts.code === "PREVIEW_ATTEMPT_LIMIT",
+    JSON.stringify(attempts),
+  );
+
+  // Window end math.
+  check(
+    "previewWindowEnd adds the window hours",
+    previewWindowEnd(new Date("2026-06-29T00:00:00Z"), 12).toISOString().startsWith("2026-06-29T12:00:00"),
   );
 }
 
