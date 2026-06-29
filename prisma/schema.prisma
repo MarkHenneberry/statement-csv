@@ -1,16 +1,14 @@
-// StatementCSV billing/account schema — BLUEPRINT ONLY.
+// StatementCSV billing/account schema (Supabase Postgres).
 //
-// This file documents the target database models for the account / page-credit
-// foundation. It is intentionally NOT wired yet:
-//   - Prisma is not installed as a dependency in this pass.
-//   - No DATABASE_URL is required to build the app (no Prisma client is imported).
-//   - The working, tested logic lives in src/lib/billing/* (types + helpers).
+// Wired in this pass: Prisma is installed and the client generates from this
+// schema. Nothing connects at build time — the app never imports the Prisma
+// client, so `npm run build` works without a live database. Migrations and the
+// DB sanity script connect only when DATABASE_URL is set (see README.md).
 //
-// NEXT PASS (Stripe + persistence) will:
-//   1. `npm i -D prisma` and `npm i @prisma/client`
-//   2. set DATABASE_URL (Postgres recommended for MVP)
-//   3. `npx prisma migrate dev` + `npx prisma generate`
-//   4. swap src/lib/billing/types.ts consumers to the generated client types.
+// Supabase connection strings (do NOT commit real values):
+//   - DATABASE_URL : pooled connection (PgBouncer, port 6543) used at runtime.
+//   - DIRECT_URL   : direct connection (port 5432) used by `prisma migrate`.
+// If DIRECT_URL is unset, Prisma falls back to DATABASE_URL for migrations.
 //
 // PRIVACY: these tables store ONLY safe operational metadata. We never store
 // transaction rows, raw PDF text, PDF files, rendered images, or AI prompts/
@@ -21,8 +19,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 enum PlanKey {

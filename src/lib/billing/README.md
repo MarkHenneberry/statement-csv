@@ -47,10 +47,50 @@ page counts, statuses, balance status, credits charged, timestamps, and Stripe I
 `Conversion.originalFilename` is optional and should be treated as sensitive — it is
 never required by billing.
 
+## Database (Supabase Postgres) — wired in this pass
+
+The chosen database is **Supabase Postgres**, accessed via **Prisma** (`postgresql`
+provider). Prisma is installed and the client generates from `prisma/schema.prisma`.
+Nothing connects at build time — no route imports the client — so `npm run build`
+works without a live database. The shared client lives in `src/lib/db.ts`; thin
+server-only data helpers live in `src/lib/billing/repo.ts` (not called by any route
+yet).
+
+### Required env vars (do not commit real values)
+
+Copy `.env.example` to `.env` and fill in from Supabase
+(Project Settings → Database → Connection string):
+
+- `DATABASE_URL` — pooled connection (PgBouncer, port 6543, `?pgbouncer=true`); used
+  at runtime.
+- `DIRECT_URL` — direct connection (port 5432); used by `prisma migrate`. If you only
+  have one connection string, set `DIRECT_URL` to the same value as `DATABASE_URL`.
+
+### Commands
+
+```bash
+npm run prisma:generate        # generate the client (no DB connection needed)
+npm run prisma:migrate:dev     # create/apply a migration (needs DATABASE_URL + DIRECT_URL)
+npm run prisma:studio          # browse data (needs DB)
+npm run prisma:deploy          # apply migrations in CI/production
+npm run db:sanity              # connect + safe read-only counts (skips if no DATABASE_URL)
+DB_SANITY_WRITE=true npm run db:sanity   # also upsert one safe dev placeholder row
+```
+
+The first migration name is `init_billing_foundation`. The DB sanity script prints
+only safe counts/labels and never logs connection strings or secrets.
+
+## Deferred to the next pass
+
+- **Supabase Auth** is intentionally deferred. This pass only uses Supabase as the
+  Postgres database; no auth packages or login flow are added. The next auth pass
+  connects authenticated users to `User` / `BillingAccount` (e.g. on first sign-in,
+  call `createDefaultBillingAccount`).
+
 ## Where the next (Stripe) pass plugs in
 
-- **Persistence:** install Prisma, set `DATABASE_URL`, migrate from
-  `prisma/schema.prisma`, then back `types.ts` consumers with the generated client.
+- **Persistence:** Prisma is wired. Run `prisma:migrate:dev` once `DATABASE_URL` is
+  set, then back `types.ts` consumers with the generated client where helpful.
 - **Stripe webhooks** (`checkout.session.completed`, `customer.subscription.*`,
   `invoice.paid`) should update `BillingAccount` (`planKey`, `status`,
   `stripeCustomerId`, `stripeSubscriptionId`, period bounds) and call

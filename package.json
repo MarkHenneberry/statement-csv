@@ -9,9 +9,15 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "ai:force": "node --experimental-strip-types scripts/force-ai-reconstruction.mts",
-    "ai:force:smoke": "node --experimental-strip-types scripts/ai-force-smoke.mts"
+    "ai:force:smoke": "node --experimental-strip-types scripts/ai-force-smoke.mts",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "db:sanity": "node --experimental-strip-types scripts/db-sanity.mts"
   },
   "dependencies": {
+    "@prisma/client": "^6.19.3",
     "next": "15.5.19",
     "react": "19.0.0",
     "react-dom": "19.0.0",
@@ -27,6 +33,7 @@
     "eslint": "^8.57.1",
     "eslint-config-next": "15.5.19",
     "postcss": "^8.4.49",
+    "prisma": "^6.19.3",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3"
   },
