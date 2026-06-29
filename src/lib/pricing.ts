@@ -1,6 +1,13 @@
 import { FREE_PREVIEW_MAX_PAGES } from "./free-preview.ts";
+import type { PlanKey } from "./billing/plans.ts";
 
-export type PricingTier = { pages: string; price: string; priceSuffix?: string };
+export type PricingTier = {
+  pages: string;
+  price: string;
+  priceSuffix?: string;
+  /** Billing plan key for checkout (Pro+ tiers map to distinct plans). */
+  planKey?: PlanKey;
+};
 
 export type PricingPlan = {
   name: string;
@@ -14,6 +21,8 @@ export type PricingPlan = {
   highlighted?: boolean;
   /** Optional badge text (e.g. "Best value"). */
   badge?: string;
+  /** Billing plan key for checkout (omitted for multi-tier cards like Pro+). */
+  planKey?: PlanKey;
   /** Volume tiers shown inside the card (Pro+). */
   tiers?: PricingTier[];
   /** Small note under the features (e.g. higher-volume contact line). */
@@ -46,10 +55,9 @@ const PLAN_FEATURES = [
   "No bank login required",
 ];
 
-// TODO(launch-blocker): paid plans require accounts + payments + server-side page-
-// credit enforcement, none of which exist yet. Until then only the free preview is
-// actually available; the paid cards describe intended plans and their CTAs route to
-// the free converter (no checkout is implied).
+// Page-credit subscription plans. `planKey` links a card (or a Pro+ tier) to the
+// billing plan used for Stripe checkout. Checkout requires a signed-in account;
+// page-credit enforcement is not active yet.
 export const pricingPlans: PricingPlan[] = [
   {
     name: "Minimum",
@@ -58,7 +66,8 @@ export const pricingPlans: PricingPlan[] = [
     pages: "100 pages/month",
     description: "For occasional statement conversion.",
     features: PLAN_FEATURES,
-    cta: { label: "Start converting", href: "/upload" },
+    cta: { label: "Choose Minimum", href: "/upload" },
+    planKey: "minimum",
   },
   {
     name: "Plus",
@@ -67,9 +76,10 @@ export const pricingPlans: PricingPlan[] = [
     pages: "500 pages/month",
     description: "For small businesses, freelancers, landlords, and regular bookkeeping.",
     features: PLAN_FEATURES,
-    cta: { label: "Start converting", href: "/upload" },
+    cta: { label: "Choose Plus", href: "/upload" },
     highlighted: true,
     badge: "Best value",
+    planKey: "plus",
   },
   {
     name: "Pro",
@@ -78,7 +88,8 @@ export const pricingPlans: PricingPlan[] = [
     pages: "1,000 pages/month",
     description: "For bookkeepers, admin staff, and higher-volume users.",
     features: PLAN_FEATURES,
-    cta: { label: "Start converting", href: "/upload" },
+    cta: { label: "Choose Pro", href: "/upload" },
+    planKey: "pro",
   },
   {
     name: "Pro+",
@@ -87,10 +98,10 @@ export const pricingPlans: PricingPlan[] = [
     pages: "2,000 or 3,000 pages/month",
     description: "For larger monthly workloads.",
     features: PLAN_FEATURES,
-    cta: { label: "Start converting", href: "/upload" },
+    cta: { label: "Choose Pro+", href: "/upload" },
     tiers: [
-      { pages: "2,000 pages/month", price: "$60", priceSuffix: "/month" },
-      { pages: "3,000 pages/month", price: "$80", priceSuffix: "/month" },
+      { pages: "2,000 pages/month", price: "$60", priceSuffix: "/month", planKey: "pro_plus_2000" },
+      { pages: "3,000 pages/month", price: "$80", priceSuffix: "/month", planKey: "pro_plus_3000" },
     ],
     note: "Need more than 3,000 pages/month? Contact us.",
   },

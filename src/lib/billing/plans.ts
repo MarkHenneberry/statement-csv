@@ -44,7 +44,7 @@ export const PLANS: Record<PlanKey, Plan> = {
     displayName: "Minimum",
     monthlyPriceUsd: 10,
     monthlyPageAllowance: 100,
-    stripePriceIdEnv: "STRIPE_PRICE_ID_MINIMUM",
+    stripePriceIdEnv: "STRIPE_PRICE_MINIMUM",
     public: true,
   },
   plus: {
@@ -52,7 +52,7 @@ export const PLANS: Record<PlanKey, Plan> = {
     displayName: "Plus",
     monthlyPriceUsd: 25,
     monthlyPageAllowance: 500,
-    stripePriceIdEnv: "STRIPE_PRICE_ID_PLUS",
+    stripePriceIdEnv: "STRIPE_PRICE_PLUS",
     public: true,
   },
   pro: {
@@ -60,7 +60,7 @@ export const PLANS: Record<PlanKey, Plan> = {
     displayName: "Pro",
     monthlyPriceUsd: 40,
     monthlyPageAllowance: 1000,
-    stripePriceIdEnv: "STRIPE_PRICE_ID_PRO",
+    stripePriceIdEnv: "STRIPE_PRICE_PRO",
     public: true,
   },
   pro_plus_2000: {
@@ -68,7 +68,7 @@ export const PLANS: Record<PlanKey, Plan> = {
     displayName: "Pro+ (2,000 pages)",
     monthlyPriceUsd: 60,
     monthlyPageAllowance: 2000,
-    stripePriceIdEnv: "STRIPE_PRICE_ID_PRO_PLUS_2000",
+    stripePriceIdEnv: "STRIPE_PRICE_PRO_PLUS_2000",
     public: true,
   },
   pro_plus_3000: {
@@ -76,7 +76,7 @@ export const PLANS: Record<PlanKey, Plan> = {
     displayName: "Pro+ (3,000 pages)",
     monthlyPriceUsd: 80,
     monthlyPageAllowance: 3000,
-    stripePriceIdEnv: "STRIPE_PRICE_ID_PRO_PLUS_3000",
+    stripePriceIdEnv: "STRIPE_PRICE_PRO_PLUS_3000",
     public: true,
   },
 };

@@ -136,6 +136,16 @@ export function defaultFreeAccountFields(now: Date = new Date()): {
   };
 }
 
+/**
+ * True when a subscription's billing period has moved forward (renewal), i.e. the
+ * new period start is later than the stored one. Used to decide when to reset
+ * `pagesUsedThisPeriod` to 0. Comparing period starts keeps webhook handling
+ * idempotent: re-processing the same renewal event does not reset twice.
+ */
+export function periodAdvanced(prevStart: Date, newStart: Date): boolean {
+  return newStart.getTime() > prevStart.getTime();
+}
+
 /** Safe usage summary for the account page (allowance / used / remaining). */
 export function summarizeAccountUsage(
   account: Pick<BillingAccount, "monthlyPageAllowance" | "pagesUsedThisPeriod">,

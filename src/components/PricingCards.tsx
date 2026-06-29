@@ -1,5 +1,13 @@
-import Link from "next/link";
 import { pricingPlans } from "@/lib/pricing";
+import { PlanCheckoutButton } from "@/components/PlanCheckoutButton";
+
+// Shared CTA button classes (primary brand for the highlighted plan, dark slate
+// otherwise) — used by the checkout buttons on each card / tier.
+function ctaButtonClass(highlighted?: boolean): string {
+  return `inline-flex w-full items-center justify-center rounded-lg px-4 py-2.5 text-sm font-semibold transition ${
+    highlighted ? "bg-brand-600 text-white hover:bg-brand-700" : "bg-slate-900 text-white hover:bg-slate-800"
+  }`;
+}
 
 function CheckIcon() {
   return (
@@ -51,19 +59,29 @@ export function PricingCards() {
             {plan.description}
           </p>
           {plan.tiers ? (
-            <ul className="mt-4 space-y-1.5 rounded-lg bg-section p-3 text-sm text-slate-700">
+            <div className="mt-4 space-y-2">
               {plan.tiers.map((tier) => (
-                <li key={tier.pages} className="flex items-center justify-between gap-2">
-                  <span>{tier.pages}</span>
-                  <span className="font-semibold tabular-nums text-slate-900">
-                    {tier.price}
-                    {tier.priceSuffix ? (
-                      <span className="font-medium text-slate-500">{tier.priceSuffix}</span>
-                    ) : null}
-                  </span>
-                </li>
+                <div key={tier.pages} className="rounded-lg border border-slate-200 bg-section p-2.5">
+                  <div className="flex items-center justify-between gap-2 text-sm">
+                    <span className="text-slate-700">{tier.pages}</span>
+                    <span className="font-semibold tabular-nums text-slate-900">
+                      {tier.price}
+                      {tier.priceSuffix ? (
+                        <span className="font-medium text-slate-500">{tier.priceSuffix}</span>
+                      ) : null}
+                    </span>
+                  </div>
+                  {tier.planKey ? (
+                    <PlanCheckoutButton
+                      planKey={tier.planKey}
+                      label="Choose plan"
+                      className={ctaButtonClass(false)}
+                      containerClassName="mt-2"
+                    />
+                  ) : null}
+                </div>
               ))}
-            </ul>
+            </div>
           ) : null}
           <ul className="mt-6 flex-1 space-y-3">
             {plan.features.map((feature) => (
@@ -76,16 +94,13 @@ export function PricingCards() {
           {plan.note ? (
             <p className="mt-4 text-xs leading-relaxed text-slate-500">{plan.note}</p>
           ) : null}
-          <Link
-            href={plan.cta.href}
-            className={`mt-6 inline-flex w-full items-center justify-center rounded-lg px-4 py-2.5 text-sm font-semibold transition ${
-              plan.highlighted
-                ? "bg-brand-600 text-white hover:bg-brand-700"
-                : "bg-slate-900 text-white hover:bg-slate-800"
-            }`}
-          >
-            {plan.cta.label}
-          </Link>
+          {plan.planKey ? (
+            <PlanCheckoutButton
+              planKey={plan.planKey}
+              label={plan.cta.label}
+              className={ctaButtonClass(plan.highlighted)}
+            />
+          ) : null}
         </div>
       ))}
     </div>
