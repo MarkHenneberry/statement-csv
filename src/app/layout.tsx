@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
@@ -62,6 +63,17 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={inter.variable}>
+      <head>
+        {/* Privacy-friendly analytics by Plausible. No cookies, no personal data. */}
+        <Script
+          defer
+          src="https://plausible.io/js/pa-p0scjefA8r2RvleTbfYn1.js"
+          strategy="afterInteractive"
+        />
+        <Script id="plausible-init" strategy="afterInteractive">
+          {`window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}};plausible.init()`}
+        </Script>
+      </head>
       <body className="flex min-h-screen flex-col">
         <JsonLd data={organizationJsonLd()} />
         <Header />
