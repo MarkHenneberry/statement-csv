@@ -59,6 +59,10 @@ export async function POST(request: Request): Promise<NextResponse> {
       mode: "subscription",
       customer: customerId,
       line_items: [{ price: priceId, quantity: 1 }],
+      // Show the "Add promotion code" field so customers can redeem a Stripe
+      // promotion code (e.g. a first-month-free outreach code). Codes/coupons are
+      // created manually in the Stripe Dashboard, never by the app.
+      allow_promotion_codes: true,
       success_url: `${appUrl}/account?checkout=success`,
       cancel_url: `${appUrl}/pricing?checkout=cancelled`,
       client_reference_id: user.id,

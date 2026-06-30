@@ -83,6 +83,20 @@ check("period advanced when new start is later", periodAdvanced(t, new Date("202
 check("period not advanced when equal (idempotent)", periodAdvanced(t, new Date("2026-02-01T00:00:00Z")) === false);
 check("period not advanced when earlier", periodAdvanced(t, new Date("2026-01-01T00:00:00Z")) === false);
 
+// ----- Checkout Session config (static source guard; NO live Stripe call) -----
+{
+  const fs = await import("node:fs");
+  const checkoutSrc = fs.readFileSync(
+    new URL("../src/app/api/stripe/checkout/route.ts", import.meta.url),
+    "utf8",
+  );
+  check("checkout enables customer promotion codes", /allow_promotion_codes:\s*true/.test(checkoutSrc));
+  check("checkout stays in subscription mode", /mode:\s*["']subscription["']/.test(checkoutSrc));
+  check("checkout keeps userId + planKey metadata", /metadata:\s*\{\s*userId:\s*user\.id,\s*planKey\s*\}/.test(checkoutSrc));
+  // Price id is resolved server-side from the validated plan key — never client-supplied.
+  check("checkout resolves price id server-side from plan key", /priceIdForPlanKey\(planKey/.test(checkoutSrc));
+}
+
 console.log(
   failures === 0 ? `\nAll Stripe mapping checks passed.` : `\n${failures} Stripe check(s) failed.`,
 );
