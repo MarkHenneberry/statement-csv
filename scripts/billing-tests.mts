@@ -26,6 +26,13 @@ import {
   getPreviewLimits,
   evaluatePreviewAccess,
   previewWindowEnd,
+  parseInternalTesterEmails,
+  isInternalTesterEmail,
+  internalTesterAllowance,
+  isInternalTesterUser,
+  effectiveMonthlyAllowance,
+  effectiveRemainingPages,
+  evaluateAccountAccess,
 } from "../src/lib/billing/credits.ts";
 import { pricingPlans } from "../src/lib/pricing.ts";
 
@@ -246,6 +253,62 @@ check("nextPeriodEnd clamps month rollover (Jan 31 -> Feb)", nextPeriodEnd(new D
     "previewWindowEnd adds the window hours",
     previewWindowEnd(new Date("2026-06-29T00:00:00Z"), 12).toISOString().startsWith("2026-06-29T12:00:00"),
   );
+}
+
+// ----- internal tester mode (env-driven, server-side) -----
+{
+  // Parse + normalize the allowlist (comma / space / semicolon separated).
+  const list = parseInternalTesterEmails(" Mark@Example.com, andrew@HOTMAIL.com ;b@c.io ");
+  check(
+    "allowlist is trimmed + lowercased + split on separators",
+    list.length === 3 && list[0] === "mark@example.com" && list[1] === "andrew@hotmail.com" && list[2] === "b@c.io",
+    JSON.stringify(list),
+  );
+  check("empty/undefined allowlist parses to []", parseInternalTesterEmails(undefined).length === 0 && parseInternalTesterEmails("").length === 0);
+
+  const raw = "markhenneberry@outlook.com,andrewsmail7@hotmail.com";
+  // Case-insensitive + trimmed matching.
+  check("tester email matches case-insensitively + trimmed", isInternalTesterEmail("  MarkHenneberry@Outlook.com ", raw) === true);
+  check("second tester email matches", isInternalTesterEmail("andrewsmail7@hotmail.com", raw) === true);
+  check("non-allowlisted email is not a tester", isInternalTesterEmail("attacker@evil.com", raw) === false);
+  check("null / empty email is not a tester", isInternalTesterEmail(null, raw) === false && isInternalTesterEmail("", raw) === false);
+  check("no allowlist configured → nobody is a tester", isInternalTesterEmail("markhenneberry@outlook.com", undefined) === false);
+
+  // Env-reading convenience (does not touch real process.env — env passed in).
+  check(
+    "isInternalTesterUser reads INTERNAL_TESTER_EMAILS from env",
+    isInternalTesterUser("markhenneberry@outlook.com", { INTERNAL_TESTER_EMAILS: raw } as unknown as NodeJS.ProcessEnv) === true &&
+      isInternalTesterUser("nope@x.com", { INTERNAL_TESTER_EMAILS: raw } as unknown as NodeJS.ProcessEnv) === false,
+  );
+
+  // Allowance: default 100000, env override, garbage falls back.
+  check("tester allowance defaults to 100000", internalTesterAllowance(undefined) === 100000);
+  check("tester allowance reads env override", internalTesterAllowance("250000") === 250000);
+  check("tester allowance ignores garbage/non-positive", internalTesterAllowance("abc") === 100000 && internalTesterAllowance("0") === 100000);
+
+  // Effective allowance: tester gets max(testerAllowance, plan allowance); others unchanged.
+  const freeAcct = { monthlyPageAllowance: 0, pagesUsedThisPeriod: 0 };
+  check(
+    "tester effective allowance is the high tester value over a 0 plan",
+    effectiveMonthlyAllowance(freeAcct, { internalTester: true, testerAllowance: 100000 }) === 100000,
+  );
+  check(
+    "non-tester effective allowance is unchanged (0 stays 0)",
+    effectiveMonthlyAllowance(freeAcct, { internalTester: false, testerAllowance: 100000 }) === 0,
+  );
+  check(
+    "tester effective remaining subtracts used from the high allowance",
+    effectiveRemainingPages({ monthlyPageAllowance: 0, pagesUsedThisPeriod: 40 }, { internalTester: true, testerAllowance: 100000 }) === 99960,
+  );
+
+  // evaluateAccountAccess: tester allowed without a Stripe plan; normal free blocked.
+  const testerAccess = evaluateAccountAccess(freeAcct, 6, { internalTester: true, testerAllowance: 100000 });
+  check("internal tester is allowed without a Stripe subscription", testerAccess.allowed === true && testerAccess.remaining === 100000);
+  const normalFree = evaluateAccountAccess(freeAcct, 6, { internalTester: false, testerAllowance: 100000 });
+  check("normal free user (allowance 0) is still PLAN_REQUIRED", normalFree.allowed === false && normalFree.code === "PLAN_REQUIRED");
+  // Normal paid behavior is unchanged by tester mode being off.
+  const paidShort = evaluateAccountAccess({ monthlyPageAllowance: 100, pagesUsedThisPeriod: 97 }, 6, { internalTester: false, testerAllowance: 100000 });
+  check("normal paid-but-short still blocks with INSUFFICIENT_PAGE_CREDITS", paidShort.allowed === false && paidShort.code === "INSUFFICIENT_PAGE_CREDITS");
 }
 
 // ----- account usage summary (free + paid shapes) -----

@@ -241,6 +241,97 @@ export function previewWindowEnd(start: Date, windowHours: number): Date {
   return new Date(start.getTime() + windowHours * 60 * 60 * 1000);
 }
 
+// ----- Internal tester mode -------------------------------------------------
+// Specific internal tester emails (set server-side via INTERNAL_TESTER_EMAILS) get
+// a high monthly allowance (INTERNAL_TESTER_MONTHLY_PAGE_ALLOWANCE) so they can use
+// the converter without a live Stripe subscription. This is PURELY env-driven and
+// server-side: there is no DB flag and no client input that can activate it. The
+// allowlist is never sent to the client. Remove an email from the env var and that
+// account immediately reverts to normal free/paid behavior.
+
+const DEFAULT_INTERNAL_TESTER_ALLOWANCE = 100000;
+
+/** Parse + normalize (trim/lowercase) the comma/space/semicolon-separated allowlist. */
+export function parseInternalTesterEmails(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(/[,;\s]+/)
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/** True when `email` is in the (raw env) allowlist. Case-insensitive + trimmed. */
+export function isInternalTesterEmail(
+  email: string | null | undefined,
+  rawAllowlist: string | undefined,
+): boolean {
+  if (!email) return false;
+  return parseInternalTesterEmails(rawAllowlist).includes(email.trim().toLowerCase());
+}
+
+/** The configured internal-tester monthly allowance (clamped to a positive int). */
+export function internalTesterAllowance(
+  raw: string | undefined,
+  fallback: number = DEFAULT_INTERNAL_TESTER_ALLOWANCE,
+): number {
+  const n = Number.parseInt(raw ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/** Server convenience: is this (authenticated) email an internal tester? */
+export function isInternalTesterUser(
+  email: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return isInternalTesterEmail(email, env.INTERNAL_TESTER_EMAILS);
+}
+
+/** Server convenience: the configured internal-tester allowance from env. */
+export function getInternalTesterAllowance(env: NodeJS.ProcessEnv = process.env): number {
+  return internalTesterAllowance(env.INTERNAL_TESTER_MONTHLY_PAGE_ALLOWANCE);
+}
+
+/**
+ * Effective monthly allowance for access/charge decisions. For an internal tester
+ * it is the larger of the configured tester allowance and any real plan allowance;
+ * for everyone else it is exactly the account's own allowance (no change).
+ */
+export function effectiveMonthlyAllowance(
+  account: Pick<BillingAccount, "monthlyPageAllowance">,
+  opts: { internalTester: boolean; testerAllowance: number },
+): number {
+  return opts.internalTester
+    ? Math.max(opts.testerAllowance, account.monthlyPageAllowance)
+    : account.monthlyPageAllowance;
+}
+
+/** Effective remaining pages using the effective allowance (never negative). */
+export function effectiveRemainingPages(
+  account: Pick<BillingAccount, "monthlyPageAllowance" | "pagesUsedThisPeriod">,
+  opts: { internalTester: boolean; testerAllowance: number },
+): number {
+  return Math.max(0, effectiveMonthlyAllowance(account, opts) - account.pagesUsedThisPeriod);
+}
+
+/**
+ * Decide whether an account may process a PDF, honoring internal-tester mode. For a
+ * normal account this is identical to evaluateUploadAccess; for a tester it uses the
+ * effective (high) allowance so they are never blocked under their allowance.
+ */
+export function evaluateAccountAccess(
+  account: Pick<BillingAccount, "monthlyPageAllowance" | "pagesUsedThisPeriod">,
+  pageCount: number,
+  opts: { internalTester: boolean; testerAllowance: number },
+): UploadAccessDecision {
+  return evaluateUploadAccess(
+    {
+      monthlyPageAllowance: effectiveMonthlyAllowance(account, opts),
+      pagesUsedThisPeriod: account.pagesUsedThisPeriod,
+    },
+    pageCount,
+  );
+}
+
 /** Safe usage summary for the account page (allowance / used / remaining). */
 export function summarizeAccountUsage(
   account: Pick<BillingAccount, "monthlyPageAllowance" | "pagesUsedThisPeriod">,

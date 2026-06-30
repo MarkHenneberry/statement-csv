@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/supabase/server";
 import { chargeReviewExport } from "@/lib/billing/charge";
+import { isInternalTesterUser, getInternalTesterAllowance } from "@/lib/billing/credits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,7 +24,13 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ ok: false, error: "BAD_REQUEST" }, { status: 400 });
   }
 
-  const result = await chargeReviewExport(conversionId, user.id);
+  // Internal testers get the same high effective allowance here as in the parse
+  // route, so a review export is never blocked under their allowance. Server-side
+  // email match only — the client cannot supply or influence this.
+  const effectiveAllowance = isInternalTesterUser(user.email)
+    ? getInternalTesterAllowance()
+    : undefined;
+  const result = await chargeReviewExport(conversionId, user.id, effectiveAllowance);
   if (!result.ok) {
     const status =
       result.error === "FORBIDDEN"

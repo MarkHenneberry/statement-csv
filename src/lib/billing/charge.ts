@@ -1,6 +1,5 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import { getRemainingPages } from "./credits";
 
 // Single server-only entry point for deducting page credits for a conversion.
 // Idempotent + race-safe: the charge is "claimed" with an atomic conditional
@@ -27,8 +26,20 @@ async function chargeConversion(
   conversionId: string,
   userId: string,
   reason: ChargeReason,
-  opts: { requireReviewStatus?: boolean } = {},
+  opts: { requireReviewStatus?: boolean; effectiveAllowance?: number } = {},
 ): Promise<ChargeResult> {
+  // Remaining pages honoring an OPTIONAL effective allowance override (used for
+  // internal testers, whose effective allowance is higher than their stored plan
+  // allowance). When no override is given this is exactly getRemainingPages, so
+  // normal free/paid charging is unchanged.
+  const remainingFor = (acct: { monthlyPageAllowance: number; pagesUsedThisPeriod: number }) => {
+    const allowance =
+      opts.effectiveAllowance != null
+        ? Math.max(opts.effectiveAllowance, acct.monthlyPageAllowance)
+        : acct.monthlyPageAllowance;
+    return Math.max(0, allowance - acct.pagesUsedThisPeriod);
+  };
+
   return prisma.$transaction(async (tx) => {
     const conv = await tx.conversion.findUnique({ where: { id: conversionId } });
     if (!conv) return { ok: false, error: "NOT_FOUND" };
@@ -40,7 +51,7 @@ async function chargeConversion(
       return {
         ok: true,
         chargedPages: conv.creditsCharged,
-        pagesRemaining: acct ? getRemainingPages(acct) : 0,
+        pagesRemaining: acct ? remainingFor(acct) : 0,
         alreadyCharged: true,
       };
     }
@@ -53,7 +64,7 @@ async function chargeConversion(
     const pages = conv.pageCount;
     const acct = await tx.billingAccount.findUnique({ where: { userId } });
     if (!acct) return { ok: false, error: "NOT_FOUND" };
-    if (getRemainingPages(acct) < pages) {
+    if (remainingFor(acct) < pages) {
       return { ok: false, error: "INSUFFICIENT_PAGE_CREDITS" };
     }
 
@@ -69,7 +80,7 @@ async function chargeConversion(
       return {
         ok: true,
         chargedPages: fresh?.creditsCharged ?? pages,
-        pagesRemaining: freshAcct ? getRemainingPages(freshAcct) : 0,
+        pagesRemaining: freshAcct ? remainingFor(freshAcct) : 0,
         alreadyCharged: true,
       };
     }
@@ -85,18 +96,33 @@ async function chargeConversion(
     return {
       ok: true,
       chargedPages: pages,
-      pagesRemaining: getRemainingPages(acct) - pages,
+      pagesRemaining: remainingFor(acct) - pages,
       alreadyCharged: false,
     };
   });
 }
 
-/** Charge a verified conversion (called server-side right after a verified parse). */
-export function chargeVerifiedConversion(conversionId: string, userId: string): Promise<ChargeResult> {
-  return chargeConversion(conversionId, userId, "verified_conversion");
+/**
+ * Charge a verified conversion (called server-side right after a verified parse).
+ * `effectiveAllowance` (optional) raises the remaining-pages ceiling for internal
+ * testers; omit it for normal accounts (behavior unchanged).
+ */
+export function chargeVerifiedConversion(
+  conversionId: string,
+  userId: string,
+  effectiveAllowance?: number,
+): Promise<ChargeResult> {
+  return chargeConversion(conversionId, userId, "verified_conversion", { effectiveAllowance });
 }
 
 /** Charge a review-highlighted conversion when (and only when) the user exports. */
-export function chargeReviewExport(conversionId: string, userId: string): Promise<ChargeResult> {
-  return chargeConversion(conversionId, userId, "review_export", { requireReviewStatus: true });
+export function chargeReviewExport(
+  conversionId: string,
+  userId: string,
+  effectiveAllowance?: number,
+): Promise<ChargeResult> {
+  return chargeConversion(conversionId, userId, "review_export", {
+    requireReviewStatus: true,
+    effectiveAllowance,
+  });
 }

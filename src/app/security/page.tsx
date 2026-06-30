@@ -60,29 +60,56 @@ function DoNotStore() {
   );
 }
 
-function VerifyBeforeLaunch() {
-  const items = [
-    "Temporary file deletion",
-    "Parser output deletion",
-    "Production logging policy",
-    "No statement data in logs",
-    "No transaction descriptions in logs",
-    "No account numbers in logs",
-    "No stored extracted rows",
-    "Third-party AI provider disclosure (guided AI verification sends rendered statement images to an external AI service)",
-    "Privacy policy review before public launch",
+function StoreCard({
+  title,
+  tone,
+  items,
+}: {
+  title: string;
+  tone: "store" | "no-store";
+  items: string[];
+}) {
+  const isStore = tone === "store";
+  const iconColor = isStore ? "text-brand-600" : "text-slate-400";
+  return (
+    <div className="rounded-xl border border-slate-200 bg-section p-6 shadow-card">
+      <h3 className="text-base font-semibold text-slate-900">{title}</h3>
+      <ul className="mt-4 space-y-3">
+        {items.map((item) => (
+          <li key={item} className="flex gap-3 text-sm leading-relaxed text-slate-700">
+            <svg className={`mt-0.5 h-5 w-5 flex-none ${iconColor}`} viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              {isStore ? (
+                <path fillRule="evenodd" d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.5 7.6a1 1 0 0 1-1.43.005l-3.5-3.55a1 1 0 1 1 1.424-1.404l2.786 2.826 6.79-6.885a1 1 0 0 1 1.414-.006Z" clipRule="evenodd" />
+              ) : (
+                <path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM6.28 6.28a.75.75 0 0 1 1.06 0L10 8.94l2.66-2.66a.75.75 0 1 1 1.06 1.06L11.06 10l2.66 2.66a.75.75 0 1 1-1.06 1.06L10 11.06l-2.66 2.66a.75.75 0 0 1-1.06-1.06L8.94 10 6.28 7.34a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+              )}
+            </svg>
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function WhatWeStore() {
+  const stored = [
+    "Account and billing details — your email, plan, and subscription status.",
+    "Conversion metadata — page count, conversion status, balance-check result, page credits used, and timestamps.",
+    "Free-preview tracking — quota counts plus a hashed, anonymous preview identifier (not your statement).",
+  ];
+  const notStored = [
+    "Your uploaded PDF files.",
+    "Extracted PDF text, transaction rows, descriptions, or balances.",
+    "Rendered statement images.",
+    "Exported CSV or Excel files.",
+    "AI prompts or AI responses.",
   ];
   return (
-    <ul className="mt-8 grid gap-3 sm:grid-cols-2">
-      {items.map((item) => (
-        <li key={item} className="flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-          <svg className="mt-0.5 h-4 w-4 flex-none text-amber-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-            <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 6a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 6Zm0 8a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" />
-          </svg>
-          <span>{item}</span>
-        </li>
-      ))}
-    </ul>
+    <div className="mt-8 grid gap-4 sm:grid-cols-2">
+      <StoreCard title="What we may store" tone="store" items={stored} />
+      <StoreCard title="What we do not store" tone="no-store" items={notStored} />
+    </div>
   );
 }
 
@@ -116,13 +143,6 @@ export default function SecurityPage() {
             title="How your file is handled"
             description="You work only from the PDF you already have — there is no connection to your bank."
           />
-          {/*
-            TODO(launch-blocker): The handling described here is the intended
-            design. Before launch we must implement and VERIFY in production:
-            temporary file deletion, parser output deletion, no statement content
-            (descriptions, balances, account numbers, rows) in logs, and a
-            finalized production logging policy.
-          */}
           <div className="mt-6 space-y-4 text-base leading-relaxed text-slate-700">
             <p>
               You upload a PDF statement, the converter extracts the transaction rows, and
@@ -131,10 +151,12 @@ export default function SecurityPage() {
               anyone to misuse.
             </p>
             <p>
-              Your statement is processed to create your spreadsheet file and is not sold
-              or used for marketing or ads. We avoid using your original PDF directly as the
-              AI input — when guided AI verification is used, it works from rendered
-              statement images sent to a third-party AI provider, not your original PDF.
+              Your uploaded PDF and its extracted text are processed in memory during the
+              conversion — they are not written to a database or file storage. Your statement
+              is used to create your spreadsheet file and is not sold or used for marketing or
+              ads. We avoid using your original PDF directly as the AI input — when guided AI
+              verification is used, it works from rendered statement images sent to a
+              third-party AI provider, not your original PDF.
             </p>
           </div>
         </div>
@@ -150,14 +172,17 @@ export default function SecurityPage() {
       <Section muted>
         <div className="mx-auto max-w-3xl">
           <SectionHeading
-            title="What needs to be verified before launch"
-            description="Being honest matters more than sounding polished. These items must be implemented and verified in the production parser pipeline before public launch."
+            title="What StatementCSV stores — and what it doesn’t"
+            description="Your statement is processed in memory during conversion. We keep the metadata needed to run your account and credits, not the contents of your statement."
           />
-          <VerifyBeforeLaunch />
-          <p className="mt-6 text-sm text-slate-500">
-            We avoid absolute claims like &ldquo;zero data retention&rdquo; or
-            &ldquo;encrypted and deleted instantly&rdquo; until they are implemented and
-            verified. Where the backend is not finished, we say &ldquo;designed to.&rdquo;
+          <WhatWeStore />
+          <p className="mt-6 text-sm leading-relaxed text-slate-600">
+            Payments are handled by Stripe — card and payment details are entered on Stripe,
+            and StatementCSV does not store card numbers. StatementCSV uses parser-first
+            extraction; when a conversion needs verification, guided AI verification may send
+            rendered statement images to an external AI provider. Conversions are balance-checked
+            where possible, and rows that need a second look are highlighted — review highlighted
+            rows before relying on an export.
           </p>
         </div>
       </Section>

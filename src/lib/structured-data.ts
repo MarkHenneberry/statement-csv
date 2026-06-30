@@ -23,7 +23,7 @@ export function softwareApplicationJsonLd() {
     offers: {
       "@type": "Offer",
       price: "5.00",
-      priceCurrency: "USD",
+      priceCurrency: "CAD",
     },
   };
 }

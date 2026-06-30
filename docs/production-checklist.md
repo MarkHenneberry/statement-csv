@@ -47,6 +47,16 @@ actual values in the Vercel project settings (and never commit them).
 | `AI_ASSIST_MODEL` | Text/structuring model id. | set |
 | `AI_VISION_MODEL` | Vision-capable model id (falls back to `AI_ASSIST_MODEL`). | set |
 
+### Internal testers (optional)
+| Variable | Purpose | Default |
+|---|---|---|
+| `INTERNAL_TESTER_EMAILS` | Comma-separated allowlist of internal tester emails (matched against the validated Supabase email, case-insensitive). Leave unset to disable. | unset (feature off) |
+| `INTERNAL_TESTER_MONTHLY_PAGE_ALLOWANCE` | High monthly page allowance granted to tester accounts. | `100000` |
+
+> Server-side only — never `NEXT_PUBLIC_`. Testers use the normal paid path (conversion
+> records + idempotent charges + usage tracking) but never create Stripe subscriptions.
+> Removing an email from the list immediately reverts that account to normal behavior.
+
 ### Free preview quota
 | Variable | Purpose | Default |
 |---|---|---|

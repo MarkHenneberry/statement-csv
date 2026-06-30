@@ -37,7 +37,14 @@ import {
 import { analyzePreviewLimit } from "@/lib/free-preview";
 import { getAuthenticatedUser } from "@/lib/supabase/server";
 import { ensureAppAccount } from "@/lib/billing/account";
-import { evaluateUploadAccess, getRemainingPages, getPreviewLimits } from "@/lib/billing/credits";
+import {
+  evaluateAccountAccess,
+  effectiveRemainingPages,
+  effectiveMonthlyAllowance,
+  isInternalTesterUser,
+  getInternalTesterAllowance,
+  getPreviewLimits,
+} from "@/lib/billing/credits";
 import { createConversionRecord } from "@/lib/billing/repo";
 import { chargeVerifiedConversion } from "@/lib/billing/charge";
 import {
@@ -202,6 +209,18 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
   }
 
+  // Internal-tester mode (server-side, env-driven only). The allowlist is matched
+  // against the VALIDATED Supabase email — never a client-supplied value. Testers
+  // get a high effective allowance and use the normal paid path (conversion record +
+  // idempotent charge + usage tracking), but never create Stripe subscriptions.
+  const internalTester = authUser != null && isInternalTesterUser(authUser.email);
+  const testerAllowance = internalTester ? getInternalTesterAllowance() : 0;
+  const testerOpts = { internalTester, testerAllowance };
+  // Effective allowance passed to the charge helpers so a tester (whose stored plan
+  // allowance is 0) is not blocked. undefined for normal accounts (no behavior change).
+  const chargeAllowance =
+    account && internalTester ? effectiveMonthlyAllowance(account, testerOpts) : undefined;
+
   let extracted;
   let pdfBytes: Uint8Array | null = null;
   try {
@@ -241,10 +260,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   // ----- Quota gate: block BEFORE the parser/AI run -----
-  // Paid accounts (allowance > 0) use BillingAccount credits; everyone else
-  // (signed-out OR signed-in free) uses the free-preview quota. Neither path runs
-  // the parser/AI until the gate passes.
-  const isPaid = account != null && account.monthlyPageAllowance > 0;
+  // Paid accounts (allowance > 0) and internal testers use BillingAccount credits;
+  // everyone else (signed-out OR signed-in free) uses the free-preview quota. Neither
+  // path runs the parser/AI until the gate passes.
+  const isPaid = account != null && effectiveMonthlyAllowance(account, testerOpts) > 0;
   const billingMode: "paid" | "preview" = isPaid ? "paid" : "preview";
 
   // Preview-mode state captured at gate time (set only when billingMode==="preview").
@@ -252,7 +271,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   let previewRemainingBefore: number | null = null;
 
   if (billingMode === "paid") {
-    const access = evaluateUploadAccess(account!, pdfPageCount);
+    const access = evaluateAccountAccess(account!, pdfPageCount, testerOpts);
     if (!access.allowed) {
       const message =
         access.code === "PLAN_REQUIRED"
@@ -304,7 +323,7 @@ export async function POST(request: Request): Promise<NextResponse> {
             status: "failed",
             charged: false,
             chargedPages: 0,
-            pagesRemaining: getRemainingPages(account),
+            pagesRemaining: effectiveRemainingPages(account, testerOpts),
           }
         : undefined;
     } else {
@@ -640,14 +659,14 @@ export async function POST(request: Request): Promise<NextResponse> {
         creditsCharged: 0,
       });
       if (convStatus === "verified") {
-        const charge = await chargeVerifiedConversion(conv.id, authUser!.id);
+        const charge = await chargeVerifiedConversion(conv.id, authUser!.id, chargeAllowance);
         billing = {
           mode: "paid",
           conversionId: conv.id,
           status: "verified",
           charged: charge.ok,
           chargedPages: charge.ok ? charge.chargedPages : 0,
-          pagesRemaining: charge.ok ? charge.pagesRemaining : getRemainingPages(account),
+          pagesRemaining: charge.ok ? charge.pagesRemaining : effectiveRemainingPages(account, testerOpts),
         };
       } else {
         billing = {
@@ -656,7 +675,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           status: convStatus,
           charged: false,
           chargedPages: 0,
-          pagesRemaining: getRemainingPages(account),
+          pagesRemaining: effectiveRemainingPages(account, testerOpts),
           requiredPages: pdfPageCount,
         };
       }

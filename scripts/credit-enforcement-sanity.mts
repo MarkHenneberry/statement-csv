@@ -22,7 +22,6 @@
 
 import { PrismaClient } from "@prisma/client";
 import {
-  getRemainingPages,
   getPreviewLimits,
   evaluatePreviewAccess,
   previewWindowEnd,
@@ -52,13 +51,21 @@ type ChargeResult =
   | { ok: true; chargedPages: number; pagesRemaining: number; alreadyCharged: boolean }
   | { ok: false; error: "NOT_FOUND" | "FORBIDDEN" | "NOT_CHARGEABLE" | "INSUFFICIENT_PAGE_CREDITS" };
 
-// Mirror of chargeConversion() in src/lib/billing/charge.ts.
+// Mirror of chargeConversion() in src/lib/billing/charge.ts (incl. the optional
+// effectiveAllowance override used for internal testers).
 async function chargeConversion(
   conversionId: string,
   userId: string,
   reason: "verified_conversion" | "review_export",
-  opts: { requireReviewStatus?: boolean } = {},
+  opts: { requireReviewStatus?: boolean; effectiveAllowance?: number } = {},
 ): Promise<ChargeResult> {
+  const remainingFor = (acct: { monthlyPageAllowance: number; pagesUsedThisPeriod: number }) => {
+    const allowance =
+      opts.effectiveAllowance != null
+        ? Math.max(opts.effectiveAllowance, acct.monthlyPageAllowance)
+        : acct.monthlyPageAllowance;
+    return Math.max(0, allowance - acct.pagesUsedThisPeriod);
+  };
   return prisma.$transaction(async (tx) => {
     const conv = await tx.conversion.findUnique({ where: { id: conversionId } });
     if (!conv) return { ok: false, error: "NOT_FOUND" };
@@ -68,7 +75,7 @@ async function chargeConversion(
       return {
         ok: true,
         chargedPages: conv.creditsCharged,
-        pagesRemaining: acct ? getRemainingPages(acct) : 0,
+        pagesRemaining: acct ? remainingFor(acct) : 0,
         alreadyCharged: true,
       };
     }
@@ -78,7 +85,7 @@ async function chargeConversion(
     const pages = conv.pageCount;
     const acct = await tx.billingAccount.findUnique({ where: { userId } });
     if (!acct) return { ok: false, error: "NOT_FOUND" };
-    if (getRemainingPages(acct) < pages) return { ok: false, error: "INSUFFICIENT_PAGE_CREDITS" };
+    if (remainingFor(acct) < pages) return { ok: false, error: "INSUFFICIENT_PAGE_CREDITS" };
 
     const claim = await tx.conversion.updateMany({
       where: { id: conversionId, userId, chargedAt: null },
@@ -90,7 +97,7 @@ async function chargeConversion(
       return {
         ok: true,
         chargedPages: fresh?.creditsCharged ?? pages,
-        pagesRemaining: freshAcct ? getRemainingPages(freshAcct) : 0,
+        pagesRemaining: freshAcct ? remainingFor(freshAcct) : 0,
         alreadyCharged: true,
       };
     }
@@ -99,7 +106,7 @@ async function chargeConversion(
       data: { pagesUsedThisPeriod: { increment: pages } },
     });
     await tx.pageCreditLedger.create({ data: { userId, conversionId, deltaPages: -pages, reason } });
-    return { ok: true, chargedPages: pages, pagesRemaining: getRemainingPages(acct) - pages, alreadyCharged: false };
+    return { ok: true, chargedPages: pages, pagesRemaining: remainingFor(acct) - pages, alreadyCharged: false };
   });
 }
 
@@ -236,6 +243,44 @@ async function main(): Promise<void> {
     const r = await chargeConversion(conv.id, uid, "verified_conversion");
     check("insufficient credits block the charge", !r.ok && r.error === "INSUFFICIENT_PAGE_CREDITS", JSON.stringify(r));
     check("insufficient case leaves usage unchanged (97)", (await usedPages(uid)) === 97);
+  }
+
+  // 6. Internal tester: high EFFECTIVE allowance lets a 0-plan account convert
+  //    without a Stripe subscription, while usage is still tracked + idempotent.
+  {
+    const uid = await makeUser("tester", 0, 0); // no plan allowance
+    const conv = await makeConversion(uid, "verified", 8);
+    // Without the override, a 0-allowance account is blocked (proves the override is the only lever).
+    const blocked = await chargeConversion(conv.id, uid, "verified_conversion");
+    check("0-allowance account is blocked WITHOUT tester override", !blocked.ok && blocked.error === "INSUFFICIENT_PAGE_CREDITS", JSON.stringify(blocked));
+    // With the tester effective allowance, the same charge succeeds.
+    const ok = await chargeConversion(conv.id, uid, "verified_conversion", { effectiveAllowance: 100000 });
+    check("internal tester verified charge succeeds without a subscription", ok.ok && ok.chargedPages === 8 && ok.alreadyCharged === false, JSON.stringify(ok));
+    check("internal tester usage is tracked (8 pages used)", (await usedPages(uid)) === 8);
+    check("internal tester remaining reflects the high allowance", ok.ok && ok.pagesRemaining === 100000 - 8);
+    const again = await chargeConversion(conv.id, uid, "verified_conversion", { effectiveAllowance: 100000 });
+    check("internal tester repeated charge is idempotent", again.ok && again.alreadyCharged === true);
+    check("internal tester usage stays at 8 after repeat", (await usedPages(uid)) === 8);
+  }
+
+  // 7. Internal tester failed conversion uses 0 pages.
+  {
+    const uid = await makeUser("tester-failed", 0, 0);
+    const conv = await makeConversion(uid, "failed", 5);
+    const r = await chargeConversion(conv.id, uid, "review_export", { requireReviewStatus: true, effectiveAllowance: 100000 });
+    check("internal tester failed conversion is NOT_CHARGEABLE", !r.ok && r.error === "NOT_CHARGEABLE", JSON.stringify(r));
+    check("internal tester failed conversion uses 0 pages", (await usedPages(uid)) === 0);
+  }
+
+  // 8. Internal tester review export is idempotent (no double charge).
+  {
+    const uid = await makeUser("tester-review", 0, 0);
+    const conv = await makeConversion(uid, "review", 4);
+    const r1 = await chargeConversion(conv.id, uid, "review_export", { requireReviewStatus: true, effectiveAllowance: 100000 });
+    check("internal tester review export charges once", r1.ok && r1.chargedPages === 4 && r1.alreadyCharged === false, JSON.stringify(r1));
+    const r2 = await chargeConversion(conv.id, uid, "review_export", { requireReviewStatus: true, effectiveAllowance: 100000 });
+    check("internal tester review export is idempotent", r2.ok && r2.alreadyCharged === true, JSON.stringify(r2));
+    check("internal tester review export usage stays at 4", (await usedPages(uid)) === 4);
   }
 
   // ----- Free-preview quota (anonymous + signed-in-free) -----

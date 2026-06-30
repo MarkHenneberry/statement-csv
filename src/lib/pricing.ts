@@ -107,7 +107,7 @@ export const pricingPlans: PricingPlan[] = [
 ];
 
 export const pricingFooter =
-  "Prices are in USD and based on the number of PDF pages processed. Page credits apply to digital " +
+  "Prices are in CAD and based on the number of PDF pages processed. Page credits apply to digital " +
   "PDF statements. Scanned or image-based statements are not currently supported.";
 
 // Plain-language page-credit rules, shown on the pricing page.

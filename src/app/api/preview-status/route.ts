@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/supabase/server";
 import { ensureAppAccount } from "@/lib/billing/account";
-import { getRemainingPages, getPreviewLimits } from "@/lib/billing/credits";
+import {
+  getPreviewLimits,
+  isInternalTesterUser,
+  getInternalTesterAllowance,
+  effectiveMonthlyAllowance,
+  effectiveRemainingPages,
+} from "@/lib/billing/credits";
 import {
   resolvePreviewSubject,
   getPreviewUsageSnapshot,
@@ -17,16 +23,21 @@ export const dynamic = "force-dynamic";
 export async function GET(): Promise<NextResponse> {
   const authUser = await getAuthenticatedUser();
 
-  // Paid path: signed-in with a monthly allowance.
+  // Paid path: signed-in with a monthly allowance (or an internal tester, whose
+  // effective allowance is high). Reported as "paid" so the header/upload pill shows
+  // the remaining page credits rather than the free-preview count.
   if (authUser) {
     try {
       const { account } = await ensureAppAccount(authUser);
-      if (account.monthlyPageAllowance > 0) {
+      const internalTester = isInternalTesterUser(authUser.email);
+      const testerOpts = { internalTester, testerAllowance: internalTester ? getInternalTesterAllowance() : 0 };
+      const allowance = effectiveMonthlyAllowance(account, testerOpts);
+      if (allowance > 0) {
         return NextResponse.json({
           mode: "paid" as const,
           signedIn: true,
-          paidPagesRemaining: getRemainingPages(account),
-          monthlyPageAllowance: account.monthlyPageAllowance,
+          paidPagesRemaining: effectiveRemainingPages(account, testerOpts),
+          monthlyPageAllowance: allowance,
         });
       }
     } catch {

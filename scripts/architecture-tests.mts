@@ -402,6 +402,36 @@ const CARD_WITH_REMITTANCE = [
   );
 }
 
+// 16. Internal-tester mode is server-side + env-driven only (no client activation).
+{
+  const fs = await import("node:fs");
+  const read = (rel: string) => fs.readFileSync(new URL(rel, import.meta.url), "utf8");
+
+  const routeSrc = read("../src/app/api/parse-statement/route.ts");
+  // Tester status is derived from the VALIDATED Supabase email, not client input.
+  check(
+    "parse route derives internal-tester from the authenticated email",
+    /isInternalTesterUser\(authUser\.email\)/.test(routeSrc),
+  );
+  // The allowlist env var is read only server-side (never NEXT_PUBLIC_, never inlined to the client).
+  const creditsSrc = read("../src/lib/billing/credits.ts");
+  check(
+    "tester allowlist is read from a non-public server env var",
+    /env\.INTERNAL_TESTER_EMAILS/.test(creditsSrc) && !/NEXT_PUBLIC_INTERNAL_TESTER/.test(creditsSrc),
+  );
+  // No client component may reference the tester env vars (would leak / be inert anyway).
+  const clientFiles = [
+    "../src/components/Header.tsx",
+    "../src/components/HeaderCreditPill.tsx",
+    "../src/components/upload/UploadFlow.tsx",
+  ];
+  let leak = "";
+  for (const rel of clientFiles) {
+    if (/INTERNAL_TESTER/.test(read(rel))) leak += `${rel} `;
+  }
+  check("no client component references INTERNAL_TESTER env vars", leak === "", leak);
+}
+
 // 15. Public copy contains no unsupported/inaccurate claims.
 {
   const fs = await import("node:fs");

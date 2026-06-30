@@ -18,7 +18,10 @@ export type Plan = {
   key: PlanKey;
   /** Internal display name. Public pricing copy lives in src/lib/pricing.ts. */
   displayName: string;
-  /** Monthly price in USD (0 for the free preview tier). */
+  /**
+   * Monthly price in CAD (0 for the free preview tier) — Stripe Checkout charges in
+   * CAD. The field name is retained for compatibility; the value is Canadian dollars.
+   */
   monthlyPriceUsd: number;
   /** Monthly page-credit allowance. Free relies on the separate preview path (0 credits). */
   monthlyPageAllowance: number;

@@ -3,7 +3,14 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthenticatedUser } from "@/lib/supabase/server";
 import { ensureAppAccount } from "@/lib/billing/account";
-import { summarizeAccountUsage, getPreviewLimits } from "@/lib/billing/credits";
+import {
+  summarizeAccountUsage,
+  getPreviewLimits,
+  isInternalTesterUser,
+  getInternalTesterAllowance,
+  effectiveMonthlyAllowance,
+  effectiveRemainingPages,
+} from "@/lib/billing/credits";
 import { PLANS, type PlanKey } from "@/lib/billing/plans";
 import { SignOutButton } from "@/components/auth/SignOutButton";
 import { ManageBillingButton } from "@/components/auth/ManageBillingButton";
@@ -43,12 +50,28 @@ export default async function AccountPage({
 
   // Idempotent: ensures the app User + default free BillingAccount exist.
   const { account } = await ensureAppAccount(user);
-  const usage = summarizeAccountUsage(account);
-  const plan = PLANS[account.planKey as PlanKey] ?? PLANS.free;
+
+  // Internal-tester mode (server-side, env-driven). Shows a high effective allowance
+  // and a clear "Internal tester" plan label, and suppresses upgrade prompts. No DB
+  // flag — purely derived from the validated email + env allowlist.
+  const internalTester = isInternalTesterUser(user.email);
+  const testerOpts = { internalTester, testerAllowance: internalTester ? getInternalTesterAllowance() : 0 };
+
+  const usage = internalTester
+    ? {
+        monthlyPageAllowance: effectiveMonthlyAllowance(account, testerOpts),
+        pagesUsedThisPeriod: account.pagesUsedThisPeriod,
+        remaining: effectiveRemainingPages(account, testerOpts),
+      }
+    : summarizeAccountUsage(account);
+  const planLabel = internalTester
+    ? "Internal tester"
+    : (PLANS[account.planKey as PlanKey] ?? PLANS.free).displayName;
   const periodEnd = account.currentPeriodEnd.toISOString().slice(0, 10);
-  const statusLabel = STATUS_LABEL[account.status] ?? account.status;
+  const statusLabel = internalTester ? "Internal tester" : STATUS_LABEL[account.status] ?? account.status;
   const { checkout } = await searchParams;
-  const showPlansLink = account.status === "free" || account.status === "canceled";
+  // Testers never see upgrade prompts while under their internal allowance.
+  const showPlansLink = !internalTester && (account.status === "free" || account.status === "canceled");
 
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-12 sm:py-16">
@@ -67,7 +90,7 @@ export default async function AccountPage({
       <div className="mt-6 rounded-xl border border-slate-200 bg-surface p-6 shadow-card">
         <dl>
           <Row label="Email" value={user.email} />
-          <Row label="Current plan" value={plan.displayName} />
+          <Row label="Current plan" value={planLabel} />
           <Row label="Subscription status" value={statusLabel} />
           <Row label="Pages used this period" value={String(usage.pagesUsedThisPeriod)} />
           <Row label="Pages remaining" value={String(usage.remaining)} />
@@ -87,7 +110,14 @@ export default async function AccountPage({
         </div>
       </div>
 
-      {account.monthlyPageAllowance > 0 ? (
+      {internalTester ? (
+        <p className="mt-4 rounded-xl border border-slate-200 bg-section px-4 py-3 text-sm leading-relaxed text-slate-600 shadow-card">
+          You have an internal tester account with a high monthly page allowance, so you can use the
+          converter without a paid subscription. Usage is still tracked: verified conversions use
+          pages, review-highlighted conversions use pages only when you export them, and statements we
+          can&rsquo;t read are never charged.
+        </p>
+      ) : account.monthlyPageAllowance > 0 ? (
         <p className="mt-4 rounded-xl border border-slate-200 bg-section px-4 py-3 text-sm leading-relaxed text-slate-600 shadow-card">
           Each page of a converted statement uses one page credit. Verified conversions are charged
           when they complete; review-highlighted conversions are only charged if you export them, and
