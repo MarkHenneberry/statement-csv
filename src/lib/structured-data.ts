@@ -7,6 +7,8 @@ export function organizationJsonLd() {
     "@type": "Organization",
     name: siteConfig.name,
     url: siteConfig.url,
+    // Absolute URL to a high-res square logo for Google rich results / knowledge panel.
+    logo: absoluteUrl("/images/statementcsv-logo.png"),
     description: siteConfig.description,
   };
 }
