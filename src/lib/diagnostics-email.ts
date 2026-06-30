@@ -32,7 +32,7 @@ export async function sendDiagnosticEmail(
   const to = env.DIAGNOSTIC_REPORT_EMAIL;
   const apiKey = env.RESEND_API_KEY;
   if (!to || !apiKey) return { ok: false, reason: "not-configured" };
-  const from = env.DIAGNOSTIC_REPORT_FROM_EMAIL || "StatementCSV Diagnostics <diagnostics@statementcsv.com>";
+  const from = env.DIAGNOSTIC_REPORT_FROM_EMAIL || "StatementCSV Diagnostics <diagnostics@statementcsv.ca>";
 
   try {
     const res = await fetch("https://api.resend.com/emails", {

@@ -1,7 +1,7 @@
 export const siteConfig = {
   name: "StatementCSV",
   // Update this to the real production domain before launch.
-  url: "https://statementcsv.com",
+  url: "https://statementcsv.ca",
   // Core positioning: Canadian-first, parser-first extraction with balance checks.
   tagline: "Convert Canadian bank statements to clean CSV and Excel.",
   description:

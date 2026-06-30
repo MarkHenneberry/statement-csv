@@ -11,7 +11,7 @@ actual values in the Vercel project settings (and never commit them).
 ### App / domain
 | Variable | Purpose | Notes |
 |---|---|---|
-| `NEXT_PUBLIC_APP_URL` | Canonical app origin used for Stripe success/cancel + portal return URLs | Must equal the production domain (e.g. `https://statementcsv.com`). |
+| `NEXT_PUBLIC_APP_URL` | Canonical app origin used for Stripe success/cancel + portal return URLs | Must equal the production domain (e.g. `https://statementcsv.ca`). |
 
 ### Supabase (auth)
 | Variable | Purpose |
