@@ -273,6 +273,12 @@ export type ParseStatementResponse = {
     pagesRemaining: number | null;
     requiredPages?: number;
   };
+  /**
+   * Server-derived flag: true only when the authenticated caller is an internal
+   * tester. Used purely to reveal the internal "Send diagnostic summary" control to
+   * testers; the diagnostics route re-verifies tester status server-side regardless.
+   */
+  internalTester?: boolean;
   // NOTE: a raw text preview is intentionally NOT part of the response. Raw
   // statement text is too easy to leak via screenshots, so it is never returned
   // or shown, even in development.

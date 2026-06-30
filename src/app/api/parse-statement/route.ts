@@ -352,6 +352,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       // Always include aiAssist so the client/diagnostics can rely on it.
       aiAssist: notAttemptedOutcome(aiAssistConfig(), "not-eligible"),
       billing: failedBilling,
+      internalTester,
     };
     return NextResponse.json(body);
   }
@@ -727,6 +728,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     validation: finalStatement.validation,
     aiAssist: aiOutcome,
     billing,
+    internalTester,
   };
 
   return NextResponse.json(body);

@@ -35,6 +35,12 @@ import {
 import { TransactionPreviewTable } from "@/components/upload/TransactionPreviewTable";
 import { BalanceCheckPanel } from "@/components/upload/BalanceCheckPanel";
 import { TransactionExportButtons } from "@/components/upload/TransactionExportButtons";
+import { DiagnosticReport } from "@/components/upload/DiagnosticReport";
+import {
+  buildSafeDiagnosticSummary,
+  isFlaggedDiagnostic,
+  type DiagnosticSummaryInput,
+} from "@/lib/diagnostics-report";
 import { UploadWarning } from "@/components/upload/UploadWarning";
 import { ParserDiagnosticsPanel } from "@/components/upload/ParserDiagnosticsPanel";
 import { buildParserDiagnostics, shouldShowDiagnostics } from "@/lib/parser-diagnostics";
@@ -76,6 +82,8 @@ type PreviewMeta = {
   aiAssist?: AiAssistOutcome;
   /** Page-credit billing summary (safe metadata) for this conversion. */
   billing?: ParseStatementResponse["billing"];
+  /** Server-derived: caller is an internal tester (gates the diagnostics control). */
+  internalTester?: boolean;
 };
 
 // Safe diagnostics may be shown in production behind an explicit opt-in flag so we
@@ -172,6 +180,7 @@ export function UploadFlow() {
       validation: data.validation,
       aiAssist: data.aiAssist,
       billing: data.billing,
+      internalTester: data.internalTester,
     });
     setStatus("preview");
   }
@@ -453,6 +462,37 @@ export function UploadFlow() {
       );
     }
 
+    // INTERNAL TESTER diagnostics. Built from safe aggregates only (no statement
+    // content). The control renders only when the server flagged this caller as an
+    // internal tester AND the conversion is "flagged" (AI used/attempted, review,
+    // failed, balance mismatch, parser/row warnings, or a safe error code).
+    const safeErrorCode = unsupported
+      ? "scanned_pdf"
+      : billing?.status === "failed"
+        ? "extraction_failed"
+        : null;
+    const diagnosticInput: DiagnosticSummaryInput = {
+      conversionId: billing?.conversionId ?? null,
+      status: billing?.status ?? null,
+      source: meta.aiAssist?.applied
+        ? "ai-assisted"
+        : meta.aiAssist?.attempted
+          ? "fallback-attempted"
+          : "parser",
+      aiUsed: meta.aiAssist?.applied === true,
+      aiFallbackAttempted: meta.aiAssist?.attempted === true,
+      pageCount: meta.pageCount,
+      rowCount: rows.length,
+      parserWarningCount: meta.parserWarnings.length,
+      rowWarningCount: flaggedCount,
+      balanceStatus,
+      balanceDifference: meta.validation?.difference ?? null,
+      safeErrorCode,
+      creditsUsed: billing?.chargedPages ?? null,
+    };
+    const showDiagnosticReport =
+      meta.internalTester === true && isFlaggedDiagnostic(buildSafeDiagnosticSummary(diagnosticInput));
+
     return (
       <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -529,6 +569,13 @@ export function UploadFlow() {
           rowWarningCount={flaggedCount}
           conversionBadge={{ label: presentation.badgeLabel, tone: presentation.badgeTone }}
         />
+
+        {showDiagnosticReport ? (
+          <DiagnosticReport
+            input={diagnosticInput}
+            environmentLabel={meta.runtimeEnv ?? "unknown"}
+          />
+        ) : null}
 
         {(() => {
           // Prominent export area above the table. Styling + heading come from the

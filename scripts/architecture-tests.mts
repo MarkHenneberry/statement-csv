@@ -21,6 +21,11 @@ import { rowsToCsv } from "../src/lib/upload.ts";
 import { groupVisualLines, probeCoordinateHeaders } from "../src/lib/coordinate-table.ts";
 import { buildItems, coordinateSamples } from "../src/lib/coordinate-table-samples.ts";
 import { shouldShowDiagnostics } from "../src/lib/parser-diagnostics.ts";
+import {
+  buildSafeDiagnosticSummary,
+  isFlaggedDiagnostic,
+  formatDiagnosticSummary,
+} from "../src/lib/diagnostics-report.ts";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = "") {
@@ -468,6 +473,98 @@ const CARD_WITH_REMITTANCE = [
     }
   }
   check("public copy has no unsupported claims", copyOffenders === "", copyOffenders);
+}
+
+// 17. Internal-tester diagnostic summary: flagged predicate + safe whitelist.
+{
+  // A clean verified conversion with no AI/warnings/mismatch is NOT flagged.
+  const clean = buildSafeDiagnosticSummary({
+    conversionId: "abc123",
+    status: "verified",
+    aiUsed: false,
+    aiFallbackAttempted: false,
+    pageCount: 3,
+    rowCount: 20,
+    parserWarningCount: 0,
+    rowWarningCount: 0,
+    balanceStatus: "passed",
+    balanceDifference: 0,
+  });
+  check("clean verified conversion is NOT flagged", isFlaggedDiagnostic(clean) === false);
+
+  // Each flag condition independently flags the conversion.
+  check("AI used flags it", isFlaggedDiagnostic(buildSafeDiagnosticSummary({ status: "verified", aiUsed: true })) === true);
+  check("AI fallback attempted flags it", isFlaggedDiagnostic(buildSafeDiagnosticSummary({ status: "verified", aiFallbackAttempted: true })) === true);
+  check("review status flags it", isFlaggedDiagnostic(buildSafeDiagnosticSummary({ status: "review" })) === true);
+  check("failed status flags it", isFlaggedDiagnostic(buildSafeDiagnosticSummary({ status: "failed" })) === true);
+  check("parser warnings flag it", isFlaggedDiagnostic(buildSafeDiagnosticSummary({ status: "verified", parserWarningCount: 2 })) === true);
+  check("row warnings flag it", isFlaggedDiagnostic(buildSafeDiagnosticSummary({ status: "verified", rowWarningCount: 1 })) === true);
+  check("balance mismatch flags it", isFlaggedDiagnostic(buildSafeDiagnosticSummary({ status: "verified", balanceStatus: "needs-review" })) === true);
+  check("nonzero balance difference flags it", isFlaggedDiagnostic(buildSafeDiagnosticSummary({ status: "verified", balanceDifference: 12.5 })) === true);
+  check("safe error code flags it", isFlaggedDiagnostic(buildSafeDiagnosticSummary({ status: "verified", safeErrorCode: "scanned_pdf" })) === true);
+
+  // The whitelist DROPS any unsafe/free-text fields a client might try to smuggle in.
+  const dirty = buildSafeDiagnosticSummary({
+    conversionId: "Tim Hortons -42.10 chequing", // not id-shaped → dropped
+    status: "review",
+    safeErrorCode: "merchant: STARBUCKS #123 acct 4111111111111111", // not code-shaped → dropped
+    balanceStatus: "ACCOUNT 12345 BALANCE 9000", // not an allowed label → dropped
+    // Unknown keys are ignored entirely by the whitelist builder.
+    description: "PAYROLL DEPOSIT FROM ACME CORP",
+    rows: [{ desc: "secret" }],
+    aiPrompt: "system: you are...",
+  } as unknown as Parameters<typeof buildSafeDiagnosticSummary>[0]);
+  check("unsafe conversionId is dropped", dirty.conversionId === null);
+  check("free-text safeErrorCode is dropped", dirty.safeErrorCode === null);
+  check("non-label balanceStatus is dropped", dirty.balanceStatus === null);
+
+  const text = formatDiagnosticSummary(dirty, {
+    testerEmail: "tester@example.com",
+    timestamp: "2026-06-29T00:00:00.000Z",
+    environmentLabel: "production",
+  });
+  const lower = text.toLowerCase();
+  check(
+    "formatted summary contains no smuggled statement content",
+    !lower.includes("tim hortons") &&
+      !lower.includes("starbucks") &&
+      !lower.includes("payroll") &&
+      !lower.includes("acme") &&
+      !lower.includes("4111111111111111") &&
+      !lower.includes("secret"),
+  );
+}
+
+// 18. Diagnostics route + UI are internal-tester gated and server-verified.
+{
+  const fs = await import("node:fs");
+  const read = (rel: string) => fs.readFileSync(new URL(rel, import.meta.url), "utf8");
+
+  const routeSrc = read("../src/app/api/diagnostics/report/route.ts");
+  check(
+    "diagnostics route requires authentication",
+    /getAuthenticatedUser\(\)/.test(routeSrc) && /AUTH_REQUIRED/.test(routeSrc),
+  );
+  check(
+    "diagnostics route verifies internal-tester server-side",
+    /isInternalTesterUser\(user\.email\)/.test(routeSrc) && /FORBIDDEN/.test(routeSrc),
+  );
+  check(
+    "diagnostics route re-sanitizes the payload through the whitelist",
+    /buildSafeDiagnosticSummary\(/.test(routeSrc),
+  );
+  check(
+    "diagnostics route checks conversion ownership when an id is present",
+    /conv\.userId !== user\.id/.test(routeSrc),
+  );
+
+  // The send control is gated on the server-derived internalTester flag in the UI.
+  const uploadSrc = read("../src/components/upload/UploadFlow.tsx");
+  check(
+    "diagnostic report UI is gated by internalTester + flagged",
+    /meta\.internalTester === true && isFlaggedDiagnostic\(/.test(uploadSrc) &&
+      /showDiagnosticReport \?/.test(uploadSrc),
+  );
 }
 
 console.log(

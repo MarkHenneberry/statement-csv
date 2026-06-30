@@ -57,6 +57,18 @@ actual values in the Vercel project settings (and never commit them).
 > records + idempotent charges + usage tracking) but never create Stripe subscriptions.
 > Removing an email from the list immediately reverts that account to normal behavior.
 
+### Internal diagnostics (optional)
+| Variable | Purpose |
+|---|---|
+| `DIAGNOSTIC_REPORT_EMAIL` | Recipient inbox for internal-tester "Send diagnostic summary" emails. Required to send. |
+| `DIAGNOSTIC_REPORT_FROM_EMAIL` | Optional sender address (must be allowed by the email provider). |
+| `RESEND_API_KEY` | Transport secret for the email provider (Resend HTTP API). Required to send. |
+
+> Diagnostic emails carry SAFE aggregate fields only (status/source/counts/balance
+> labels/safe error code). No PDF, text, rows, descriptions, prompts, responses, ids,
+> or token/cost metadata are ever sent. If unset, the route returns a safe "could not
+> send" and testers can still use "Copy diagnostic summary".
+
 ### Free preview quota
 | Variable | Purpose | Default |
 |---|---|---|
